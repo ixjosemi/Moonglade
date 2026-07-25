@@ -7690,6 +7690,201 @@ func testBrailleSpinnerFramesAreSingleBraillePatternGlyphs() throws {
     try expect(allBraille, equals: true, "every frame is one braille pattern glyph")
 }
 
+// A process's executable path and argv are fixed for its lifetime, so the
+// scanner reads them once into a ProcessCommand and classifies from that
+// snapshot. These cases pin the documented precedence — resolved path first,
+// argv[0] second, script path third — because classification is what the
+// heartbeat repeats for every process on the machine.
+
+func testAgentToolClassifiesResolvedExecutablePath() throws {
+    let classification = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/opt/homebrew/bin/codex",
+        leadingArguments: ["codex", "--sandbox"]
+    ))
+    try expect(classification?.tool, equals: AgentTool.codex, "the executable basename names the tool")
+    try expect(
+        classification?.viaRuntimeLauncher,
+        equals: false,
+        "a native binary is not a runtime launcher"
+    )
+}
+
+func testAgentToolFallsBackToArgumentZeroForVersionedInstalls() throws {
+    // ~/.local/bin/claude -> .../claude/versions/2.1.214, where the kernel
+    // resolves the symlink and only argv[0] still names the tool.
+    let classification = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/Users/someone/.local/share/claude/versions/2.1.214",
+        leadingArguments: ["claude"]
+    ))
+    try expect(classification?.tool, equals: AgentTool.claude, "argv[0] rescues a versioned install")
+    try expect(
+        classification?.viaRuntimeLauncher,
+        equals: false,
+        "resolving through argv[0] is not a runtime launch"
+    )
+}
+
+func testAgentToolClassifiesScriptRuntimeLauncherSkippingFlags() throws {
+    let classification = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/opt/homebrew/bin/node",
+        leadingArguments: ["node", "--enable-source-maps", "/opt/lib/pi/bin/pi", "chat"]
+    ))
+    try expect(
+        classification?.tool,
+        equals: AgentTool.pi,
+        "the first non-flag argument after a runtime is the script to classify"
+    )
+    try expect(
+        classification?.viaRuntimeLauncher,
+        equals: true,
+        "a runtime-launched agent is flagged so its launcher ancestor can be dropped"
+    )
+}
+
+func testAgentToolRejectsCommandsThatNameNoTool() throws {
+    let unrelated = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/bin/zsh",
+        leadingArguments: ["-zsh"]
+    ))
+    try expect(unrelated?.tool, equals: nil, "an ordinary process is not an agent")
+    let runtimeWithoutAgentScript = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/opt/homebrew/bin/node",
+        leadingArguments: ["node", "/opt/lib/some-other-tool/cli.js"]
+    ))
+    try expect(
+        runtimeWithoutAgentScript?.tool,
+        equals: nil,
+        "a runtime hosting an unrelated script is not an agent"
+    )
+    let unreadable = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: nil,
+        leadingArguments: []
+    ))
+    try expect(unreadable?.tool, equals: nil, "a process with no readable command is not an agent")
+}
+
+func testAgentToolTakesBasenamesWithoutConsultingTheFilesystem() throws {
+    // Basename extraction used to go through URL(fileURLWithPath:), which
+    // lstats the path, RFC3986-parses it, and resolves an empty one against
+    // the app's working directory. Classification runs over every process on
+    // the machine on every heartbeat, so these cases pin the parsing rules
+    // that replaced it.
+    let bareName = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "codex",
+        leadingArguments: []
+    ))
+    try expect(bareName?.tool, equals: AgentTool.codex, "a bare command name is its own basename")
+
+    let trailingSlash = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/opt/homebrew/bin/claude/",
+        leadingArguments: []
+    ))
+    try expect(
+        trailingSlash?.tool,
+        equals: AgentTool.claude,
+        "a trailing separator does not hide the basename"
+    )
+
+    let repeatedSeparators = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/usr//local//bin//pi",
+        leadingArguments: []
+    ))
+    try expect(repeatedSeparators?.tool, equals: AgentTool.pi, "repeated separators collapse")
+
+    let root = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/",
+        leadingArguments: []
+    ))
+    try expect(root?.tool, equals: nil, "the root directory names no tool")
+
+    let empty = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "",
+        leadingArguments: []
+    ))
+    try expect(
+        empty?.tool,
+        equals: nil,
+        "an empty path names no tool rather than resolving against the working directory"
+    )
+
+    // The scan walks UTF-8 bytes rather than Characters, so a multi-byte
+    // directory name must not be split mid-sequence into a corrupt basename.
+    let multiByteAncestor = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/Users/josé/café/bin/codex",
+        leadingArguments: []
+    ))
+    try expect(
+        multiByteAncestor?.tool,
+        equals: AgentTool.codex,
+        "a non-ASCII ancestor directory does not disturb the basename"
+    )
+
+    let multiByteName = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/opt/bin/códex",
+        leadingArguments: []
+    ))
+    try expect(
+        multiByteName?.tool,
+        equals: nil,
+        "a non-ASCII basename is decoded whole, so it matches no tool instead of a truncation"
+    )
+}
+
+func testProcessCommandCacheReadsEachProcessGenerationOnce() throws {
+    // The heartbeat used to pay four KERN_PROCARGS2 sysctls per process per
+    // tick, for every process on the machine. Reading each generation once is
+    // the whole point of the cache.
+    let cache = ProcessCommandCache()
+    let identity = ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1_700_000_000)
+    var reads = 0
+    func read() -> ProcessCommand {
+        reads += 1
+        return ProcessCommand(executablePath: "/usr/local/bin/claude", leadingArguments: ["claude"])
+    }
+    let first = cache.command(for: identity, read: read)
+    let second = cache.command(for: identity, read: read)
+    try expect(reads, equals: 1, "an immutable command line is read once per process generation")
+    try expect(first, equals: second, "the cached snapshot is returned verbatim")
+}
+
+func testProcessCommandCacheRereadsRecycledProcessIdentifier() throws {
+    let cache = ProcessCommandCache()
+    var reads = 0
+    func read(path: String) -> ProcessCommand {
+        reads += 1
+        return ProcessCommand(executablePath: path, leadingArguments: [])
+    }
+    _ = cache.command(for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)) {
+        read(path: "/bin/zsh")
+    }
+    let recycled = cache.command(
+        for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 2)
+    ) {
+        read(path: "/usr/local/bin/claude")
+    }
+    try expect(reads, equals: 2, "a recycled pid is a different process and must be read again")
+    try expect(
+        recycled.executablePath,
+        equals: "/usr/local/bin/claude",
+        "the live generation's command wins over the recycled pid's"
+    )
+}
+
+func testProcessCommandCacheForgetsProcessesMissingFromLatestScan() throws {
+    let cache = ProcessCommandCache()
+    let identity = ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)
+    var reads = 0
+    func read() -> ProcessCommand {
+        reads += 1
+        return ProcessCommand(executablePath: "/bin/zsh", leadingArguments: [])
+    }
+    _ = cache.command(for: identity, read: read)
+    cache.sweep() // the scan that saw the process keeps its entry
+    cache.sweep() // the next scan does not, so the entry goes
+    _ = cache.command(for: identity, read: read)
+    try expect(reads, equals: 2, "entries for vanished processes are dropped instead of accumulating")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("notch glass scrim keeps collapsed bar solid and fades expanded", testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded),
     ("compact status dot rides each wing's outer screen edge", testCompactStatusDotRidesEachWingsOuterScreenEdge),
@@ -7728,6 +7923,14 @@ let tests: [(String, () throws -> Void)] = [
     ("terminal enrichment rejects concurrent process generation change", testTerminalEnrichmentRejectsConcurrentProcessGenerationChange),
     ("state repository validates and prunes enrichment overlays", testStateRepositoryValidatesAndPrunesEnrichmentOverlays),
     ("terminal enrichment preserves live fallback when Ghostty omits process", testTerminalEnrichmentPreservesLiveFallbackWhenGhosttyOmitsProcess),
+    ("agent tool classifies resolved executable path", testAgentToolClassifiesResolvedExecutablePath),
+    ("agent tool falls back to argument zero for versioned installs", testAgentToolFallsBackToArgumentZeroForVersionedInstalls),
+    ("agent tool classifies script runtime launcher skipping flags", testAgentToolClassifiesScriptRuntimeLauncherSkippingFlags),
+    ("agent tool rejects commands that name no tool", testAgentToolRejectsCommandsThatNameNoTool),
+    ("agent tool takes basenames without consulting the filesystem", testAgentToolTakesBasenamesWithoutConsultingTheFilesystem),
+    ("process command cache reads each process generation once", testProcessCommandCacheReadsEachProcessGenerationOnce),
+    ("process command cache rereads recycled process identifier", testProcessCommandCacheRereadsRecycledProcessIdentifier),
+    ("process command cache forgets processes missing from latest scan", testProcessCommandCacheForgetsProcessesMissingFromLatestScan),
     ("reaper prunes superseded sessions for same process", testReaperPrunesSupersededSessionsForSameProcess),
     ("reaper prefers native session over newer fallback", testReaperPrefersNativeSessionOverNewerFallback),
     ("observation scheduler tick persists fallback state", testObservationSchedulerTickPersistsFallbackState),

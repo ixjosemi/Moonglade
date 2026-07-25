@@ -44,6 +44,7 @@ public struct SystemProcessScanner: ProcessScanning {
 
     private let terminalQueryCache: GhosttyTerminalQueryCache
     private let assignmentMemory = GhosttyAssignmentMemory()
+    private let commandCache = ProcessCommandCache()
 
     public init() {
         // The 10 s failure cooldown skips at least one 5 s heartbeat after a
@@ -74,9 +75,11 @@ public struct SystemProcessScanner: ProcessScanning {
     }
 
     public func basicActiveProcesses() throws -> [DetectedAgentProcess] {
-        Self.droppingRuntimeLaunchers(
-            try Self.allProcessIDs().compactMap(Self.detectAgentProcess)
-        )
+        let classified = try Self.allProcessIDs().compactMap(detectAgentProcess)
+        // A scan asks the command cache about every visible process, so
+        // sweeping here evicts exactly the ones that have since exited.
+        commandCache.sweep()
+        return Self.droppingRuntimeLaunchers(classified)
     }
 
     public func enrichTerminalContexts(in detected: [DetectedAgentProcess]) -> [DetectedAgentProcess] {
@@ -132,18 +135,22 @@ public struct SystemProcessScanner: ProcessScanning {
     /// Classifies one process, returning nil unless it is a running agent
     /// whose metadata is fully readable. Processes that exit mid-scan simply
     /// disappear from the result instead of failing the whole scan.
-    private static func detectAgentProcess(_ processID: pid_t) -> ClassifiedAgentProcess? {
-        guard let initialInfo = bsdInfo(processID: processID),
-              initialInfo.pbi_status != UInt32(SZOMB),
-              let classification = agentTool(processID: processID),
-              let cwd = workingDirectory(processID: processID),
-              let bsdInfo = bsdInfo(processID: processID),
-              bsdInfo.pbi_status != UInt32(SZOMB),
-              processIdentity(from: initialInfo, processID: processID)
-                == processIdentity(from: bsdInfo, processID: processID) else {
+    private func detectAgentProcess(_ processID: pid_t) -> ClassifiedAgentProcess? {
+        guard let initialInfo = Self.bsdInfo(processID: processID),
+              initialInfo.pbi_status != UInt32(SZOMB) else {
             return nil
         }
-        let identity = processIdentity(from: bsdInfo, processID: processID)
+        let initialIdentity = Self.processIdentity(from: initialInfo, processID: processID)
+        guard let classification = Self.agentTool(
+                of: command(ofProcess: processID, identity: initialIdentity)
+              ),
+              let cwd = Self.workingDirectory(processID: processID),
+              let bsdInfo = Self.bsdInfo(processID: processID),
+              bsdInfo.pbi_status != UInt32(SZOMB),
+              initialIdentity == Self.processIdentity(from: bsdInfo, processID: processID) else {
+            return nil
+        }
+        let identity = Self.processIdentity(from: bsdInfo, processID: processID)
         let startedAt = TimeInterval(identity.kernelStartTimeMicroseconds) / 1_000_000
         return ClassifiedAgentProcess(
             process: DetectedAgentProcess(
@@ -153,7 +160,7 @@ public struct SystemProcessScanner: ProcessScanning {
                 cwd: cwd,
                 terminal: TerminalContext(
                     termProgram: hostTerminalProgram(descendant: bsdInfo),
-                    tty: controllingTTY(bsdInfo)
+                    tty: Self.controllingTTY(bsdInfo)
                 ),
                 elapsedSeconds: max(0, Date().timeIntervalSince1970 - startedAt)
             ),
@@ -204,14 +211,14 @@ public struct SystemProcessScanner: ProcessScanning {
     /// Both the kernel-resolved executable path and argv[0] are checked, for
     /// the same reason as agent matching: either side may hide behind a
     /// symlink. The walk is bounded and stops at launchd.
-    private static func hostTerminalProgram(descendant: proc_bsdinfo) -> String? {
+    private func hostTerminalProgram(descendant: proc_bsdinfo) -> String? {
         var ancestorProcessID = pid_t(descendant.pbi_ppid)
         for _ in 0..<8 {
             guard ancestorProcessID > 1 else { return nil }
             if let program = terminalProgram(ofProcess: ancestorProcessID) {
                 return program
             }
-            guard let parent = parentProcessID(of: ancestorProcessID) else { return nil }
+            guard let parent = Self.parentProcessID(of: ancestorProcessID) else { return nil }
             ancestorProcessID = parent
         }
         return nil
@@ -237,9 +244,9 @@ public struct SystemProcessScanner: ProcessScanning {
         return info.kp_eproc.e_ppid
     }
 
-    private static func terminalProgram(ofProcess processID: pid_t) -> String? {
-        classifyByCommandIdentifier(processID: processID) { identifier in
-            terminalAppMarkers.first { identifier.contains($0.pathMarker) }?.termProgram
+    private func terminalProgram(ofProcess processID: pid_t) -> String? {
+        Self.classify(command(ofProcess: processID)) { identifier in
+            Self.terminalAppMarkers.first { identifier.contains($0.pathMarker) }?.termProgram
         }
     }
 
@@ -250,16 +257,16 @@ public struct SystemProcessScanner: ProcessScanning {
     /// CLIs (Pi installs via npm) name only the runtime in both places, so
     /// when the command is a known runtime the script path in the leading
     /// arguments is classified instead.
-    private static func agentTool(
-        processID: pid_t
+    public static func agentTool(
+        of command: ProcessCommand
     ) -> (tool: AgentTool, viaRuntimeLauncher: Bool)? {
-        if let tool = classifyByCommandIdentifier(processID: processID, classifyToolName) {
+        if let tool = classify(command, classifyToolName) {
             return (tool, false)
         }
-        guard classifyByCommandIdentifier(processID: processID, isScriptRuntime) == true else {
+        guard classify(command, isScriptRuntime) == true else {
             return nil
         }
-        return firstArguments(processID: processID, count: 4)
+        return command.leadingArguments
             .dropFirst()
             .first { !$0.hasPrefix("-") }
             .flatMap(classifyToolName)
@@ -269,27 +276,79 @@ public struct SystemProcessScanner: ProcessScanning {
     private static let scriptRuntimeNames: Set<String> = ["node", "bun", "deno"]
 
     private static func classifyToolName(_ identifier: String) -> AgentTool? {
-        AgentTool(rawValue: URL(fileURLWithPath: identifier).lastPathComponent)
+        AgentTool(rawValue: lastPathComponent(of: identifier))
     }
 
     private static func isScriptRuntime(_ identifier: String) -> Bool? {
-        scriptRuntimeNames.contains(URL(fileURLWithPath: identifier).lastPathComponent)
-            ? true
-            : nil
+        scriptRuntimeNames.contains(lastPathComponent(of: identifier)) ? true : nil
+    }
+
+    /// The basename of a path, scanned over UTF-8 bytes.
+    ///
+    /// `URL(fileURLWithPath:)` answers the same question by lstat'ing the
+    /// path, RFC3986-parsing it, allocating an object, and resolving an empty
+    /// path against the current working directory — work the heartbeat cannot
+    /// afford for every candidate string of every process on the machine, and
+    /// which made an unreadable command line classify against Moonglade's own
+    /// directory. Iterating `Character`s instead is also too slow here: every
+    /// step costs a grapheme-break lookup, and this scans the whole process
+    /// table. `/` is a single byte that never appears inside a multi-byte
+    /// UTF-8 sequence, so a byte scan splits any path correctly.
+    private static func lastPathComponent(of path: String) -> String {
+        let separator = UInt8(ascii: "/")
+        let bytes = path.utf8
+        var end = bytes.endIndex
+        while end > bytes.startIndex, bytes[bytes.index(before: end)] == separator {
+            end = bytes.index(before: end)
+        }
+        guard end > bytes.startIndex else { return path.isEmpty ? "" : "/" }
+        var start = end
+        while start > bytes.startIndex, bytes[bytes.index(before: start)] != separator {
+            start = bytes.index(before: start)
+        }
+        return String(decoding: bytes[start..<end], as: UTF8.self)
     }
 
     /// Applies a classifier to the kernel-resolved executable path first and
-    /// argv[0] second, reading argv only when the path was not conclusive.
-    /// Either side may hide behind a symlink, so both must be considered.
-    private static func classifyByCommandIdentifier<Classification>(
-        processID: pid_t,
+    /// argv[0] second. Either side may hide behind a symlink, so both must be
+    /// considered.
+    private static func classify<Classification>(
+        _ command: ProcessCommand,
         _ classify: (String) -> Classification?
     ) -> Classification? {
-        if let path = executablePath(processID: processID), let match = classify(path) {
+        if let path = command.executablePath, let match = classify(path) {
             return match
         }
-        guard let argumentZero = argumentZero(processID: processID) else { return nil }
+        guard let argumentZero = command.leadingArguments.first, !argumentZero.isEmpty else {
+            return nil
+        }
         return classify(argumentZero)
+    }
+
+    /// The command line behind a pid, read once per process generation.
+    /// Identity is what makes the answer cacheable, so a process whose
+    /// identity is unreadable — root-owned intermediaries such as
+    /// /usr/bin/login deny proc_pidinfo — is read directly rather than filed
+    /// under a key that cannot tell its generations apart.
+    private func command(ofProcess processID: pid_t) -> ProcessCommand {
+        guard let identity = Self.processIdentity(of: processID) else {
+            return Self.readCommand(ofProcess: processID)
+        }
+        return command(ofProcess: processID, identity: identity)
+    }
+
+    private func command(ofProcess processID: pid_t, identity: ProcessIdentity) -> ProcessCommand {
+        commandCache.command(for: identity) { Self.readCommand(ofProcess: processID) }
+    }
+
+    /// Four arguments are enough for every classifier: argv[0] names the
+    /// command, and a runtime launcher's script path follows within a couple
+    /// of flags.
+    private static func readCommand(ofProcess processID: pid_t) -> ProcessCommand {
+        ProcessCommand(
+            executablePath: executablePath(processID: processID),
+            leadingArguments: firstArguments(processID: processID, count: 4)
+        )
     }
 
     private static func executablePath(processID: pid_t) -> String? {
@@ -342,12 +401,6 @@ public struct SystemProcessScanner: ProcessScanning {
             kernelStartTimeMicroseconds: UInt64(info.pbi_start_tvsec) * 1_000_000
                 + UInt64(info.pbi_start_tvusec)
         )
-    }
-
-    private static func argumentZero(processID: pid_t) -> String? {
-        firstArguments(processID: processID, count: 1).first.flatMap {
-            $0.isEmpty ? nil : $0
-        }
     }
 
     /// Reads the leading argv strings through KERN_PROCARGS2. The buffer
