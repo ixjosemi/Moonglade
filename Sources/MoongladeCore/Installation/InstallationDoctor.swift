@@ -34,6 +34,7 @@ public struct InstallationDoctor {
     public func diagnose() -> [DoctorCheck] {
         [
             hookBinariesCheck(),
+            resourceBundleCheck(),
             stateDirectoryCheck(),
             claudeHooksCheck(),
             openCodePluginCheck(),
@@ -56,6 +57,24 @@ public struct InstallationDoctor {
             detail: missing.isEmpty
                 ? "all executables present in \(display(binDirectory))"
                 : "missing or not executable: \(missing.joined(separator: ", "))"
+        )
+    }
+
+    /// The binaries check reports presence, which is not usability: the
+    /// installed `moonglade` reads its hook scripts and agent icons from the
+    /// resource bundle beside it, so without that bundle every install and
+    /// doctor run dies before printing anything.
+    private func resourceBundleCheck() -> DoctorCheck {
+        let bundleURL = binDirectory.appendingPathComponent(BundledResources.bundleName)
+        let usable = FileManager.default.fileExists(
+            atPath: bundleURL.appendingPathComponent("Resources/hooks/claude-hook.sh").path
+        )
+        return DoctorCheck(
+            title: "resource bundle",
+            passed: usable,
+            detail: usable
+                ? "\(display(bundleURL)) sits beside the installed binary"
+                : "\(display(bundleURL)) is missing or incomplete — run: moonglade install"
         )
     }
 
@@ -101,7 +120,7 @@ public struct InstallationDoctor {
         integrationFileCheck(
             title: "OpenCode plugin",
             relativePath: ".config/opencode/plugins/moonglade.js",
-            bundled: BundledResources.opencodePluginURL
+            bundled: try BundledResources.opencodePluginURL
         )
     }
 
@@ -109,16 +128,23 @@ public struct InstallationDoctor {
         integrationFileCheck(
             title: "Pi extension",
             relativePath: ".pi/agent/extensions/moonglade.ts",
-            bundled: BundledResources.piExtensionURL
+            bundled: try BundledResources.piExtensionURL
         )
     }
 
     private func integrationFileCheck(
         title: String,
         relativePath: String,
-        bundled: URL
+        bundled bundledResource: @autoclosure () throws -> URL
     ) -> DoctorCheck {
         let destination = homeDirectoryURL.appendingPathComponent(relativePath)
+        guard let bundled = try? bundledResource() else {
+            return DoctorCheck(
+                title: title,
+                passed: false,
+                detail: "cannot read the bundled file — see the resource bundle check"
+            )
+        }
         guard let installed = try? Data(contentsOf: destination) else {
             return DoctorCheck(
                 title: title,

@@ -855,7 +855,14 @@ private func indicatorColor(for style: StatusIndicatorStyle) -> Color {
 private enum AgentIcons {
     static let byTool: [AgentTool: NSImage] = Dictionary(
         uniqueKeysWithValues: AgentTool.allCases.compactMap { tool in
-            NSImage(contentsOf: BundledResources.iconURL(for: tool)).map { (tool, $0) }
+            // A brand mark is decoration: AgentIconView already draws a
+            // monogram for any tool without an image, so an unreadable
+            // resource bundle must degrade the row rather than take the panel
+            // down. `moonglade doctor` is where that failure gets reported,
+            // because that is where it can be acted on.
+            guard let iconURL = try? BundledResources.iconURL(for: tool),
+                  let image = NSImage(contentsOf: iconURL) else { return nil }
+            return (tool, image)
         }
     )
 }

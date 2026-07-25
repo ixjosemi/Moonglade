@@ -2335,7 +2335,7 @@ func testCaptureContextEmitsTerminalJSON() throws {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sh")
     process.arguments = [
-        BundledResources.captureContextScriptURL.path,
+        try BundledResources.captureContextScriptURL.path,
         "/tmp/my-project",
         "claude",
         "1",
@@ -6948,7 +6948,7 @@ func testInstallationDoctorReportsHealthyInstall() throws {
 
     let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
 
-    try expect(checks.count, equals: 6, "doctor check count")
+    try expect(checks.count, equals: 7, "doctor check count")
     for check in checks {
         try expect(check.passed, equals: true, "check '\(check.title)': \(check.detail)")
     }
@@ -7030,6 +7030,98 @@ func testInstallationDoctorPinpointsBrokenPieces() throws {
         try byTitle["state directory"].unwrap(or: "missing state check").passed,
         equals: true,
         "state directory stays healthy"
+    )
+}
+
+/// SwiftPM's generated `Bundle.module` resolves exactly two locations: the
+/// directory holding the running executable, and the absolute build directory
+/// of the machine that compiled it. A shipped binary has no bundle beside it,
+/// so both installed CLIs loaded their scripts out of the developer's `.build`
+/// tree and trapped the moment that directory was renamed. The search must
+/// cover the layouts Moonglade actually installs into, and name no build path.
+func testResourceBundleSearchCoversEveryInstalledLayout() throws {
+    let privateBinary = URL(fileURLWithPath: "/Users/someone/.moonglade/bin/moonglade")
+    let privatePaths = BundledResources.bundleSearchPaths(
+        executableURL: privateBinary,
+        mainResourceURL: nil
+    )
+    try expect(
+        privatePaths.contains("/Users/someone/.moonglade/bin/\(BundledResources.bundleName)"),
+        equals: true,
+        "the private install directory is searched"
+    )
+    try expect(
+        privatePaths.contains(where: { $0.contains("/.build/") }),
+        equals: false,
+        "no build directory is baked into the search"
+    )
+
+    let appResources = "/Applications/Moonglade.app/Contents/Resources"
+    try expect(
+        BundledResources.bundleSearchPaths(
+            executableURL: URL(fileURLWithPath: "\(appResources)/bin/moonglade"),
+            mainResourceURL: nil
+        ).contains("\(appResources)/\(BundledResources.bundleName)"),
+        equals: true,
+        "the CLI in the app bundle searches the Resources directory above it"
+    )
+    try expect(
+        BundledResources.bundleSearchPaths(
+            executableURL: URL(fileURLWithPath: "/Applications/Moonglade.app/Contents/MacOS/Moonglade"),
+            mainResourceURL: URL(fileURLWithPath: appResources, isDirectory: true)
+        ).contains("\(appResources)/\(BundledResources.bundleName)"),
+        equals: true,
+        "the app binary searches its own Resources directory"
+    )
+}
+
+func testInstallerShipsTheResourceBundleBesideTheInstalledBinary() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+
+    let installedBundle = home.appendingPathComponent(
+        ".moonglade/bin/\(BundledResources.bundleName)"
+    )
+    try expect(
+        FileManager.default.fileExists(atPath: installedBundle.path),
+        equals: true,
+        "the resource bundle ships beside the installed binary"
+    )
+    // Existing is not enough: the installed binary reads its hook scripts and
+    // agent icons back out of this copy on every install and doctor run.
+    try expect(
+        FileManager.default.fileExists(
+            atPath: installedBundle.appendingPathComponent("Resources/hooks/claude-hook.sh").path
+        ),
+        equals: true,
+        "the installed bundle carries the hook scripts"
+    )
+}
+
+func testInstallationDoctorFailsWhenTheResourceBundleIsMissing() throws {
+    // "hook binaries: all executables present" passed while the installed
+    // binary trapped on startup, because presence is not usability.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+    try FileManager.default.removeItem(
+        at: home.appendingPathComponent(".moonglade/bin/\(BundledResources.bundleName)")
+    )
+
+    let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+    let byTitle = Dictionary(uniqueKeysWithValues: checks.map { ($0.title, $0) })
+    let resources = try byTitle["resource bundle"].unwrap(or: "missing resource bundle check")
+
+    try expect(resources.passed, equals: false, "a missing resource bundle must fail")
+    try expect(
+        resources.detail.contains("moonglade install"),
+        equals: true,
+        "detail names the recovery command"
     )
 }
 
@@ -7769,6 +7861,9 @@ let tests: [(String, () throws -> Void)] = [
     ("installation doctor reports healthy install", testInstallationDoctorReportsHealthyInstall),
     ("installation doctor rejects a foreign codex notify hook", testInstallationDoctorRejectsAForeignCodexNotifyHook),
     ("installation doctor pinpoints broken pieces", testInstallationDoctorPinpointsBrokenPieces),
+    ("resource bundle search covers every installed layout", testResourceBundleSearchCoversEveryInstalledLayout),
+    ("installer ships the resource bundle beside the installed binary", testInstallerShipsTheResourceBundleBesideTheInstalledBinary),
+    ("installation doctor fails when the resource bundle is missing", testInstallationDoctorFailsWhenTheResourceBundleIsMissing),
     ("CLI parses doctor command", testCLIParsesDoctorCommand),
     ("front terminal matcher matches by ID and falls back to cwd", testFrontTerminalMatcherMatchesByIDAndFallsBackToWorkingDirectory),
     ("hook input rejects oversized payloads", testHookInputRejectsOversizedPayloads),

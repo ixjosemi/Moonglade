@@ -25,6 +25,15 @@ public struct Installer {
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         }
         try copy(executableURL, to: binaryDirectory.appendingPathComponent("moonglade"), executable: true)
+        // The installed binary resolves its scripts and icons relative to
+        // itself, so the resource bundle has to travel with it. Without this
+        // copy it fell back to the build directory of the machine that
+        // compiled it and trapped once that path was gone.
+        try copy(
+            BundledResources.bundleURL,
+            to: binaryDirectory.appendingPathComponent(BundledResources.bundleName),
+            executable: false
+        )
         try copy(BundledResources.claudeHookScriptURL, to: binaryDirectory.appendingPathComponent("claude-hook.sh"), executable: true)
         try copy(BundledResources.codexNotifyScriptURL, to: binaryDirectory.appendingPathComponent("codex-notify.sh"), executable: true)
         try copy(BundledResources.captureContextScriptURL, to: binaryDirectory.appendingPathComponent("capture-context.sh"), executable: true)
@@ -300,8 +309,8 @@ public struct Installer {
         }
 
         let integrationFiles: [(destination: String, bundled: URL)] = [
-            (".config/opencode/plugins/moonglade.js", BundledResources.opencodePluginURL),
-            (".pi/agent/extensions/moonglade.ts", BundledResources.piExtensionURL),
+            (".config/opencode/plugins/moonglade.js", try BundledResources.opencodePluginURL),
+            (".pi/agent/extensions/moonglade.ts", try BundledResources.piExtensionURL),
         ]
         for file in integrationFiles {
             let destination = homeDirectoryURL.appendingPathComponent(file.destination)
