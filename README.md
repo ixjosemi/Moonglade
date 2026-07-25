@@ -6,8 +6,6 @@
 
 AgentGlance is a quiet, native macOS indicator for Claude Code, OpenCode, Codex CLI, [Pi](https://github.com/badlogic/pi-mono), and [Convoy](https://github.com/Inakitajes/convoy) pipeline sessions. It lives around the MacBook notch (or as a pill on displays without one) and returns you to the exact terminal tab or tmux pane with one click.
 
-> **Preview status:** AgentGlance is pre-1.0 and currently distributed as source. The local build is ad-hoc signed; signed and notarized downloads will follow once the release pipeline is ready.
-
 ## Why AgentGlance?
 
 - See global counts for running, waiting, and blocked sessions without having to infer them from provider icons.
@@ -114,6 +112,7 @@ Then quit AgentGlance and delete the app bundle. Review your Claude or Codex con
 | Host | Focus strategy | Notes |
 | --- | --- | --- |
 | Ghostty | exact surface ID, foreground PID, or TTY; unique project/title fallback | Requires Ghostty 1.3+ |
+| cmux | exact panel ID, no fallback | Resolved before Ghostty: cmux ships Ghostty's engine and reports the same `TERM_PROGRAM` |
 | iTerm2 | exact normalized session ID, then TTY | Selects the split, tab, and window |
 | Terminal | exact TTY | Selects the tab and raises its containing window |
 | tmux | validated pane ID, then host activation | `tmux` must be in a trusted standard install location |
