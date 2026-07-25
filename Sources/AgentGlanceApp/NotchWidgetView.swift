@@ -707,25 +707,134 @@ private struct StatusSummaryIndicator: View {
 /// dots remain easy to distinguish from active work.
 private struct WorkingPixelSpinner: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private static let stepInterval: TimeInterval = 0.08
-    private static let frames: [Character] = Array("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 
     var body: some View {
-        if reduceMotion {
-            frame(Self.frames[0])
-        } else {
-            TimelineView(.periodic(from: .now, by: Self.stepInterval)) { timeline in
-                let step = Int(timeline.date.timeIntervalSinceReferenceDate / Self.stepInterval)
-                frame(Self.frames[step % Self.frames.count])
-            }
+        BrailleSpinnerView(animated: !reduceMotion)
+            .frame(width: BrailleSpinnerHostView.side, height: BrailleSpinnerHostView.side)
+    }
+}
+
+/// Bridges the Core Animation spinner into SwiftUI. The glyph cycle runs on
+/// the render server rather than through a `TimelineView`: a periodic
+/// TimelineView commits a CoreAnimation transaction every frame, and each
+/// commit forces `NSHostingView` to re-lay-out the entire notch tree — ~12.5
+/// full relayouts per second, which profiling showed to be the app's dominant
+/// idle CPU (and battery) cost. A discrete `CAKeyframeAnimation` steps the
+/// pre-rendered frames on the compositor with no SwiftUI graph update at all,
+/// so the animation looks and steps identically while the main thread sleeps.
+private struct BrailleSpinnerView: NSViewRepresentable {
+    let animated: Bool
+
+    func makeNSView(context: Context) -> BrailleSpinnerHostView {
+        BrailleSpinnerHostView()
+    }
+
+    func updateNSView(_ view: BrailleSpinnerHostView, context: Context) {
+        view.animated = animated
+    }
+}
+
+/// An `NSView` whose backing layer cycles the braille frames via Core
+/// Animation. Frames are rendered once per backing scale and reused across
+/// every spinner on screen.
+private final class BrailleSpinnerHostView: NSView {
+    static let side: CGFloat = 11
+
+    var animated = true {
+        didSet {
+            guard animated != oldValue else { return }
+            reinstallAnimation()
         }
     }
 
-    private func frame(_ character: Character) -> some View {
-        Text(String(character))
-            .font(.system(size: 14, weight: .medium, design: .monospaced))
-            .foregroundStyle(.white)
-            .frame(width: 11, height: 11)
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.contentsGravity = .center
+        layer?.masksToBounds = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        reinstallAnimation()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        reinstallAnimation()
+    }
+
+    private static let animationKey = "brailleSpinner"
+
+    /// (Re)renders the frames at the current scale and drives them with a
+    /// discrete keyframe animation. `beginTime` is aligned to the shared media
+    /// clock so independently mounted spinners step in lockstep, matching the
+    /// previous absolute-clock TimelineView behavior.
+    private func reinstallAnimation() {
+        guard let layer, window != nil else { return }
+        let scale = window?.backingScaleFactor ?? 2
+        layer.contentsScale = scale
+        let frames = Self.frames(scale: scale)
+        layer.removeAnimation(forKey: Self.animationKey)
+        layer.contents = frames.first
+
+        guard animated else { return }
+        let period = BrailleSpinner.cyclePeriod
+        let animation = CAKeyframeAnimation(keyPath: "contents")
+        animation.values = frames
+        animation.calculationMode = .discrete
+        animation.duration = period
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        let now = CACurrentMediaTime()
+        animation.beginTime = layer.convertTime(
+            now - now.truncatingRemainder(dividingBy: period), from: nil
+        )
+        layer.add(animation, forKey: Self.animationKey)
+    }
+
+    private static let framesLock = NSLock()
+    private static var framesByScale: [CGFloat: [CGImage]] = [:]
+
+    private static func frames(scale: CGFloat) -> [CGImage] {
+        framesLock.lock()
+        defer { framesLock.unlock() }
+        if let cached = framesByScale[scale] { return cached }
+        let rendered = BrailleSpinner.frames.map { render($0, scale: scale) }
+        framesByScale[scale] = rendered
+        return rendered
+    }
+
+    /// Draws one glyph white-on-clear, matching the former SwiftUI text:
+    /// `.system(size: 14, weight: .medium, design: .monospaced)`, centered in
+    /// the 11×11 slot.
+    private static func render(_ character: Character, scale: CGFloat) -> CGImage {
+        let pixels = Int((side * scale).rounded())
+        let context = CGContext(
+            data: nil,
+            width: pixels,
+            height: pixels,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.scaleBy(x: scale, y: scale)
+        let graphicsContext = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let glyph = NSAttributedString(string: String(character), attributes: attributes)
+        let bounds = glyph.size()
+        glyph.draw(at: CGPoint(x: (side - bounds.width) / 2, y: (side - bounds.height) / 2))
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()!
     }
 }
 

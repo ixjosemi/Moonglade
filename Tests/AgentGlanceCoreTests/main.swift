@@ -7542,6 +7542,36 @@ extension Data {
     }
 }
 
+func testBrailleSpinnerCycleCoversEveryFrameExactlyOnce() throws {
+    // The layer animation is built from these three values alone: it holds each
+    // pre-rendered frame for `stepInterval` and repeats over `cyclePeriod`.
+    // Adding or dropping a frame without the period following it stretches or
+    // truncates the cycle, so pin that relationship rather than restating 0.8.
+    try expect(
+        BrailleSpinner.cyclePeriod,
+        equals: BrailleSpinner.stepInterval * Double(BrailleSpinner.frames.count),
+        "cycle period covers every frame exactly once"
+    )
+    try expect(
+        Set(BrailleSpinner.frames).count,
+        equals: BrailleSpinner.frames.count,
+        "frames are distinct so the cycle never stutters"
+    )
+    try expect(BrailleSpinner.frames.first, equals: "⠋", "first frame character")
+}
+
+func testBrailleSpinnerFramesAreSingleBraillePatternGlyphs() throws {
+    // Frames are rasterized one glyph per image into a fixed 11x11 slot. A
+    // multi-scalar or non-braille character would render at a different advance
+    // width and make the spinner jitter inside its slot.
+    let allBraille = BrailleSpinner.frames.allSatisfy { character in
+        guard character.unicodeScalars.count == 1,
+              let scalar = character.unicodeScalars.first else { return false }
+        return (0x2800...0x28FF).contains(scalar.value)
+    }
+    try expect(allBraille, equals: true, "every frame is one braille pattern glyph")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("notch glass scrim keeps collapsed bar solid and fades expanded", testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded),
     ("compact status dot rides each wing's outer screen edge", testCompactStatusDotRidesEachWingsOuterScreenEdge),
@@ -7721,6 +7751,8 @@ let tests: [(String, () throws -> Void)] = [
     ("termination planner closes only exact containers", testTerminationPlannerClosesOnlyExactContainers),
     ("termination service kills politely and escalates to SIGKILL", testTerminationServiceKillsPolitelyAndEscalatesToSigkill),
     ("termination service refuses unverified process", testTerminationServiceRefusesUnverifiedProcess),
+    ("braille spinner cycle covers every frame exactly once", testBrailleSpinnerCycleCoversEveryFrameExactlyOnce),
+    ("braille spinner frames are single braille pattern glyphs", testBrailleSpinnerFramesAreSingleBraillePatternGlyphs),
     ("session title formatter cleans tab titles", testSessionTitleFormatterCleansTabTitles),
     ("state store display name prefers override then tab title", testStateStoreDisplayNamePrefersOverrideThenTabTitle),
     ("state store clears all session names", testStateStoreClearsAllSessionNames),
