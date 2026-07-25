@@ -49,6 +49,9 @@ struct NotchWidgetView: View {
     let layout: NotchLayout
     @ObservedObject var pointerTracker: NotchPointerTracker
     let requestPointerRefresh: () -> Void
+    /// Settles every `.onHover` in the tree after the card's own layout moved
+    /// under a still pointer; see `NotchHostingView.resynchronizeHover`.
+    let resynchronizeHover: () -> Void
     let onInteractiveRegionChange: (HangingNotchInteractionRegion) -> Void
     let onKeyboardFocusChange: (Bool) -> Void
     let onMenuVisibilityChange: (Bool) -> Void
@@ -160,6 +163,7 @@ struct NotchWidgetView: View {
                             overrideName: { store.nameOverrides.displayName(for: $0) },
                             rename: { store.rename($0, to: $1) },
                             setKeyboardFocus: onKeyboardFocusChange,
+                            resynchronizeHover: resynchronizeHover,
                             onRowInteractionChange: { isActive in
                                 rowInteractionActive = isActive
                                 if isActive {
@@ -899,11 +903,15 @@ private struct SessionMenuCard: View {
     let overrideName: (AgentSession) -> String?
     let rename: (AgentSession, String) -> Void
     let setKeyboardFocus: (Bool) -> Void
+    let resynchronizeHover: () -> Void
     let onRowInteractionChange: (Bool) -> Void
     @State private var errorMessage: String?
     // At most one row shows its inline actions; opening another closes it.
     @State private var actionsSessionID: String?
     @State private var branchCoordinator = GitBranchResolutionCoordinator()
+    /// The row order this menu opened with, held for as long as it is on
+    /// screen so no row can slide out from under the pointer mid-reach.
+    @State private var pinnedOrder = PinnedSessionOrder()
 
     var body: some View {
         VStack(alignment: .leading, spacing: SessionMenuLayout.cardStackSpacing) {
@@ -920,7 +928,7 @@ private struct SessionMenuCard: View {
                 ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
                         LazyVStack(spacing: 0) {
-                            ForEach(sessions) { session in
+                            ForEach(pinnedOrder.ordered(sessions)) { session in
                                 row(for: session)
                                     .id(session.id)
                             }
@@ -933,8 +941,15 @@ private struct SessionMenuCard: View {
                     .onChange(of: actionsSessionID) { _, sessionID in
                         guard let sessionID else { return }
                         DispatchQueue.main.async {
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                            withAnimation(
+                                .spring(response: 0.28, dampingFraction: 0.9),
+                                completionCriteria: .logicallyComplete
+                            ) {
                                 proxy.scrollTo(sessionID, anchor: .bottom)
+                            } completion: {
+                                // The options just slid into place; whatever the
+                                // pointer is resting on has to learn about it.
+                                resynchronizeHover()
                             }
                         }
                     }
@@ -957,6 +972,13 @@ private struct SessionMenuCard: View {
         // The whole panel can collapse while a row interaction is open;
         // the interaction lock must not outlive the card.
         .onDisappear { onRowInteractionChange(false) }
+        .onAppear { pinnedOrder.record(sessions) }
+        // Only appearances and departures move rows; a status or timestamp
+        // change redraws a row in place, and the pin absorbs the reordering.
+        .onChange(of: sessions.map(\.id)) { _, _ in
+            pinnedOrder.record(sessions)
+            resynchronizeHover()
+        }
     }
 
     private func row(for session: AgentSession) -> some View {
@@ -975,8 +997,15 @@ private struct SessionMenuCard: View {
     }
 
     private func toggleActions(for session: AgentSession) {
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+        withAnimation(
+            .spring(response: 0.28, dampingFraction: 0.9),
+            completionCriteria: .logicallyComplete
+        ) {
             actionsSessionID = actionsSessionID == session.id ? nil : session.id
+        } completion: {
+            // The action list has finished growing into (or out of) the row.
+            // AppKit owes every `.onHover` under the pointer an answer.
+            resynchronizeHover()
         }
         onRowInteractionChange(actionsSessionID != nil)
     }

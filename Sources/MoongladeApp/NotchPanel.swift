@@ -88,6 +88,35 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
         report(localPoint: local, globalLocation: DisplayPoint(x: global.x, y: global.y))
     }
 
+    /// Makes AppKit re-resolve hover after the layout moved beneath a
+    /// motionless pointer.
+    ///
+    /// `refreshPointerLocation` above answers the same problem for the panel's
+    /// own containment, which this view computes itself. SwiftUI's `.onHover`
+    /// is not ours to recompute: it only answers mouse-moved events, so a row
+    /// that grew or scrolled into place under a still cursor keeps whatever
+    /// highlight it last entered. Reposting the pointer where it already is
+    /// walks the tracking areas again and settles every `.onHover` in the
+    /// tree. Nothing is rendered differently, and the location is unchanged,
+    /// so the movement gates that guard hover expansion see no movement.
+    func resynchronizeHover() {
+        guard let window, window.isVisible else { return }
+        let global = NSEvent.mouseLocation
+        let inWindow = window.convertPoint(fromScreen: NSPoint(x: global.x, y: global.y))
+        guard let event = NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: inWindow,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 0,
+            pressure: 0
+        ) else { return }
+        NSApp.postEvent(event, atStart: false)
+    }
+
     private func report(event: NSEvent) {
         let local = convert(event.locationInWindow, from: nil)
         report(localPoint: local, globalLocation: globalLocation(for: event))
@@ -213,6 +242,9 @@ private final class NotchDisplayPanel {
             pointerTracker: pointerTracker,
             requestPointerRefresh: { [weak self] in
                 self?.hostingView?.refreshPointerLocation()
+            },
+            resynchronizeHover: { [weak self] in
+                self?.hostingView?.resynchronizeHover()
             },
             onInteractiveRegionChange: { [weak self] region in
                 self?.hostingView?.interactiveRegion = region

@@ -7955,6 +7955,102 @@ func testProcessCommandCacheForgetsProcessesMissingFromLatestScan() throws {
     try expect(reads, equals: 2, "entries for vanished processes are dropped instead of accumulating")
 }
 
+private func orderedTestSession(
+    _ sessionID: String,
+    updatedAt: TimeInterval = 0
+) -> AgentSession {
+    AgentSession(
+        tool: .claude,
+        sessionID: sessionID,
+        pid: 1,
+        status: .working,
+        cwd: "/tmp/\(sessionID)",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: updatedAt)
+    )
+}
+
+func testPinnedSessionOrderPassesThroughBeforeAnythingIsRecorded() throws {
+    let order = PinnedSessionOrder()
+    let sessions = [orderedTestSession("a"), orderedTestSession("b")]
+
+    try expect(
+        order.ordered(sessions).map(\.id),
+        equals: ["claude-a", "claude-b"],
+        "an empty pin leaves the store's own ordering alone"
+    )
+}
+
+func testPinnedSessionOrderKeepsRecordedSlotsWhenTheStoreResorts() throws {
+    var order = PinnedSessionOrder()
+    order.record([orderedTestSession("a"), orderedTestSession("b"), orderedTestSession("c")])
+
+    // The store re-sorts on every hook event: `b` just reported activity and
+    // now leads. The open menu must not shuffle underneath the pointer.
+    let resorted = [
+        orderedTestSession("b", updatedAt: 30),
+        orderedTestSession("c", updatedAt: 20),
+        orderedTestSession("a", updatedAt: 10),
+    ]
+
+    try expect(
+        order.ordered(resorted).map(\.id),
+        equals: ["claude-a", "claude-b", "claude-c"],
+        "recorded slots survive a re-sort of the same sessions"
+    )
+}
+
+func testPinnedSessionOrderAppendsSessionsItHasNotSeen() throws {
+    var order = PinnedSessionOrder()
+    order.record([orderedTestSession("a"), orderedTestSession("b")])
+
+    // A brand-new session must still reach the list — appended, so it cannot
+    // displace a row the pointer is already resting on.
+    let withNewcomer = [
+        orderedTestSession("new", updatedAt: 99),
+        orderedTestSession("a"),
+        orderedTestSession("b"),
+    ]
+
+    try expect(
+        order.ordered(withNewcomer).map(\.id),
+        equals: ["claude-a", "claude-b", "claude-new"],
+        "an unrecorded session lands at the end rather than jumping the queue"
+    )
+}
+
+func testPinnedSessionOrderDropsSessionsThatEnded() throws {
+    var order = PinnedSessionOrder()
+    order.record([orderedTestSession("a"), orderedTestSession("b"), orderedTestSession("c")])
+    order.record([orderedTestSession("a"), orderedTestSession("c")])
+
+    try expect(
+        order.ordered([orderedTestSession("a"), orderedTestSession("b"), orderedTestSession("c")])
+            .map(\.id),
+        equals: ["claude-a", "claude-c", "claude-b"],
+        "a session that left the list forfeits its old slot instead of resurrecting into it"
+    )
+}
+
+func testPinnedSessionOrderRecordingIsAdditiveRatherThanResorting() throws {
+    var order = PinnedSessionOrder()
+    order.record([orderedTestSession("a"), orderedTestSession("b")])
+    // Recording again with a different incoming order must not renumber the
+    // slots it already holds; only the newcomer is learned.
+    order.record([
+        orderedTestSession("c", updatedAt: 40),
+        orderedTestSession("b", updatedAt: 30),
+        orderedTestSession("a", updatedAt: 20),
+    ])
+
+    try expect(
+        order.ordered([orderedTestSession("a"), orderedTestSession("b"), orderedTestSession("c")])
+            .map(\.id),
+        equals: ["claude-a", "claude-b", "claude-c"],
+        "learning a new session does not reshuffle the ones already pinned"
+    )
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("notch glass scrim keeps collapsed bar solid and fades expanded", testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded),
     ("compact status dot rides each wing's outer screen edge", testCompactStatusDotRidesEachWingsOuterScreenEdge),
@@ -8154,6 +8250,11 @@ let tests: [(String, () throws -> Void)] = [
     ("state store does not republish unchanged state", testStateStoreDoesNotRepublishUnchangedState),
     ("state store raises attention only on transitions into red", testStateStoreRaisesAttentionOnlyOnTransitionsIntoRed),
     ("state store raises turn completion only from working to idle", testStateStoreRaisesTurnCompletionOnlyFromWorkingToIdle),
+    ("pinned session order passes through before anything is recorded", testPinnedSessionOrderPassesThroughBeforeAnythingIsRecorded),
+    ("pinned session order keeps recorded slots when the store resorts", testPinnedSessionOrderKeepsRecordedSlotsWhenTheStoreResorts),
+    ("pinned session order appends sessions it has not seen", testPinnedSessionOrderAppendsSessionsItHasNotSeen),
+    ("pinned session order drops sessions that ended", testPinnedSessionOrderDropsSessionsThatEnded),
+    ("pinned session order recording is additive rather than resorting", testPinnedSessionOrderRecordingIsAdditiveRatherThanResorting),
 ]
 
 if CommandLine.arguments.count == 3,
