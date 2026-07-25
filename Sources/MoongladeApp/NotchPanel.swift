@@ -20,8 +20,12 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
     /// The broad expanded panel reports its visible drop; the compact bar
     /// reports only its attached silhouette. An empty region passes through.
     var interactiveRegion = HangingNotchInteractionRegion.empty {
-        didSet { refreshPointerLocation() }
+        didSet {
+            guard interactiveRegion != oldValue else { return }
+            scheduleContainmentRecheck()
+        }
     }
+    private var containmentRecheckIsScheduled = false
     /// A single tracking area covers the fixed-size panel. Its callback then
     /// tests the current hanging silhouette, so resizing the SwiftUI card
     /// never replaces the area that owns hover state.
@@ -78,6 +82,25 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
         super.mouseExited(with: event)
         let location = globalLocation(for: event)
         onPointerUpdate?(false, location)
+    }
+
+    /// Re-tests containment once the current SwiftUI update has finished.
+    ///
+    /// The region arrives from that update: `onPreferenceChange` on a
+    /// `GeometryReader` measuring the card, so it lands once per frame for as
+    /// long as the open or close spring runs. Answering inline would publish
+    /// pointer state from inside the very pass that is reading it, which
+    /// SwiftUI does not allow. Hopping to the next turn of the run loop also
+    /// coalesces the burst: the frames along the way are interpolation, and
+    /// only the geometry the pointer actually ends up over decides anything.
+    private func scheduleContainmentRecheck() {
+        guard !containmentRecheckIsScheduled else { return }
+        containmentRecheckIsScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            containmentRecheckIsScheduled = false
+            refreshPointerLocation()
+        }
     }
 
     func refreshPointerLocation() {
