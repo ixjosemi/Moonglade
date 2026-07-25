@@ -1426,16 +1426,12 @@ private final class RightClickForwardingView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard bounds.contains(convert(point, from: superview)),
-              let event = NSApp.currentEvent else {
+              InlineActionsClickGate.claimsPointer(
+                  pressedMouseButtons: NSEvent.pressedMouseButtons,
+                  controlKeyIsDown: NSEvent.modifierFlags.contains(.control)
+              ) else {
             return nil
         }
-        switch event.type {
-        case .rightMouseDown, .rightMouseUp:
-            return self
-        case .leftMouseDown where event.modifierFlags.contains(.control):
-            return self
-        default:
-            return nil
-        }
+        return self
     }
 }

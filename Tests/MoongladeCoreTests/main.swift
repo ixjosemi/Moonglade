@@ -8051,6 +8051,39 @@ func testPinnedSessionOrderRecordingIsAdditiveRatherThanResorting() throws {
     )
 }
 
+func testInlineActionsClickGateLetsPlainHoverThrough() throws {
+    // The whole point: with no button held the catcher must be transparent, or
+    // it swallows every hover and click aimed at the row beneath it.
+    try expect(
+        InlineActionsClickGate.claimsPointer(pressedMouseButtons: 0, controlKeyIsDown: false),
+        equals: false,
+        "a pointer with no button held belongs to the row, not the catcher"
+    )
+    try expect(
+        InlineActionsClickGate.claimsPointer(pressedMouseButtons: 0, controlKeyIsDown: true),
+        equals: false,
+        "holding control without clicking is still just hover"
+    )
+}
+
+func testInlineActionsClickGateClaimsRightAndControlClicks() throws {
+    try expect(
+        InlineActionsClickGate.claimsPointer(pressedMouseButtons: 1 << 1, controlKeyIsDown: false),
+        equals: true,
+        "a held right button opens the inline actions"
+    )
+    try expect(
+        InlineActionsClickGate.claimsPointer(pressedMouseButtons: 1, controlKeyIsDown: true),
+        equals: true,
+        "control-click is the trackpad spelling of a right click"
+    )
+    try expect(
+        InlineActionsClickGate.claimsPointer(pressedMouseButtons: 1, controlKeyIsDown: false),
+        equals: false,
+        "a plain left click must reach the focus button underneath"
+    )
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("notch glass scrim keeps collapsed bar solid and fades expanded", testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded),
     ("compact status dot rides each wing's outer screen edge", testCompactStatusDotRidesEachWingsOuterScreenEdge),
@@ -8255,6 +8288,8 @@ let tests: [(String, () throws -> Void)] = [
     ("pinned session order appends sessions it has not seen", testPinnedSessionOrderAppendsSessionsItHasNotSeen),
     ("pinned session order drops sessions that ended", testPinnedSessionOrderDropsSessionsThatEnded),
     ("pinned session order recording is additive rather than resorting", testPinnedSessionOrderRecordingIsAdditiveRatherThanResorting),
+    ("inline actions click gate lets plain hover through", testInlineActionsClickGateLetsPlainHoverThrough),
+    ("inline actions click gate claims right and control clicks", testInlineActionsClickGateClaimsRightAndControlClicks),
 ]
 
 if CommandLine.arguments.count == 3,
