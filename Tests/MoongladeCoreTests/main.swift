@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 import MoongladeCore
 
@@ -7327,6 +7328,75 @@ func testStateStoreRaisesAttentionOnlyOnTransitionsIntoRed() throws {
     try expect(raisedBatches, equals: [["turns-red"]], "still-red session does not re-raise")
 }
 
+func testStateStoreDoesNotRepublishUnchangedState() throws {
+    /// Observation calls `onChange` from a `@Sendable` closure, so the flag it
+    /// raises cannot be a captured `var`.
+    final class ObservationProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var observed = false
+
+        func recordChange() {
+            lock.lock()
+            defer { lock.unlock() }
+            observed = true
+        }
+
+        var sawChange: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return observed
+        }
+    }
+
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let store = StateStore(repository: repository)
+    try repository.save(AgentSession.decode(
+        from: validStateJSON(sessionID: "steady", status: "working", pid: Int32(getpid()))
+    ))
+    try store.reload()
+
+    // Every hook notification and every directory event reloads, and each
+    // reload used to reassign this observable state whether or not the decoded
+    // snapshot differed. Reassigning it invalidates the widget's whole view
+    // tree and relays the notch window for nothing, which measured as the
+    // largest share of the app's idle CPU.
+    let unchangedReload = ObservationProbe()
+    withObservationTracking {
+        _ = store.sessions
+        _ = store.acknowledgments
+    } onChange: {
+        unchangedReload.recordChange()
+    }
+    try store.reload()
+    try expect(
+        unchangedReload.sawChange,
+        equals: false,
+        "a reload that decodes identical state must not invalidate observers"
+    )
+
+    // The guard must not make the store go blind: real change still publishes.
+    let changedReload = ObservationProbe()
+    withObservationTracking {
+        _ = store.sessions
+    } onChange: {
+        changedReload.recordChange()
+    }
+    try repository.save(AgentSession.decode(
+        from: validStateJSON(sessionID: "steady", status: "needs_attention", pid: Int32(getpid()))
+    ))
+    try store.reload()
+    try expect(changedReload.sawChange, equals: true, "a status change still reaches observers")
+    try expect(
+        store.sessions.map(\.status),
+        equals: [SessionStatus.needsAttention],
+        "the published snapshot carries the new status"
+    )
+}
+
 func testStateStoreRaisesTurnCompletionOnlyFromWorkingToIdle() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -8081,6 +8151,7 @@ let tests: [(String, () throws -> Void)] = [
     ("session title formatter cleans tab titles", testSessionTitleFormatterCleansTabTitles),
     ("state store display name prefers override then tab title", testStateStoreDisplayNamePrefersOverrideThenTabTitle),
     ("state store clears all session names", testStateStoreClearsAllSessionNames),
+    ("state store does not republish unchanged state", testStateStoreDoesNotRepublishUnchangedState),
     ("state store raises attention only on transitions into red", testStateStoreRaisesAttentionOnlyOnTransitionsIntoRed),
     ("state store raises turn completion only from working to idle", testStateStoreRaisesTurnCompletionOnlyFromWorkingToIdle),
 ]
