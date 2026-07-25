@@ -78,20 +78,36 @@ public final class StateStore {
     /// queue. A reload that writes would re-trigger this store's directory
     /// observation and feed back into itself.
     public func reload() throws {
-        sessions = try repository.loadSessions()
+        let loaded = try repository.loadSessions()
             .filter { $0.status != .ended }
             .sorted(by: Self.precedes)
-        acknowledgments.prune(keeping: sessions)
+        publish(loaded, to: \.sessions)
+        var prunedAcknowledgments = acknowledgments
+        prunedAcknowledgments.prune(keeping: loaded)
+        publish(prunedAcknowledgments, to: \.acknowledgments)
         raiseStatusTransitions()
-        let prunedOverrides = {
-            var overrides = nameOverrides
-            overrides.prune(keeping: sessions)
-            return overrides
-        }()
-        if prunedOverrides != nameOverrides {
-            nameOverrides = prunedOverrides
+        var prunedOverrides = nameOverrides
+        prunedOverrides.prune(keeping: loaded)
+        if publish(prunedOverrides, to: \.nameOverrides) {
             persistNameOverrides()
         }
+    }
+
+    /// Assigns only when the value actually differs, reporting whether it did.
+    ///
+    /// Observation invalidates observers on assignment, not on change, and
+    /// every hook notification and directory event triggers a reload — most of
+    /// which decode state that has not moved. Writing unconditionally rebuilt
+    /// the widget's view tree and relaid the notch window for nothing, which
+    /// measured as the largest single share of the app's idle CPU.
+    @discardableResult
+    private func publish<Value: Equatable>(
+        _ value: Value,
+        to keyPath: ReferenceWritableKeyPath<StateStore, Value>
+    ) -> Bool {
+        guard self[keyPath: keyPath] != value else { return false }
+        self[keyPath: keyPath] = value
+        return true
     }
 
     public func sessions(for tool: AgentTool) -> [AgentSession] {
