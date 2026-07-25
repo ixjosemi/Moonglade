@@ -20,6 +20,8 @@ swift run agentglance-tests
 open .build/AgentGlance.app
 ```
 
+`swift build` does not compile Metal. If you edit `Sources/AgentGlanceApp/Ripple.metal`, regenerate the prebuilt shader library with `./scripts/compile-shaders.sh` and commit it with your change.
+
 ## Workflow
 
 1. Open an issue for significant behavioral or architectural changes.

@@ -1,61 +1,229 @@
-<svg width="880" height="248" viewBox="0 0 880 248" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AgentGlance — coding agent sessions at a glance, from the MacBook notch">
+<svg width="1040" height="460" viewBox="0 0 1040 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AgentGlance — the expanded notch panel listing three live coding agent sessions">
+  <title>AgentGlance</title>
   <defs>
-    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#101014"/>
-      <stop offset="1" stop-color="#0a0a0d"/>
+    <!-- Quiet, near-black desktop: enough life behind the panel for the glass
+         to read as translucent, never enough to compete with the wordmark. -->
+    <linearGradient id="ag-desk" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#0c0d12"/>
+      <stop offset="0.55" stop-color="#0a0b10"/>
+      <stop offset="1" stop-color="#07080b"/>
     </linearGradient>
-    <linearGradient id="screenGlow" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1c1c22"/>
-      <stop offset="1" stop-color="#131317"/>
+    <radialGradient id="ag-aurora1" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2b6f7a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#2b6f7a" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ag-aurora2" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#4a3f8a" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#4a3f8a" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- The scrim: pure black across the camera band, then a smootherstep
+         dissolve into smoked glass — NotchGlassStyle's curve, by eye. -->
+    <linearGradient id="ag-scrim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000000" stop-opacity="1"/>
+      <stop offset="0.19" stop-color="#000000" stop-opacity="1"/>
+      <stop offset="0.32" stop-color="#000000" stop-opacity="0.97"/>
+      <stop offset="0.50" stop-color="#000000" stop-opacity="0.91"/>
+      <stop offset="0.72" stop-color="#000000" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.80"/>
     </linearGradient>
+    <!-- Light caught on the top shoulders, fading out down the sides. -->
+    <linearGradient id="ag-rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="0.25" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <!-- Desktop light pooled right behind each shoulder. Without it the black
+         silhouette and the dark desktop merge and the concave flare is lost. -->
+    <radialGradient id="ag-shoulderLight" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#69b6c4" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#69b6c4" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="ag-frost" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+
+    <!-- Expanded panel silhouette: concave 14pt shoulders flaring into the
+         screen edge, circular 20pt lower corners. Same math as
+         HangingNotchGeometry.path(style: .hangingNotch). -->
+    <path id="ag-panel" d="M120 0 C127.73 0 134 6.27 134 14 L134 196 C134 207.05 142.95 216 154 216 L886 216 C897.05 216 906 207.05 906 196 L906 14 C906 6.27 912.27 0 920 0 Z"/>
+    <clipPath id="ag-panelClip"><use href="#ag-panel"/></clipPath>
+    <clipPath id="ag-screenClip"><rect x="0" y="0" width="1040" height="460" rx="22"/></clipPath>
   </defs>
 
-  <!-- Card -->
-  <rect x="1" y="1" width="878" height="246" rx="22" fill="url(#card)" stroke="#26262e"/>
+  <g clip-path="url(#ag-screenClip)">
+    <rect width="1040" height="460" fill="url(#ag-desk)"/>
+    <g id="ag-blobs">
+      <ellipse cx="250" cy="120" rx="380" ry="220" fill="url(#ag-aurora1)"/>
+      <ellipse cx="830" cy="330" rx="420" ry="240" fill="url(#ag-aurora2)"/>
+    </g>
+    <ellipse cx="120" cy="24" rx="150" ry="70" fill="url(#ag-shoulderLight)"/>
+    <ellipse cx="920" cy="24" rx="150" ry="70" fill="url(#ag-shoulderLight)"/>
 
-  <!-- Screen top edge with menubar -->
-  <path d="M40 40 a12 12 0 0 1 12 -12 h776 a12 12 0 0 1 12 12 v36 h-800 z" fill="url(#screenGlow)"/>
-  <!-- Menubar hints -->
-  <circle cx="72" cy="58" r="4" fill="#3a3a44"/>
-  <rect x="88" y="54" width="46" height="8" rx="4" fill="#2c2c34"/>
-  <rect x="142" y="54" width="30" height="8" rx="4" fill="#2c2c34"/>
-  <rect x="726" y="54" width="22" height="8" rx="4" fill="#2c2c34"/>
-  <rect x="756" y="54" width="22" height="8" rx="4" fill="#2c2c34"/>
-  <rect x="786" y="54" width="22" height="8" rx="4" fill="#2c2c34"/>
+    <!-- Menu bar, flanking the panel -->
+    <g fill="#ffffff" fill-opacity="0.22">
+      <rect x="24" y="13.5" width="11" height="11" rx="3.4"/>
+      <rect x="48" y="15" width="30" height="7" rx="3.5"/>
+      <rect x="86" y="15" width="22" height="7" rx="3.5"/>
+      <rect x="938" y="14" width="9" height="9" rx="2"/>
+      <rect x="959" y="14" width="9" height="9" rx="2"/>
+      <rect x="980" y="14" width="9" height="9" rx="2"/>
+      <rect x="1000" y="15" width="26" height="7" rx="3.5"/>
+    </g>
 
-  <!-- Notch silhouette with wings -->
-  <path d="M310 28 h260 v34 a10 10 0 0 1 -10 10 h-240 a10 10 0 0 1 -10 -10 z" fill="#000000"/>
+    <!-- Liquid glass: a blurred lift of the desktop, then the scrim -->
+    <g clip-path="url(#ag-panelClip)">
+      <use href="#ag-blobs" filter="url(#ag-frost)"/>
+      <rect x="120" y="0" width="800" height="216" fill="url(#ag-scrim)"/>
+    </g>
+    <use href="#ag-panel" fill="none" stroke="url(#ag-rim)" stroke-width="1"/>
 
-  <!-- Left wing: two agents, one waiting on a prompt (yellow) -->
-  <text x="333" y="55" font-family="-apple-system,'SF Pro Text','Segoe UI',sans-serif" font-size="15" font-weight="600" fill="#e8e8ec">2</text>
-  <circle cx="352" cy="50" r="4" fill="#f5c542"/>
+    <!-- Camera housing: the band beside it stays pure black, always -->
+    <circle cx="520" cy="18" r="4.6" fill="#15161b"/>
+    <circle cx="520" cy="18" r="2" fill="#24262d"/>
 
-  <!-- Center: hardware notch camera -->
-  <circle cx="440" cy="45" r="4" fill="#17171c"/>
+    <!-- Header, living in the wings beside the camera -->
+    <text x="158" y="22.5" font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="12.5" font-weight="600" fill="#ffffff" fill-opacity="0.55">Active sessions</text>
+    <text x="850" y="22" text-anchor="end" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.35">3</text>
+    <!-- SF Symbols `gearshape`, 11pt semibold at 0.35 white: a hollow
+         ring with eight rounded teeth. -->
+    <g transform="translate(870 18)" fill="#ffffff" fill-opacity="0.35">
+      <circle r="3.9" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="2.2"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(0)"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(45)"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(90)"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(135)"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(180)"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(225)"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(270)"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(315)"/>
+    </g>
 
-  <!-- Right wing: one agent waiting on an answer (red, pulsing) -->
-  <text x="518" y="55" font-family="-apple-system,'SF Pro Text','Segoe UI',sans-serif" font-size="15" font-weight="600" fill="#e8e8ec">1</text>
-  <circle cx="537" cy="50" r="4" fill="#ff5f57">
-    <animate attributeName="opacity" values="1;0.35;1" dur="2s" repeatCount="indefinite"/>
-  </circle>
-  <circle cx="537" cy="50" r="4" fill="none" stroke="#ff5f57" stroke-width="1.4">
-    <animate attributeName="r" values="4;11" dur="2s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.7;0" dur="2s" repeatCount="indefinite"/>
-  </circle>
+    <!-- ── Row 1 · Claude Code, running ───────────────────────────────── -->
+    <g transform="translate(154 52)">
+      <g transform="scale(0.6667)" fill="#D97757">
+        <path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/>
+      </g>
+    </g>
+    <!-- The braille dot-matrix spinner, on the app's own 80 ms cadence -->
+    <g fill="#ffffff">
+      <circle cx="185" cy="64.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;0;0;0;0;1;1;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
+      <circle cx="185" cy="68" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;1;1;1;1;1;0" dur="0.8s" repeatCount="indefinite"/></circle>
+      <circle cx="185" cy="71.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;1;1;1;1;1;1;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
+      <circle cx="190" cy="64.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;0;0;0;0;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
+      <circle cx="190" cy="68" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;0;0;0;0;0;1" dur="0.8s" repeatCount="indefinite"/></circle>
+      <circle cx="190" cy="71.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;1;1;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
+    </g>
+    <text x="205" y="64.5" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="14" font-weight="600" fill="#ffffff" fill-opacity="0.94">payments-api</text>
+    <g fill="#ffffff" fill-opacity="0.55">
+      <g transform="translate(205 72)">
+        <rect x="0" y="0.6" width="4.9" height="3.2" rx="1.1"/>
+        <rect x="0" y="2.1" width="10" height="7.3" rx="1.5"/>
+      </g>
+      <text x="220" y="81.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">acme-payments</text>
+      <text x="313" y="81.5" font-family="-apple-system,Arial,sans-serif" font-size="11">·</text>
+      <g transform="translate(322 74)" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.3" fill="none" stroke-linecap="round">
+        <path d="M2 8.6 V2.4"/><path d="M2 5.4 h4.2 a1.8 1.8 0 0 0 1.8 -1.8 V2.6"/>
+        <circle cx="2" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
+        <circle cx="8" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
+        <circle cx="2" cy="9.6" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
+      </g>
+      <text x="337" y="81.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">feat/isin-detection</text>
+    </g>
+    <text x="852" y="72" text-anchor="end" font-family="-apple-system,'SF Pro Rounded',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.45">12m</text>
+    <g transform="translate(874 68)" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-3.4 -1.7 L0 1.7 L3.4 -1.7"/>
+    </g>
 
-  <!-- Wordmark -->
-  <text x="440" y="150" text-anchor="middle" font-family="-apple-system,'SF Pro Display','Segoe UI',sans-serif" font-size="46" font-weight="700" letter-spacing="-1" fill="#f5f5f7">AgentGlance</text>
+    <!-- ── Row 2 · OpenCode, waiting at the prompt ────────────────────── -->
+    <g transform="translate(154 104)">
+      <g transform="scale(0.05333)" fill="#F1ECEC">
+        <path d="M245 30H55V270H245V30ZM99 74V226H201V74H99Z" fill-rule="evenodd"/>
+      </g>
+    </g>
+    <circle cx="187.5" cy="120" r="4.5" fill="#32d74b"/>
+    <text x="205" y="116.5" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="14" font-weight="600" fill="#ffffff" fill-opacity="0.94">notch-polish</text>
+    <g fill="#ffffff" fill-opacity="0.55">
+      <g transform="translate(205 124)">
+        <rect x="0" y="0.6" width="4.9" height="3.2" rx="1.1"/>
+        <rect x="0" y="2.1" width="10" height="7.3" rx="1.5"/>
+      </g>
+      <text x="220" y="133.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">AgentGlance</text>
+      <text x="298" y="133.5" font-family="-apple-system,Arial,sans-serif" font-size="11">·</text>
+      <g transform="translate(307 126)" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.3" fill="none" stroke-linecap="round">
+        <path d="M2 8.6 V2.4"/><path d="M2 5.4 h4.2 a1.8 1.8 0 0 0 1.8 -1.8 V2.6"/>
+        <circle cx="2" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
+        <circle cx="8" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
+        <circle cx="2" cy="9.6" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
+      </g>
+      <text x="322" y="133.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">fix/notch-shoulder</text>
+    </g>
+    <text x="852" y="124" text-anchor="end" font-family="-apple-system,'SF Pro Rounded',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.45">4m</text>
+    <g transform="translate(874 120)" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-3.4 -1.7 L0 1.7 L3.4 -1.7"/>
+    </g>
 
-  <!-- Tagline -->
-  <text x="440" y="184" text-anchor="middle" font-family="-apple-system,'SF Pro Text','Segoe UI',sans-serif" font-size="16" fill="#9a9aa3">Claude Code, OpenCode &amp; Codex sessions — at a glance, from your Mac's notch.</text>
+    <!-- ── Row 3 · Convoy, blocked on a human gate ────────────────────── -->
+    <g transform="translate(154 156)">
+      <g transform="scale(0.5)">
+        <rect x="4" y="4" width="8" height="8" rx="2" fill="#79ACEF"/>
+        <rect x="13" y="4" width="8" height="8" rx="2" fill="#77B8E5"/>
+        <rect x="22" y="4" width="8" height="8" rx="2" fill="#76C3DC"/>
+        <rect x="4" y="13" width="8" height="8" rx="2" fill="#77B8E5"/>
+        <rect x="4" y="22" width="8" height="8" rx="2" fill="#76C3DC"/>
+        <rect x="13" y="22" width="8" height="8" rx="2" fill="#74CFD3"/>
+        <rect x="22" y="22" width="8" height="8" rx="2" fill="#73DACA"/>
+      </g>
+    </g>
+    <circle cx="187.5" cy="172" r="4.5" fill="#ff453a">
+      <animate attributeName="opacity" values="1;0.4;1" dur="1.8s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="187.5" cy="172" r="4.5" fill="none" stroke="#ff453a" stroke-width="1.2">
+      <animate attributeName="r" values="4.5;12" dur="1.8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.65;0" dur="1.8s" repeatCount="indefinite"/>
+    </circle>
+    <text x="205" y="168.5" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="14" font-weight="600" fill="#ffffff" fill-opacity="0.94">release-audit</text>
+    <g fill="#ffffff" fill-opacity="0.55">
+      <g transform="translate(205 176)">
+        <rect x="0" y="0.6" width="4.9" height="3.2" rx="1.1"/>
+        <rect x="0" y="2.1" width="10" height="7.3" rx="1.5"/>
+      </g>
+      <text x="220" y="185.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">AgentGlance</text>
+      <text x="298" y="185.5" font-family="-apple-system,Arial,sans-serif" font-size="11">·</text>
+      <g transform="translate(307 178)">
+        <path d="M1.6 8.8 L5 2.2 L8.4 8.8 Z" fill="none" stroke="#ffffff" stroke-opacity="0.4" stroke-width="1" stroke-dasharray="1.6 1.6"/>
+        <circle cx="5" cy="1.9" r="1.5" fill="#ffffff" fill-opacity="0.55"/>
+        <circle cx="1.4" cy="9.1" r="1.5" fill="#ffffff" fill-opacity="0.55"/>
+        <circle cx="8.6" cy="9.1" r="1.5" fill="#ffffff" fill-opacity="0.55"/>
+      </g>
+      <text x="322" y="185.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">adversarial-review</text>
+    </g>
+    <text x="852" y="176" text-anchor="end" font-family="-apple-system,'SF Pro Rounded',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.45">1m</text>
+    <g transform="translate(874 172)" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-3.4 -1.7 L0 1.7 L3.4 -1.7"/>
+    </g>
 
-  <!-- Semaphore legend -->
-  <g font-family="-apple-system,'SF Pro Text','Segoe UI',sans-serif" font-size="12" fill="#6f6f7a">
-    <circle cx="308" cy="212" r="4" fill="#32d74b"/>
-    <text x="318" y="216">working</text>
-    <circle cx="398" cy="212" r="4" fill="#f5c542"/>
-    <text x="408" y="216">waiting for a prompt</text>
-    <circle cx="548" cy="212" r="4" fill="#ff5f57"/>
-    <text x="558" y="216">needs you now</text>
+    <!-- Wordmark -->
+    <text x="520" y="308" text-anchor="middle" font-family="-apple-system,'SF Pro Display','Helvetica Neue',Arial,sans-serif" font-size="48" font-weight="700" letter-spacing="-1.4" fill="#f5f5f7">AgentGlance</text>
+    <text x="520" y="342" text-anchor="middle" font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="16" fill="#9a9aa3">Know when your coding agents need you — without leaving the notch.</text>
+
+    <!-- Legend: the bar's whole vocabulary, and nothing it does not use -->
+    <g font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="12" fill="#7a7a86">
+      <g fill="#ffffff" fill-opacity="0.85">
+        <circle cx="374.5" cy="396.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;0;0;0;0;1;1;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
+        <circle cx="374.5" cy="400" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;1;1;1;1;1;0" dur="0.8s" repeatCount="indefinite"/></circle>
+        <circle cx="374.5" cy="403.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;1;1;1;1;1;1;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
+        <circle cx="379.5" cy="396.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;0;0;0;0;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
+        <circle cx="379.5" cy="400" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;0;0;0;0;0;1" dur="0.8s" repeatCount="indefinite"/></circle>
+        <circle cx="379.5" cy="403.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;1;1;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
+      </g>
+      <text x="391" y="404">running</text>
+      <circle cx="473" cy="400" r="4" fill="#32d74b"/>
+      <text x="485" y="404">waiting at the prompt</text>
+      <circle cx="619" cy="400" r="4" fill="#ff453a"/>
+      <text x="631" y="404">needs you now</text>
+    </g>
   </g>
+  <rect x="0.5" y="0.5" width="1039" height="459" rx="22" fill="none" stroke="#ffffff" stroke-opacity="0.07"/>
 </svg>

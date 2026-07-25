@@ -14,6 +14,14 @@ swift run agentglance-tests
 
 Run all three before proposing a pull request. The app bundle is written to `.build/AgentGlance.app` and must never be committed.
 
+SwiftPM cannot compile Metal sources, so `Sources/AgentGlanceApp/Ripple.metal` is excluded from the target and its shaders ship as a prebuilt `Sources/AgentGlanceApp/Resources/default.metallib`. `swift build` will not tell you the shader is stale — after editing the `.metal` source, regenerate and commit the library:
+
+```bash
+./scripts/compile-shaders.sh
+```
+
+It needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`).
+
 ## Engineering rules
 
 - Add a failing behavioral test before changing runtime behavior.

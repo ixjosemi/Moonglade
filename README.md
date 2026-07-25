@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/header.svg" alt="AgentGlance — coding agent sessions at a glance, from the MacBook notch" width="760"/>
+  <img src="assets/header.svg" alt="The AgentGlance panel hanging from the MacBook notch: three agent sessions with their provider, status, project, branch, and elapsed time" width="880"/>
 </p>
 
 **Know when your coding agents need you—without leaving the notch.**
@@ -16,23 +16,30 @@ AgentGlance is a quiet, native macOS indicator for Claude Code, OpenCode, Codex 
 - Expand any row (chevron or right click) for inline actions: rename the session, copy the project path, reveal it in Finder, or kill the process — SIGTERM with SIGKILL escalation — and close its exact tmux pane or Ghostty tab.
 - Watch Convoy pipeline runs as first-class sessions: the current step in the row, red light on human gates, and no duplicate rows for the OpenCode sessions a pipeline owns.
 - Closed terminals disappear immediately through kernel exit notifications, with a five-second scanner/reaper backstop for missed hooks and stale state.
-- Follow the screen with the pointer by default, or choose the screen with the focused window in Settings.
+- Follow the screen with the pointer by default, or choose the screen with the focused window — or a panel on every connected display — in Settings.
+- Read a panel that belongs on the hardware: it hangs from the notch as a liquid-glass drop, stays pure black across the camera band, and answers the click with a Metal ripple. Frost and tint are tunable per display kind, and optional sounds can announce a session that needs you or one that just finished its turn.
 - Keep all observation and state on your Mac.
 - Run without telemetry, accounts, servers, or third-party Swift dependencies, at ~1% CPU and ~16 MB of memory.
 
 ## Session states
 
-| State | Meaning |
-| --- | --- |
-| Running | The agent is processing. |
-| Waiting | The session waits at the prompt for your next input. |
-| Blocked | A question, permission ask, or failed pipeline step needs you. |
+<p align="center">
+  <img src="assets/status-bar.svg" alt="The compact bar: a braille spinner and count for running sessions, a green dot and count for sessions waiting at the prompt, and a count and red dot for sessions that need you" width="760"/>
+</p>
 
-The compact bar shows a count for each state that actually exists right now — zero-count states leave no slot behind; the menu always shows the real status and provider per session.
+| State | In the bar | Meaning |
+| --- | --- | --- |
+| Running | Braille dot-matrix spinner | The agent is processing. |
+| Waiting | Green dot | The session waits at the prompt for your next input. |
+| Blocked | Red dot | A question, permission ask, or failed pipeline step needs you. |
+
+Running and waiting sit on the left of the camera and blocked on its right, and each pair puts its round glyph on the outer screen edge so both wings meet the notch shoulders symmetrically. The bar shows a count for each state that actually exists right now — zero-count states leave no slot behind — and collapses to a single dimmed moon when no agent is running at all.
+
+The menu always shows the real status and provider per session, using the same three glyphs plus a grey dot for a session whose process has exited and is about to be reaped.
 
 ## Requirements
 
-- macOS 14 Sonoma or newer;
+- macOS 14 Sonoma or newer — macOS 26 for the real Liquid Glass backdrop, which degrades to a system blur below it;
 - a MacBook with a notch for the intended UI placement;
 - Swift 6.0 or newer to build from source;
 - Node.js 20+ to run the OpenCode and Pi behavioral tests;
@@ -80,6 +87,8 @@ swift run agentglance-tests
 open .build/AgentGlance.app
 ```
 
+SwiftPM cannot compile Metal sources, so the expansion ripple ships as a prebuilt `Sources/AgentGlanceApp/Resources/default.metallib`. After editing `Ripple.metal`, regenerate it with `./scripts/compile-shaders.sh` and commit the result.
+
 ### What the hook installer does
 
 Without integrations the app still detects running agents (via a fast libproc process scan), but every session shows as permanently working — the hooks are what feed real status changes. `install.sh` runs `agentglance install`, which:
@@ -115,7 +124,7 @@ macOS asks for Automation access the first time AgentGlance controls a terminal.
 
 Claude hooks, an OpenCode plugin, a Pi extension, the Codex rollout watcher, the Convoy runs watcher, and a process fallback produce versioned session documents under `~/.agentglance/state`. The app observes that directory and renders active sessions. State is written atomically with user-only permissions. Convoy needs no hook at all: its run metadata under `~/.convoy/runs` is read directly, and a run is only shown while its recorded server process is verifiably alive. OpenCode phase IDs named by Convoy are retained in a private ownership index and filtered at repository load time, so internal phases stay hidden even after a plugin rewrite or app restart.
 
-Everything is event-driven and off the main thread: a libproc-based scanner (no subprocesses, ~2 ms per full sweep) runs on a 5-second heartbeat, kernel `EVFILT_PROC` exit watchers reap closed sessions instantly, and directory observation with debounce delivers state changes to the UI. A native session that has been quiet for a full scan interval is also checked against the detected agent set; removal requires two consecutive misses, so one transient metadata-read failure cannot hide a live session. Terminal identity disambiguates agents sharing a project directory. Claude and OpenCode status changes land in well under a second; Codex and Convoy ride the heartbeat. Session titles follow the live Ghostty tab title — cleaned of status decorations and capped at 20 characters — and a manual rename (persisted in `~/.agentglance/session-names.json`) always wins. Agent matching accepts either the kernel-resolved executable path or `argv[0]`, so versioned symlink installs like `~/.local/bin/claude → …/versions/x.y.z` are detected correctly.
+Everything is event-driven and off the main thread: a libproc-based scanner (no subprocesses, ~2 ms per full sweep) runs on a 5-second heartbeat, kernel `EVFILT_PROC` exit watchers reap closed sessions instantly, and directory observation with debounce delivers state changes to the UI. A native session that has been quiet for a full scan interval is also checked against the detected agent set; removal requires two consecutive misses, so one transient metadata-read failure cannot hide a live session. Terminal identity disambiguates agents sharing a project directory. Claude and OpenCode status changes land in well under a second; Codex and Convoy ride the heartbeat. Session titles follow the live Ghostty tab title — cleaned of status decorations, then truncated by the row's width rather than a fixed character count — and a manual rename (persisted in `~/.agentglance/session-names.json`) always wins. Agent matching accepts either the kernel-resolved executable path or `argv[0]`, so versioned symlink installs like `~/.local/bin/claude → …/versions/x.y.z` are detected correctly.
 
 See [Architecture](docs/ARCHITECTURE.md) for the full data flow and trust boundaries.
 
