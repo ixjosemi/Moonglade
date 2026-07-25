@@ -5,10 +5,10 @@ import Foundation
 /// `StateStore` sorts by status and then by `updatedAt`, and every hook event
 /// bumps `updatedAt`, so a pair of busy agents reshuffles the list several
 /// times a second. That is the right behavior for a list nobody is pointing
-/// at, and the wrong one for a list with an open row: the option the pointer
-/// is travelling toward slides out from under it, and AppKit does not
-/// re-resolve hover for a view that moved beneath a motionless cursor — the
-/// highlight stays wherever it last entered, which reads as a frozen menu.
+/// at, and the wrong one for a list being used: the row you are reaching for
+/// slides out from under the pointer, so the click lands on whatever took its
+/// place. Hover itself recovers on its own — SwiftUI re-resolves it when the
+/// layout moves beneath a still cursor — but aim does not.
 ///
 /// So the menu pins the order it opened with. A session keeps its slot for as
 /// long as it is on screen, newcomers land at the end where they displace
