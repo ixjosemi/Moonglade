@@ -7369,32 +7369,34 @@ extension Data {
     }
 }
 
-func testBrailleSpinnerAdvancesOneFramePerStepAndWraps() throws {
-    // Every visible spinner reads the same absolute clock, so the frame math
-    // must advance exactly one frame per step interval and cycle cleanly.
-    // Sampled mid-frame (+0.5 step) to stay clear of floating-point boundaries.
-    let base = Date(timeIntervalSinceReferenceDate: 0)
-    for step in 0..<25 {
-        let midFrame = base.addingTimeInterval((Double(step) + 0.5) * BrailleSpinner.stepInterval)
-        try expect(
-            BrailleSpinner.frameIndex(at: midFrame),
-            equals: step % BrailleSpinner.frames.count,
-            "frame index at step \(step)"
-        )
-    }
-    try expect(BrailleSpinner.frame(at: base), equals: "⠋", "first frame character")
+func testBrailleSpinnerCycleCoversEveryFrameExactlyOnce() throws {
+    // The layer animation is built from these three values alone: it holds each
+    // pre-rendered frame for `stepInterval` and repeats over `cyclePeriod`.
+    // Adding or dropping a frame without the period following it stretches or
+    // truncates the cycle, so pin that relationship rather than restating 0.8.
+    try expect(
+        BrailleSpinner.cyclePeriod,
+        equals: BrailleSpinner.stepInterval * Double(BrailleSpinner.frames.count),
+        "cycle period covers every frame exactly once"
+    )
+    try expect(
+        Set(BrailleSpinner.frames).count,
+        equals: BrailleSpinner.frames.count,
+        "frames are distinct so the cycle never stutters"
+    )
+    try expect(BrailleSpinner.frames.first, equals: "⠋", "first frame character")
 }
 
-func testBrailleSpinnerFrameIndexStaysInRangeForAnyClock() throws {
-    // A reading before the reference date must not yield a negative index and
-    // crash the row; the floor-style modulo keeps it inside `frames`.
-    let past = Date(timeIntervalSinceReferenceDate: -12_345.678)
-    let index = BrailleSpinner.frameIndex(at: past)
-    try expect(
-        index >= 0 && index < BrailleSpinner.frames.count,
-        equals: true,
-        "frame index in range for a pre-reference-date clock"
-    )
+func testBrailleSpinnerFramesAreSingleBraillePatternGlyphs() throws {
+    // Frames are rasterized one glyph per image into a fixed 11x11 slot. A
+    // multi-scalar or non-braille character would render at a different advance
+    // width and make the spinner jitter inside its slot.
+    let allBraille = BrailleSpinner.frames.allSatisfy { character in
+        guard character.unicodeScalars.count == 1,
+              let scalar = character.unicodeScalars.first else { return false }
+        return (0x2800...0x28FF).contains(scalar.value)
+    }
+    try expect(allBraille, equals: true, "every frame is one braille pattern glyph")
 }
 
 let tests: [(String, () throws -> Void)] = [
@@ -7573,8 +7575,8 @@ let tests: [(String, () throws -> Void)] = [
     ("termination planner closes only exact containers", testTerminationPlannerClosesOnlyExactContainers),
     ("termination service kills politely and escalates to SIGKILL", testTerminationServiceKillsPolitelyAndEscalatesToSigkill),
     ("termination service refuses unverified process", testTerminationServiceRefusesUnverifiedProcess),
-    ("braille spinner advances one frame per step and wraps", testBrailleSpinnerAdvancesOneFramePerStepAndWraps),
-    ("braille spinner frame index stays in range for any clock", testBrailleSpinnerFrameIndexStaysInRangeForAnyClock),
+    ("braille spinner cycle covers every frame exactly once", testBrailleSpinnerCycleCoversEveryFrameExactlyOnce),
+    ("braille spinner frames are single braille pattern glyphs", testBrailleSpinnerFramesAreSingleBraillePatternGlyphs),
     ("session title formatter cleans tab titles", testSessionTitleFormatterCleansTabTitles),
     ("state store display name prefers override then tab title", testStateStoreDisplayNamePrefersOverrideThenTabTitle),
     ("state store clears all session names", testStateStoreClearsAllSessionNames),

@@ -756,7 +756,7 @@ private final class BrailleSpinnerHostView: NSView {
         layer.contents = frames.first
 
         guard animated else { return }
-        let period = BrailleSpinner.stepInterval * Double(frames.count)
+        let period = BrailleSpinner.cyclePeriod
         let animation = CAKeyframeAnimation(keyPath: "contents")
         animation.values = frames
         animation.calculationMode = .discrete

@@ -1,9 +1,8 @@
 import Foundation
 
 /// The braille dot-matrix frames and cadence shared by every working spinner
-/// (the ora / Convoy progress style). Extracted from the view so the
-/// frame-selection clock math is unit-testable, and so independently mounted
-/// spinners advance from one absolute-clock source in lockstep.
+/// (the ora / Convoy progress style). Extracted from the view so the cycle the
+/// layer animation is built from has one definition and can be asserted on.
 public enum BrailleSpinner {
     /// Seconds each frame is held before advancing.
     public static let stepInterval: TimeInterval = 0.08
@@ -12,18 +11,8 @@ public enum BrailleSpinner {
     /// pixel chasing itself.
     public static let frames: [Character] = Array("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 
-    /// Index into `frames` for a clock reading, advancing exactly one frame per
-    /// `stepInterval`. Referenced to the absolute clock the animation samples,
-    /// so every visible spinner stays in phase. The step is floored and the
-    /// modulo taken floor-style, so readings before the reference date still
-    /// land in range instead of producing a negative index.
-    public static func frameIndex(at date: Date) -> Int {
-        let step = Int((date.timeIntervalSinceReferenceDate / stepInterval).rounded(.down))
-        let count = frames.count
-        return ((step % count) + count) % count
-    }
-
-    public static func frame(at date: Date) -> Character {
-        frames[frameIndex(at: date)]
-    }
+    /// One full pass through `frames`. The keyframe animation repeats over this
+    /// duration, and each spinner starts on a multiple of it, so independently
+    /// mounted spinners stay in phase.
+    public static let cyclePeriod: TimeInterval = stepInterval * Double(frames.count)
 }
