@@ -49,6 +49,10 @@ public struct ProcessIdentity: Codable, Equatable, Hashable, Sendable {
 public struct TerminalContext: Codable, Equatable, Sendable {
     public let termProgram: String?
     public let ghosttyTerminalID: String?
+    /// cmux reports `TERM_PROGRAM=ghostty` but is a separate application
+    /// (`com.cmuxterm.app`), so its panel ID is the only signal that
+    /// distinguishes it from an actual Ghostty surface.
+    public let cmuxPanelID: String?
     public let itermSessionID: String?
     public let tmuxPane: String?
     public let tty: String?
@@ -57,6 +61,7 @@ public struct TerminalContext: Codable, Equatable, Sendable {
     public init(
         termProgram: String? = nil,
         ghosttyTerminalID: String? = nil,
+        cmuxPanelID: String? = nil,
         itermSessionID: String? = nil,
         tmuxPane: String? = nil,
         tty: String? = nil,
@@ -64,6 +69,7 @@ public struct TerminalContext: Codable, Equatable, Sendable {
     ) {
         self.termProgram = termProgram
         self.ghosttyTerminalID = ghosttyTerminalID
+        self.cmuxPanelID = cmuxPanelID
         self.itermSessionID = itermSessionID
         self.tmuxPane = tmuxPane
         self.tty = tty
@@ -73,6 +79,7 @@ public struct TerminalContext: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case termProgram = "term_program"
         case ghosttyTerminalID = "ghostty_terminal_id"
+        case cmuxPanelID = "cmux_panel_id"
         case itermSessionID = "iterm_session_id"
         case tmuxPane = "tmux_pane"
         case tty

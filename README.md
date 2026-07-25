@@ -43,7 +43,7 @@ The menu always shows the real status and provider per session, using the same t
 - a MacBook with a notch for the intended UI placement;
 - Swift 6.0 or newer to build from source;
 - Node.js 20+ to run the OpenCode and Pi behavioral tests;
-- Ghostty 1.3+ with AppleScript enabled, iTerm2, or Terminal.
+- Ghostty 1.3+ with AppleScript enabled, cmux, iTerm2, or Terminal.
 
 Apple Silicon is the tested development platform. Intel builds have not yet been validated.
 

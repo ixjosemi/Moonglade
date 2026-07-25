@@ -1114,6 +1114,69 @@ func testTerminalEnrichmentPreservesConcurrentLifecycleWrite() throws {
     )
 }
 
+func testTerminalEnrichmentPreservesCmuxPanelIdentity() throws {
+    // Only the hook sees CMUX_PANEL_ID — the process scanner reads proc_pidinfo
+    // and can never recover it. If the enrichment merge drops the hook's value,
+    // the session permanently loses its only focusable identity.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processIdentity = ProcessIdentity(
+        processID: 424_243,
+        kernelStartTimeMicroseconds: 2_000
+    )
+    let lifecycle = AgentSession(
+        tool: .claude,
+        sessionID: "cmux-enrichment",
+        pid: processIdentity.processID,
+        processIdentity: processIdentity,
+        status: .working,
+        cwd: "/tmp/cmux-enrichment",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(
+            termProgram: "ghostty",
+            cmuxPanelID: "PANEL-ABC",
+            tty: "/dev/ttys010",
+            windowTitleHint: "old title"
+        )
+    )
+    try repository.save(lifecycle)
+    var snapshot = try repository.loadSnapshot()
+
+    // The scanner enriches title and surface, and knows nothing about cmux.
+    let enrichedProcess = DetectedAgentProcess(
+        tool: lifecycle.tool,
+        processID: lifecycle.pid,
+        processIdentity: processIdentity,
+        cwd: lifecycle.cwd,
+        terminal: TerminalContext(
+            termProgram: "ghostty",
+            windowTitleHint: "new live title"
+        )
+    )
+
+    try ReaperService(repository: repository).applyTerminalEnrichment(
+        basic: [enrichedProcess],
+        enriched: [enrichedProcess],
+        snapshot: &snapshot
+    )
+
+    let merged = try repository.loadSessions().first
+        .unwrap(or: "enriched session disappeared")
+    try expect(
+        merged.terminal.cmuxPanelID,
+        equals: "PANEL-ABC",
+        "enrichment never discards the hook's cmux panel identity"
+    )
+    try expect(
+        merged.terminal.windowTitleHint,
+        equals: "new live title",
+        "unrelated enrichment still applies"
+    )
+}
+
 func testTerminalEnrichmentDoesNotReplaceLifecycleWriteAfterReload() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -5914,6 +5977,58 @@ func testFocusPlannerRequiresOneExactGhosttyTarget() throws {
     )
 }
 
+func testFocusPlannerTargetsCmuxByPanelIdentity() throws {
+    // cmux is a Ghostty-derived terminal: it reports TERM_PROGRAM=ghostty but
+    // is a distinct application (com.cmuxterm.app). Targeting "Ghostty" would
+    // address an app that need not be installed, so a captured panel ID must
+    // win over the Ghostty branch and address cmux directly.
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "cmux-exact",
+        pid: 27527,
+        status: .working,
+        cwd: "/Users/pjjuplo/Documents/codex-projects",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext(
+            termProgram: "ghostty",
+            cmuxPanelID: "1E0A70B7-5FBA-4C4F-83D9-01292C3E957C",
+            tty: "/dev/ttys003",
+            windowTitleHint: "codex-projects — claude"
+        )
+    )
+
+    let actions = try FocusPlanner.actions(for: session)
+    guard case let .appleScript(script)? = actions.last else {
+        throw TestFailure.expectation("cmux focus did not produce AppleScript")
+    }
+    try expect(
+        script.contains("tell application \"cmux\""),
+        equals: true,
+        "cmux sessions address cmux, never Ghostty"
+    )
+    try expect(
+        script.contains("Ghostty"),
+        equals: false,
+        "a cmux panel never falls back to an app that may not be installed"
+    )
+    try expect(
+        script.contains("1E0A70B7-5FBA-4C4F-83D9-01292C3E957C"),
+        equals: true,
+        "the panel ID is strong identity and is used verbatim"
+    )
+    try expect(
+        script.contains("working directory"),
+        equals: false,
+        "strong cmux identity never guesses by working directory"
+    )
+    try expect(
+        script.contains("if (count of matches) is not 1 then error"),
+        equals: true,
+        "cmux rejects missing or ambiguous targets like Ghostty does"
+    )
+}
+
 func testFocusPlannerNormalizesITermIdentityAndSelectsItsWindow() throws {
     let session = AgentSession(
         tool: .claude,
@@ -7460,6 +7575,7 @@ let tests: [(String, () throws -> Void)] = [
     ("reaper adopts scanned Ghostty terminal for native session", testReaperAdoptsScannedGhosttyTerminalForNativeSession),
     ("reaper adopts controlling TTY without Ghostty surface", testReaperAdoptsControllingTTYWithoutGhosttySurface),
     ("terminal enrichment preserves concurrent lifecycle write", testTerminalEnrichmentPreservesConcurrentLifecycleWrite),
+    ("terminal enrichment preserves cmux panel identity", testTerminalEnrichmentPreservesCmuxPanelIdentity),
     ("terminal enrichment does not replace lifecycle write after reload", testTerminalEnrichmentDoesNotReplaceLifecycleWriteAfterReload),
     ("terminal enrichment rejects concurrent process generation change", testTerminalEnrichmentRejectsConcurrentProcessGenerationChange),
     ("state repository validates and prunes enrichment overlays", testStateRepositoryValidatesAndPrunesEnrichmentOverlays),
@@ -7570,6 +7686,7 @@ let tests: [(String, () throws -> Void)] = [
     ("convoy watcher suppresses embedded server reaper fallback by directory", testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory),
     ("focus planner prioritizes tmux then terminal", testFocusPlannerPrioritizesTmuxThenTerminal),
     ("focus planner requires one exact Ghostty target", testFocusPlannerRequiresOneExactGhosttyTarget),
+    ("focus planner targets cmux by panel identity", testFocusPlannerTargetsCmuxByPanelIdentity),
     ("focus planner normalizes iTerm identity and selects its window", testFocusPlannerNormalizesITermIdentityAndSelectsItsWindow),
     ("focus planner rejects empty iTerm identity without TTY", testFocusPlannerRejectsEmptyITermIdentityWithoutTTY),
     ("focus planner matches Terminal TTY exactly and raises its window", testFocusPlannerMatchesTerminalTTYExactlyAndRaisesItsWindow),
