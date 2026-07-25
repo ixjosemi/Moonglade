@@ -8051,6 +8051,52 @@ func testPinnedSessionOrderRecordingIsAdditiveRatherThanResorting() throws {
     )
 }
 
+func testHoverSelectionFollowsThePointerAcrossRows() throws {
+    var selection = HoverSelection<String>()
+    selection.update("rename", isHovered: true)
+    try expect(selection.hovered, equals: "rename", "entering a row selects it")
+
+    selection.update("rename", isHovered: false)
+    selection.update("kill", isHovered: true)
+    try expect(selection.hovered, equals: "kill", "an orderly hand-off follows the pointer")
+}
+
+func testHoverSelectionSurvivesAnExitThatArrivesAfterTheNextEnter() throws {
+    // The failure this type exists for. Resizing an animated view replaces its
+    // tracking area, so a fast pointer gets the new row's enter before the old
+    // row's exit. Independent per-row flags would end up with both rows lit —
+    // or, once the late exit lands, with none.
+    var selection = HoverSelection<String>()
+    selection.update("rename", isHovered: true)
+    selection.update("kill", isHovered: true)
+    try expect(selection.hovered, equals: "kill", "the newest enter wins")
+
+    selection.update("rename", isHovered: false)
+    try expect(
+        selection.hovered,
+        equals: "kill",
+        "a late exit from the row the pointer already left must not clear the highlight"
+    )
+}
+
+func testHoverSelectionClearsWhenTheSelectedRowExits() throws {
+    var selection = HoverSelection<String>()
+    selection.update("kill", isHovered: true)
+    selection.update("kill", isHovered: false)
+    try expect(selection.hovered, equals: nil, "the pointer left the row it was on")
+}
+
+func testHoverSelectionDropsEverythingWhenTheListIsReplaced() throws {
+    var selection = HoverSelection<String>()
+    selection.update("kill", isHovered: true)
+    selection.clear()
+    try expect(
+        selection.hovered,
+        equals: nil,
+        "swapping the action list out cannot leave a highlight owed to a row that no longer exists"
+    )
+}
+
 func testInlineActionsClickGateLetsPlainHoverThrough() throws {
     // The whole point: with no button held the catcher must be transparent, or
     // it swallows every hover and click aimed at the row beneath it.
@@ -8288,6 +8334,10 @@ let tests: [(String, () throws -> Void)] = [
     ("pinned session order appends sessions it has not seen", testPinnedSessionOrderAppendsSessionsItHasNotSeen),
     ("pinned session order drops sessions that ended", testPinnedSessionOrderDropsSessionsThatEnded),
     ("pinned session order recording is additive rather than resorting", testPinnedSessionOrderRecordingIsAdditiveRatherThanResorting),
+    ("hover selection follows the pointer across rows", testHoverSelectionFollowsThePointerAcrossRows),
+    ("hover selection survives an exit that arrives after the next enter", testHoverSelectionSurvivesAnExitThatArrivesAfterTheNextEnter),
+    ("hover selection clears when the selected row exits", testHoverSelectionClearsWhenTheSelectedRowExits),
+    ("hover selection drops everything when the list is replaced", testHoverSelectionDropsEverythingWhenTheListIsReplaced),
     ("inline actions click gate lets plain hover through", testInlineActionsClickGateLetsPlainHoverThrough),
     ("inline actions click gate claims right and control clicks", testInlineActionsClickGateClaimsRightAndControlClicks),
 ]

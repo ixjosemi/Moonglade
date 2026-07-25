@@ -1048,6 +1048,10 @@ private struct SessionRow: View {
     @State private var branchName: String?
     @State private var mode: ActionMode = .menu
     @State private var renameDraft = ""
+    /// Which action entry the pointer is on, keyed by label. One selection for
+    /// the whole list, so an exit that arrives late cannot unlight the entry
+    /// the pointer actually reached.
+    @State private var hoveredAction = HoverSelection<String>()
     @FocusState private var renameFieldIsFocused: Bool
 
     var body: some View {
@@ -1101,6 +1105,10 @@ private struct SessionRow: View {
             endRenameKeyboard()
             mode = .menu
         }
+        // Each mode shows a different set of entries. The ones leaving cannot
+        // be relied on to report their exit, so the selection starts empty and
+        // the entry under the pointer re-announces itself as it appears.
+        .onChange(of: mode) { _, _ in hoveredAction.clear() }
         .onDisappear { endRenameKeyboard() }
         // Lazy rows request branch data only while visible. Disappearance
         // cancels queued work through the coordinator; the menu-scoped cache
@@ -1185,27 +1193,47 @@ private struct SessionRow: View {
         .accessibilityLabel("Session actions")
     }
 
+    /// Binds one action entry to the row's single hover selection. Every entry
+    /// goes through here so the binding is written once.
+    private func actionRow(
+        _ label: String,
+        systemImage: String,
+        isDestructive: Bool = false,
+        fillsWidth: Bool = true,
+        action: @escaping () -> Void
+    ) -> ActionListRow {
+        ActionListRow(
+            label: label,
+            systemImage: systemImage,
+            isDestructive: isDestructive,
+            fillsWidth: fillsWidth,
+            isHovered: hoveredAction.hovered == label,
+            setHovered: { hoveredAction.update(label, isHovered: $0) },
+            action: action
+        )
+    }
+
     @ViewBuilder
     private var actionArea: some View {
         switch mode {
         case .menu:
             VStack(spacing: 1) {
-                ActionListRow(label: "Rename Session", systemImage: "pencil") {
+                actionRow("Rename Session", systemImage: "pencil") {
                     beginRename()
                 }
-                ActionListRow(label: "Copy Project Path", systemImage: "doc.on.doc") {
+                actionRow("Copy Project Path", systemImage: "doc.on.doc") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(session.cwd, forType: .string)
                     toggleActions()
                 }
-                ActionListRow(label: "Reveal in Finder", systemImage: "folder") {
+                actionRow("Reveal in Finder", systemImage: "folder") {
                     NSWorkspace.shared.activateFileViewerSelecting(
                         [URL(fileURLWithPath: session.cwd)]
                     )
                     toggleActions()
                 }
-                ActionListRow(
-                    label: "Kill Session",
+                actionRow(
+                    "Kill Session",
                     systemImage: "xmark.octagon",
                     isDestructive: true
                 ) {
@@ -1237,8 +1265,8 @@ private struct SessionRow: View {
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                ActionListRow(
-                    label: "Kill",
+                actionRow(
+                    "Kill",
                     systemImage: "xmark.octagon",
                     isDestructive: true,
                     fillsWidth: false
@@ -1246,7 +1274,7 @@ private struct SessionRow: View {
                     kill(session)
                     toggleActions()
                 }
-                ActionListRow(label: "Cancel", systemImage: "arrow.uturn.backward", fillsWidth: false) {
+                actionRow("Cancel", systemImage: "arrow.uturn.backward", fillsWidth: false) {
                     mode = .menu
                 }
             }
@@ -1329,8 +1357,12 @@ private struct ActionListRow: View {
     /// List entries span the row; the kill-confirmation buttons keep their
     /// natural width so the question stays on the same line.
     var fillsWidth = true
+    /// Hover is owned by the enclosing row's `HoverSelection`, not by a flag
+    /// per entry: sibling flags disagree when a fast pointer makes AppKit
+    /// deliver the hand-off out of order. `SessionRow.actionRow` binds these.
+    let isHovered: Bool
+    let setHovered: (Bool) -> Void
     let action: () -> Void
-    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -1359,7 +1391,7 @@ private struct ActionListRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { isHovered = $0 }
+        .onHover(perform: setHovered)
     }
 
     private var backgroundOpacity: Color {
