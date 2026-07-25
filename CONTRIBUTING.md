@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve AgentGlance.
+Thanks for helping improve Moonglade.
 
 ## Development setup
 
@@ -12,15 +12,15 @@ Requirements:
 - Ghostty 1.3+, iTerm2, or Terminal for manual focus testing.
 
 ```bash
-git clone https://github.com/ixjosemi/AgentGlance.git
-cd AgentGlance
+git clone https://github.com/ixjosemi/Moonglade.git
+cd Moonglade
 swift build
-swift run agentglance-tests
+swift run moonglade-tests
 ./scripts/build-app.sh
-open .build/AgentGlance.app
+open .build/Moonglade.app
 ```
 
-`swift build` does not compile Metal. If you edit `Sources/AgentGlanceApp/Ripple.metal`, regenerate the prebuilt shader library with `./scripts/compile-shaders.sh` and commit it with your change.
+`swift build` does not compile Metal. If you edit `Sources/MoongladeApp/Ripple.metal`, regenerate the prebuilt shader library with `./scripts/compile-shaders.sh` and commit it with your change.
 
 ## Workflow
 

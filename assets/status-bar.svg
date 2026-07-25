@@ -1,5 +1,5 @@
-<svg width="880" height="136" viewBox="0 0 880 136" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The compact AgentGlance bar: a braille spinner and count for running sessions, a green dot and count for sessions waiting at the prompt, and a red dot and count for sessions that need you">
-  <title>AgentGlance session states</title>
+<svg width="880" height="136" viewBox="0 0 880 136" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The compact Moonglade bar: a braille spinner and count for running sessions, a green dot and count for sessions waiting at the prompt, and a red dot and count for sessions that need you">
+  <title>Moonglade session states</title>
   <defs>
     <linearGradient id="bar-desk" x1="0" y1="0" x2="0.35" y2="1">
       <stop offset="0" stop-color="#0c0d12"/>

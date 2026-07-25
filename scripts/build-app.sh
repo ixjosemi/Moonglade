@@ -2,15 +2,15 @@
 set -eu
 
 swift build -c release
-bundle=".build/AgentGlance.app"
+bundle=".build/Moonglade.app"
 /bin/rm -rf "$bundle"
 /bin/mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/bin"
 /bin/cp config/Info.plist "$bundle/Contents/Info.plist"
 /bin/cp config/AppIcon.icns "$bundle/Contents/Resources/AppIcon.icns"
-/bin/cp .build/release/AgentGlanceApp "$bundle/Contents/MacOS/AgentGlance"
-/bin/cp .build/release/agentglance "$bundle/Contents/Resources/bin/agentglance"
-/bin/cp -R .build/release/AgentGlance_AgentGlanceCore.bundle "$bundle/Contents/Resources/"
-/bin/cp -R .build/release/AgentGlance_AgentGlanceApp.bundle "$bundle/Contents/Resources/"
-/bin/chmod 755 "$bundle/Contents/MacOS/AgentGlance" "$bundle/Contents/Resources/bin/agentglance"
+/bin/cp .build/release/MoongladeApp "$bundle/Contents/MacOS/Moonglade"
+/bin/cp .build/release/moonglade "$bundle/Contents/Resources/bin/moonglade"
+/bin/cp -R .build/release/Moonglade_MoongladeCore.bundle "$bundle/Contents/Resources/"
+/bin/cp -R .build/release/Moonglade_MoongladeApp.bundle "$bundle/Contents/Resources/"
+/bin/chmod 755 "$bundle/Contents/MacOS/Moonglade" "$bundle/Contents/Resources/bin/moonglade"
 /usr/bin/codesign --force --deep --sign - "$bundle"
 /usr/bin/printf 'Built %s\n' "$bundle"

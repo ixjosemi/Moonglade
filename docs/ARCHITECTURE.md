@@ -1,16 +1,16 @@
 # Architecture
 
-AgentGlance is a local, layered macOS application.
+Moonglade is a local, layered macOS application.
 
 ## Components
 
-- `AgentGlanceApp` owns the SwiftUI lifecycle, notch panel, settings, and Codex observation timer.
-- `AgentGlance` is the command-line entry point used by installation, hooks, notifications, and diagnostics.
-- `AgentGlanceCore` contains domain models, persistence, integration parsers, process discovery, focus planning, and installation.
+- `MoongladeApp` owns the SwiftUI lifecycle, notch panel, settings, and Codex observation timer.
+- `Moonglade` is the command-line entry point used by installation, hooks, notifications, and diagnostics.
+- `MoongladeCore` contains domain models, persistence, integration parsers, process discovery, focus planning, and installation.
 
 ## Data flow
 
-Claude hooks, the OpenCode and Pi integrations, the Codex watcher, the Convoy runs watcher, and the process reaper normalize lifecycle information into versioned `AgentSession` documents. `StateRepository` atomically publishes those documents under `~/.agentglance/state`. Convoy phase ownership is applied as a repository projection so its internal OpenCode documents never become global rows, even if their producer rewrites them. `StateStore` observes the directory and exposes active sessions to the notch UI. Selecting a session reloads its latest process and terminal enrichment before creating a constrained focus action for tmux or a supported terminal.
+Claude hooks, the OpenCode and Pi integrations, the Codex watcher, the Convoy runs watcher, and the process reaper normalize lifecycle information into versioned `AgentSession` documents. `StateRepository` atomically publishes those documents under `~/.moonglade/state`. Convoy phase ownership is applied as a repository projection so its internal OpenCode documents never become global rows, even if their producer rewrites them. `StateStore` observes the directory and exposes active sessions to the notch UI. Selecting a session reloads its latest process and terminal enrichment before creating a constrained focus action for tmux or a supported terminal.
 
 ## Presentation
 
@@ -24,7 +24,7 @@ The silhouette is not a flat black fill but two independent layers, split becaus
 
 `NotchGlassScrim` is the black wash on top, and is pure vector so it *can* ride through layer effects. `NotchGlassStyle.scrimStops` produces its gradient: fully opaque across the camera band plus a 6 pt overlap, so the hardware cutout and the shoulder arcs never sit over translucent glass, then a smootherstep (6t⁵ − 15t⁴ + 10t³) dissolve down to a residual smoked tint that keeps white content readable. The curve has zero slope at both ends, so neither the black nor the tint shows a seam, and the dissolve's virtual start is lifted above the band so the visible top is already partway into it. A silhouette no taller than the solid band comes out fully opaque — the collapsed bar is therefore exactly flat black, with no special case. A pill display has no cutout to hide, so its scrim collapses to a flat tint. Settings exposes the blur radius as *Frosted* and the wash opacity as *Tint*, stored separately for notched and external displays.
 
-Expanding fires `ExpansionRippleEffect`, a stitchable Metal fragment shader (`Ripple.metal`): a damped sine travels outward from the click, displacing each sample radially and brightening the crests in proportion to the local displacement, scaled by alpha so the transparent surround never glows. It is applied to the scrim and content only, for the compositing reason above. SwiftPM cannot compile Metal sources, so the file is excluded from the target and its output ships as a prebuilt `Sources/AgentGlanceApp/Resources/default.metallib`; `scripts/compile-shaders.sh` regenerates it and the result is committed.
+Expanding fires `ExpansionRippleEffect`, a stitchable Metal fragment shader (`Ripple.metal`): a damped sine travels outward from the click, displacing each sample radially and brightening the crests in proportion to the local displacement, scaled by alpha so the transparent surround never glows. It is applied to the scrim and content only, for the compositing reason above. SwiftPM cannot compile Metal sources, so the file is excluded from the target and its output ships as a prebuilt `Sources/MoongladeApp/Resources/default.metallib`; `scripts/compile-shaders.sh` regenerates it and the result is committed.
 
 ## Trust boundaries
 
@@ -44,7 +44,7 @@ The reaper removes dead sessions and creates fallback state for detectable proce
 
 ## State schema
 
-Schema version 1 records tool, session ID, PID, lifecycle status, project path, timestamps, terminal context, and optional source. Terminal context carries an optional `cmux_panel_id`: cmux is a Ghostty-derived application that reports `TERM_PROGRAM=ghostty` but answers to its own bundle, so its panel ID is the only signal that separates the two, and it equals the terminal's scripting `id` exactly. Only the integrations observe `CMUX_PANEL_ID` — libproc cannot recover an environment variable — so enrichment carries the lifecycle value forward instead of rebuilding it. AgentGlance may add an optional `process_identity` containing that PID and its kernel start time in microseconds; older integration documents remain valid and are enriched during reconciliation. Unsupported schema versions fail closed.
+Schema version 1 records tool, session ID, PID, lifecycle status, project path, timestamps, terminal context, and optional source. Terminal context carries an optional `cmux_panel_id`: cmux is a Ghostty-derived application that reports `TERM_PROGRAM=ghostty` but answers to its own bundle, so its panel ID is the only signal that separates the two, and it equals the terminal's scripting `id` exactly. Only the integrations observe `CMUX_PANEL_ID` — libproc cannot recover an environment variable — so enrichment carries the lifecycle value forward instead of rebuilding it. Moonglade may add an optional `process_identity` containing that PID and its kernel start time in microseconds; older integration documents remain valid and are enriched during reconciliation. Unsupported schema versions fail closed.
 
 Integration-owned lifecycle documents remain the authority for status, attention reason, step, and activity timestamps. Reconciliation never replaces those documents to add process or Ghostty metadata. App-owned enrichment is stored separately as `enrichment-<tool>-<base64url-session-id>.overlay`, using internal overlay schema version 1. The bounded overlay contains only its lifecycle binding (PID, optional identity, and start time), one verified target process identity, and optional terminal metadata. Overlay files are atomically replaced with mode `0600`; reads require a private owner-controlled regular file and reject links, oversized data, unknown schemas, changed lifecycle bindings, and recycled process generations. Invalid and orphaned overlays are ignored and pruned, and removing a lifecycle session removes its overlay. Loads merge a valid overlay in memory, leaving concurrent integration lifecycle writes untouched.
 

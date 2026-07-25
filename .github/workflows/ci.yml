@@ -19,18 +19,18 @@ jobs:
       - name: Build
         run: swift build
       - name: Test
-        run: swift run agentglance-tests
+        run: swift run moonglade-tests
       - name: Test OpenCode plugin
-        run: node Tests/OpenCodePlugin/agentglance_test.mjs
+        run: node Tests/OpenCodePlugin/moonglade_test.mjs
       - name: Validate resources
         run: |
           plutil -lint config/Info.plist
-          for script in scripts/*.sh Sources/AgentGlanceCore/Resources/hooks/*.sh; do /bin/sh -n "$script"; done
-          node --input-type=module --check < Sources/AgentGlanceCore/Resources/opencode/agentglance.js
+          for script in scripts/*.sh Sources/MoongladeCore/Resources/hooks/*.sh; do /bin/sh -n "$script"; done
+          node --input-type=module --check < Sources/MoongladeCore/Resources/opencode/moonglade.js
       - name: Package local app
         run: ./scripts/build-app.sh
       - name: Verify bundle
         run: |
-          codesign --verify --deep --strict .build/AgentGlance.app
-          test -x .build/AgentGlance.app/Contents/MacOS/AgentGlance
-          test -x .build/AgentGlance.app/Contents/Resources/bin/agentglance
+          codesign --verify --deep --strict .build/Moonglade.app
+          test -x .build/Moonglade.app/Contents/MacOS/Moonglade
+          test -x .build/Moonglade.app/Contents/Resources/bin/moonglade

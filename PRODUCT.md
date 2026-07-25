@@ -2,7 +2,7 @@
 
 ## Status
 
-Public pre-1.0 preview. The canonical product and repository name is **AgentGlance**.
+Public pre-1.0 preview. The canonical product and repository name is **Moonglade**.
 
 ## Users
 
@@ -10,7 +10,7 @@ Developers running opencode, Claude Code, or Codex CLI in several macOS terminal
 
 ## Product Purpose
 
-AgentGlance is a passive, notch-adjacent status indicator. Success means users can see active-session counts at a glance, notice requests for attention within five seconds, and reach the exact terminal session with one click.
+Moonglade is a passive, notch-adjacent status indicator. Success means users can see active-session counts at a glance, notice requests for attention within five seconds, and reach the exact terminal session with one click.
 
 ## Brand Personality
 

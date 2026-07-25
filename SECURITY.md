@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-AgentGlance is currently pre-1.0. Security fixes are applied to the latest release and the default branch.
+Moonglade is currently pre-1.0. Security fixes are applied to the latest release and the default branch.
 
 ## Reporting a vulnerability
 
@@ -12,7 +12,7 @@ Include the affected version, macOS version, impact, reproduction steps, and any
 
 ## Security model
 
-- AgentGlance runs as the current macOS user and has no privileged helper.
+- Moonglade runs as the current macOS user and has no privileged helper.
 - It has no network client, server, analytics, account system, or cloud storage.
 - Terminal focusing uses macOS Automation and only occurs after a user action.
 - Integration state is local metadata and is protected with user-only filesystem permissions.
