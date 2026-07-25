@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/header.svg" alt="The Moonglade panel hanging from the MacBook notch: three agent sessions with their provider, status, project, branch, and elapsed time" width="880"/>
+  <img src="assets/header.svg" alt="The Moonglade panel hanging from the MacBook notch under a crescent moon: three agent sessions with their provider, status, project, branch, and elapsed time, and below the wordmark the collapsed bar with a count per state" width="880"/>
 </p>
 
 **Know when your coding agents need you—without leaving the notch.**
@@ -20,10 +20,6 @@ Moonglade is a quiet, native macOS indicator for Claude Code, OpenCode, Codex CL
 - Run without telemetry, accounts, servers, or third-party Swift dependencies, at ~1% CPU and ~16 MB of memory.
 
 ## Session states
-
-<p align="center">
-  <img src="assets/status-bar.svg" alt="The compact bar: a braille spinner and count for running sessions, a green dot and count for sessions waiting at the prompt, and a count and red dot for sessions that need you" width="760"/>
-</p>
 
 | State | In the bar | Meaning |
 | --- | --- | --- |
