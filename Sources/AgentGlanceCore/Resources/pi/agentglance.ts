@@ -38,6 +38,7 @@ function createState(id, cwd) {
     updated_at: now,
     terminal: {
       term_program: process.env.TERM_PROGRAM || null,
+      cmux_panel_id: process.env.CMUX_PANEL_ID || null,
       iterm_session_id: process.env.ITERM_SESSION_ID || null,
       tmux_pane: process.env.TMUX_PANE || null,
       tty: null,

@@ -28,6 +28,12 @@ public enum FocusPlanner {
     }
 
     private static func terminalAction(for session: AgentSession) throws -> FocusAction {
+        // cmux ships Ghostty's engine and reports TERM_PROGRAM=ghostty, so it
+        // must be resolved before the Ghostty branch — otherwise its sessions
+        // address an application that need not be installed at all.
+        if let panelID = session.terminal.cmuxPanelID, !panelID.isEmpty {
+            return .appleScript(cmuxScript(panelID: panelID))
+        }
         if session.terminal.termProgram?.lowercased() == "ghostty" {
             return .appleScript(ghosttyScript(for: session))
         }
@@ -53,6 +59,22 @@ public enum FocusPlanner {
             return .appleScript(terminalScript(tty: tty))
         }
         throw FocusError.missingTerminalTarget
+    }
+
+    /// cmux exposes the same scripting vocabulary as Ghostty — a `terminal`
+    /// class keyed by `id` plus a `focus` command — and its `CMUX_PANEL_ID`
+    /// equals that `id` exactly, so identity is always strong. There is no
+    /// working-directory fallback: a stale panel is reported, never guessed at.
+    private static func cmuxScript(panelID: String) -> String {
+        let identifier = appleScriptString(panelID)
+        return """
+        tell application "cmux"
+          set matches to every terminal whose id is "\(identifier)"
+          if (count of matches) is not 1 then error "AgentGlance could not uniquely identify the cmux terminal"
+          focus item 1 of matches
+          activate
+        end tell
+        """
     }
 
     private static func ghosttyScript(for session: AgentSession) -> String {
