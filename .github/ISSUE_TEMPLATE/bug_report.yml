@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible AgentGlance problem
+description: Report a reproducible Moonglade problem
 title: "[Bug]: "
 labels: [bug]
 body:
@@ -9,7 +9,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: AgentGlance version or commit
+      label: Moonglade version or commit
     validations:
       required: true
   - type: input

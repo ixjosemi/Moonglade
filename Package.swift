@@ -4,25 +4,25 @@
 import PackageDescription
 
 let package = Package(
-    name: "AgentGlance",
+    name: "Moonglade",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "agentglance", targets: ["AgentGlance"]),
-        .executable(name: "AgentGlanceApp", targets: ["AgentGlanceApp"]),
-        .executable(name: "agentglance-tests", targets: ["AgentGlanceTests"]),
+        .executable(name: "moonglade", targets: ["Moonglade"]),
+        .executable(name: "MoongladeApp", targets: ["MoongladeApp"]),
+        .executable(name: "moonglade-tests", targets: ["MoongladeTests"]),
     ],
     targets: [
         .target(
-            name: "AgentGlanceCore",
+            name: "MoongladeCore",
             resources: [.copy("Resources")]
         ),
         .executableTarget(
-            name: "AgentGlance",
-            dependencies: ["AgentGlanceCore"]
+            name: "Moonglade",
+            dependencies: ["MoongladeCore"]
         ),
         .executableTarget(
-            name: "AgentGlanceApp",
-            dependencies: ["AgentGlanceCore"],
+            name: "MoongladeApp",
+            dependencies: ["MoongladeCore"],
             // swift build does not compile Metal sources, so the shader ships
             // as a prebuilt default.metallib; regenerate it from Ripple.metal
             // with scripts/compile-shaders.sh after editing the source.
@@ -30,9 +30,9 @@ let package = Package(
             resources: [.copy("Resources/default.metallib")]
         ),
         .executableTarget(
-            name: "AgentGlanceTests",
-            dependencies: ["AgentGlanceCore"],
-            path: "Tests/AgentGlanceCoreTests"
+            name: "MoongladeTests",
+            dependencies: ["MoongladeCore"],
+            path: "Tests/MoongladeCoreTests"
         ),
     ],
     swiftLanguageModes: [.v5]

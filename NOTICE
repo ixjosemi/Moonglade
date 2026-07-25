@@ -1,12 +1,12 @@
-AgentGlance is an independent open-source project. It is not affiliated with,
+Moonglade is an independent open-source project. It is not affiliated with,
 endorsed by, or sponsored by Anthropic, OpenAI, SST, the Pi project, Ghostty,
 Apple, or tmux.
 
 Claude is a trademark of Anthropic PBC. OpenAI and Codex are trademarks of
 OpenAI, L.L.C. OpenCode and other marks belong to their respective owners.
 Marks are used only to identify compatible tools (nominative fair use).
-AgentGlance bundles the Claude spark mark, the OpenAI mark, and the OpenCode
+Moonglade bundles the Claude spark mark, the OpenAI mark, and the OpenCode
 glyph solely so users can recognize each agent at a glance; the marks remain
 the property of their respective owners and imply no endorsement. The Pi
-indicator is an original glyph drawn for AgentGlance (a plain lowercase pi),
+indicator is an original glyph drawn for Moonglade (a plain lowercase pi),
 not the Pi project's mark.

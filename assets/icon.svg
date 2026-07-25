@@ -1,68 +1,121 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AgentGlance app icon">
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Moonglade app icon: a crescent moon and its reflected light under the notch bar, with a green dot for a session waiting at the prompt and a red dot for one that needs you">
   <defs>
-    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#33333f"/>
-      <stop offset="0.5" stop-color="#22222b"/>
-      <stop offset="1" stop-color="#15151a"/>
+    <!-- Night sky, bluest where the moonlight enters. No filters anywhere in
+         this file: scripts/make-icon.sh rasterizes through AppKit, which
+         renders gradients and masks but silently drops filter primitives. -->
+    <linearGradient id="sky" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#141a2e"/>
+      <stop offset="0.5" stop-color="#0d111d"/>
+      <stop offset="1" stop-color="#07080d"/>
     </linearGradient>
-    <radialGradient id="yellowGlow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#f5c542" stop-opacity="0.4"/>
-      <stop offset="1" stop-color="#f5c542" stop-opacity="0"/>
+    <radialGradient id="moonWash" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7d9bce" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#7d9bce" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- The moon, lit along the limb the crescent actually shows -->
+    <radialGradient id="moonBody" cx="0.3" cy="0.72" r="0.85">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#eef1fa"/>
+      <stop offset="1" stop-color="#c3cbe4"/>
+    </radialGradient>
+    <radialGradient id="moonHalo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#c9d6f5" stop-opacity="0.40"/>
+      <stop offset="0.42" stop-color="#8ea4d8" stop-opacity="0.13"/>
+      <stop offset="1" stop-color="#8ea4d8" stop-opacity="0"/>
+    </radialGradient>
+    <!-- The lit sphere minus a second disc offset up and to the right. The
+         pair sits right of the icon's axis on purpose: the crescent's mass is
+         all on its outer limb, so a centred sphere reads as centred left. -->
+    <mask id="crescent">
+      <circle cx="534" cy="574" r="150" fill="#ffffff"/>
+      <circle cx="578" cy="530" r="134" fill="#000000"/>
+    </mask>
+
+    <!-- The glade: the streak of moonlight the app is named for, spilling down
+         from the moon and pooling at the foot of the icon. Radial only — a
+         gradient on a straight-edged shape shows its outline as a hard seam
+         against the sky, and the moon then reads as a projector. -->
+    <radialGradient id="glade" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#aabfe8" stop-opacity="0.17"/>
+      <stop offset="0.5" stop-color="#aabfe8" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#aabfe8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Light caught on the bar's top shoulders, fading down its sides -->
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.03"/>
+    </linearGradient>
+    <radialGradient id="greenGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#32d74b" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#32d74b" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="redGlow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#ff5f57" stop-opacity="0.45"/>
-      <stop offset="1" stop-color="#ff5f57" stop-opacity="0"/>
+      <stop offset="0" stop-color="#ff453a" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#ff453a" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="yellowDot" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffd964"/>
-      <stop offset="1" stop-color="#e8b32e"/>
+    <linearGradient id="greenDot" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5ce874"/>
+      <stop offset="1" stop-color="#28b842"/>
     </linearGradient>
     <linearGradient id="redDot" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ff7b74"/>
-      <stop offset="1" stop-color="#f04a42"/>
+      <stop offset="1" stop-color="#f0392e"/>
     </linearGradient>
-    <linearGradient id="greenDot" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#4ee06a"/>
-      <stop offset="1" stop-color="#28b842"/>
-    </linearGradient>
+
     <clipPath id="squircleClip">
       <rect x="100" y="100" width="824" height="824" rx="184"/>
     </clipPath>
+    <!-- Collapsed notch bar: 40pt concave shoulders flaring into the screen
+         edge, 56pt circular lower corners — the same topology the app draws,
+         scaled up so the silhouette still reads at icon sizes. -->
+    <path id="bar" d="M300 100 C322.09 100 340 117.91 340 140 L340 194 C340 224.93 365.07 250 396 250 L628 250 C658.93 250 684 224.93 684 194 L684 140 C684 117.91 701.91 100 724 100 Z"/>
   </defs>
 
-  <!-- Screen (macOS squircle) -->
-  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#screen)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#sky)"/>
   <g clip-path="url(#squircleClip)">
-    <!-- Notch bar + session menu: the app's one-piece silhouette -->
-    <path d="M222 100 h580 v454 a66 66 0 0 1 -66 66 h-448 a66 66 0 0 1 -66 -66 z" fill="#000000"/>
+    <ellipse cx="880" cy="180" rx="440" ry="380" fill="url(#moonWash)"/>
 
-    <!-- Camera -->
-    <circle cx="512" cy="156" r="18" fill="#131318" stroke="#26262e" stroke-width="4"/>
-
-    <!-- Left wing: waiting for a prompt -->
-    <circle cx="336" cy="156" r="104" fill="url(#yellowGlow)"/>
-    <circle cx="336" cy="156" r="38" fill="url(#yellowDot)"/>
-
-    <!-- Right wing: needs you now, radar ping -->
-    <circle cx="688" cy="156" r="116" fill="url(#redGlow)"/>
-    <circle cx="688" cy="156" r="38" fill="url(#redDot)"/>
-    <circle cx="688" cy="156" r="66" fill="none" stroke="#ff5f57" stroke-width="9" opacity="0.32"/>
-
-    <!-- Menu rows: one session per state -->
-    <g>
-      <circle cx="316" cy="300" r="26" fill="url(#greenDot)"/>
-      <circle cx="316" cy="300" r="46" fill="none" stroke="#32d74b" stroke-width="7" opacity="0.3"/>
-      <rect x="376" y="282" width="304" height="36" rx="18" fill="#2b2b33"/>
-
-      <circle cx="316" cy="404" r="26" fill="url(#yellowDot)"/>
-      <rect x="376" y="386" width="240" height="36" rx="18" fill="#26262e"/>
-
-      <circle cx="316" cy="508" r="26" fill="url(#redDot)"/>
-      <rect x="376" y="490" width="272" height="36" rx="18" fill="#26262e"/>
+    <!-- Stars: seven, so the sky reads as sky and not as texture -->
+    <g fill="#dfe6f6">
+      <circle cx="196" cy="352" r="6" opacity="0.72"/>
+      <circle cx="258" cy="510" r="4" opacity="0.45"/>
+      <circle cx="164" cy="676" r="5" opacity="0.55"/>
+      <circle cx="828" cy="404" r="5.5" opacity="0.62"/>
+      <circle cx="776" cy="560" r="3.5" opacity="0.38"/>
+      <circle cx="866" cy="700" r="4.5" opacity="0.5"/>
+      <circle cx="300" cy="806" r="3.5" opacity="0.35"/>
     </g>
 
-    <!-- Subtle top sheen -->
-    <path d="M100 100 h824 v64 c-260 36 -564 36 -824 0 z" fill="#ffffff" opacity="0.04"/>
+    <!-- The glade, beneath the moon: a soft fall of light and its pool -->
+    <ellipse cx="512" cy="778" rx="118" ry="150" fill="url(#glade)"/>
+    <ellipse cx="512" cy="880" rx="250" ry="76" fill="url(#glade)"/>
+
+    <!-- The moon: the icon's one bright shape, so it survives 16pt -->
+    <circle cx="534" cy="574" r="310" fill="url(#moonHalo)"/>
+    <g mask="url(#crescent)">
+      <circle cx="534" cy="574" r="150" fill="url(#moonBody)"/>
+    </g>
+
+    <!-- The bar hanging off the top edge: flat black, exactly as the
+         collapsed state renders — the moonlight only catches its rim. -->
+    <use href="#bar" fill="#000000"/>
+    <use href="#bar" fill="none" stroke="url(#rim)" stroke-width="5"/>
+
+    <!-- Left wing: a session waiting at the prompt -->
+    <circle cx="420" cy="168" r="66" fill="url(#greenGlow)"/>
+    <circle cx="420" cy="168" r="23" fill="url(#greenDot)"/>
+
+    <!-- Camera housing: the band beside it stays pure black, always -->
+    <circle cx="512" cy="168" r="15" fill="#15161b"/>
+    <circle cx="512" cy="168" r="6.5" fill="#24262d"/>
+
+    <!-- Right wing: a session that needs you, mid radar ping -->
+    <circle cx="604" cy="168" r="72" fill="url(#redGlow)"/>
+    <circle cx="604" cy="168" r="23" fill="url(#redDot)"/>
+    <circle cx="604" cy="168" r="41" fill="none" stroke="#ff453a" stroke-width="5" opacity="0.3"/>
   </g>
-  <rect x="102" y="102" width="820" height="820" rx="182" fill="none" stroke="#3e3e4a" stroke-width="4" opacity="0.7"/>
+  <rect x="102" y="102" width="820" height="820" rx="182" fill="none" stroke="#3d4560" stroke-width="4" opacity="0.65"/>
 </svg>
