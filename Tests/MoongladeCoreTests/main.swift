@@ -7076,6 +7076,49 @@ func testResourceBundleSearchCoversEveryInstalledLayout() throws {
     )
 }
 
+/// The Metal shader library ships in the app target's own resource bundle,
+/// which `build-app.sh` installs into Contents/Resources. SwiftPM's generated
+/// accessor for that target looks only beside `Bundle.main.bundleURL` — the
+/// `.app` root — and in the compiling machine's build directory, so an
+/// installed app resolved its shader only while that build tree survived and
+/// trapped on launch once it was gone. The root is not a candidate: putting
+/// anything there leaves the bundle unsealed.
+func testAppResourceBundleSearchCoversTheInstalledAppLayout() throws {
+    let appResources = "/Applications/Moonglade.app/Contents/Resources"
+    let appPaths = BundledResources.bundleSearchPaths(
+        named: BundledResources.appBundleName,
+        executableURL: URL(fileURLWithPath: "/Applications/Moonglade.app/Contents/MacOS/Moonglade"),
+        mainResourceURL: URL(fileURLWithPath: appResources, isDirectory: true)
+    )
+    try expect(
+        appPaths.contains("\(appResources)/\(BundledResources.appBundleName)"),
+        equals: true,
+        "the app binary searches its own Resources directory for the shader bundle"
+    )
+    try expect(
+        appPaths.contains("/Applications/Moonglade.app/\(BundledResources.appBundleName)"),
+        equals: false,
+        "the app root is never searched: contents there leave the bundle unsealed"
+    )
+    try expect(
+        appPaths.contains(where: { $0.contains("/.build/") }),
+        equals: false,
+        "no build directory is baked into the search"
+    )
+
+    // `swift run` during development: the bundle sits beside the executable.
+    let developmentDirectory = "/Users/someone/Moonglade/.build/x86_64-apple-macosx/debug"
+    try expect(
+        BundledResources.bundleSearchPaths(
+            named: BundledResources.appBundleName,
+            executableURL: URL(fileURLWithPath: "\(developmentDirectory)/MoongladeApp"),
+            mainResourceURL: nil
+        ).contains("\(developmentDirectory)/\(BundledResources.appBundleName)"),
+        equals: true,
+        "a development build finds the bundle beside its executable"
+    )
+}
+
 func testInstallerShipsTheResourceBundleBesideTheInstalledBinary() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let home = root.appendingPathComponent("home")
@@ -8310,6 +8353,7 @@ let tests: [(String, () throws -> Void)] = [
     ("installation doctor rejects a foreign codex notify hook", testInstallationDoctorRejectsAForeignCodexNotifyHook),
     ("installation doctor pinpoints broken pieces", testInstallationDoctorPinpointsBrokenPieces),
     ("resource bundle search covers every installed layout", testResourceBundleSearchCoversEveryInstalledLayout),
+    ("app resource bundle search covers the installed app layout", testAppResourceBundleSearchCoversTheInstalledAppLayout),
     ("installer ships the resource bundle beside the installed binary", testInstallerShipsTheResourceBundleBesideTheInstalledBinary),
     ("installation doctor fails when the resource bundle is missing", testInstallationDoctorFailsWhenTheResourceBundleIsMissing),
     ("CLI parses doctor command", testCLIParsesDoctorCommand),
