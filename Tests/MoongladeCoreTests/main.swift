@@ -1115,8 +1115,77 @@ func testTerminalEnrichmentPreservesConcurrentLifecycleWrite() throws {
     )
 }
 
-func testTerminalEnrichmentPreservesCmuxPanelIdentity() throws {
-    // Only the hook sees CMUX_PANEL_ID — the process scanner reads proc_pidinfo
+/// cmux documents `CMUX_SURFACE_ID` as the canonical name and `CMUX_PANEL_ID`
+/// as a legacy alias it still exports. Reading the alias makes Moonglade
+/// depend on a compatibility surface cmux is free to drop.
+func testClaudeHookCapturesCanonicalCmuxSurfaceIdentity() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let processor = ClaudeHookProcessor(repository: StateRepository(directoryURL: directory))
+
+    try processor.process(
+        event: "SessionStart",
+        payload: Data(#"{"session_id":"cmux-canonical","cwd":"/tmp/project"}"#.utf8),
+        environment: ["TERM_PROGRAM": "ghostty", "CMUX_SURFACE_ID": "SURFACE-9"],
+        processID: 4321,
+        now: Date(timeIntervalSince1970: 1_752_836_400)
+    )
+
+    let session = try StateRepository(directoryURL: directory).loadSessions().first
+        .unwrap(or: "session was not saved")
+    try expect(
+        session.terminal.cmuxSurfaceID,
+        equals: "SURFACE-9",
+        "the hook reads cmux's canonical surface variable"
+    )
+}
+
+/// The surface identity is a persisted schema field, so the key on disk is a
+/// contract in its own right: it has to match the canonical name, not the
+/// alias the first implementation happened to read.
+func testTerminalContextPersistsCmuxSurfaceIdentityUnderCanonicalKey() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    try repository.save(
+        AgentSession(
+            tool: .claude,
+            sessionID: "cmux-key",
+            pid: 4321,
+            status: .working,
+            cwd: "/tmp/project",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000),
+            terminal: TerminalContext(
+                termProgram: "ghostty",
+                cmuxSurfaceID: "SURFACE-9"
+            )
+        )
+    )
+
+    let stateURL = try FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil
+    ).first.unwrap(or: "state document was not written")
+    let document = String(decoding: try Data(contentsOf: stateURL), as: UTF8.self)
+    try expect(
+        document.contains("\"cmux_surface_id\""),
+        equals: true,
+        "the surface identity persists under its canonical key"
+    )
+    try expect(
+        document.contains("cmux_panel_id"),
+        equals: false,
+        "the legacy alias never reaches disk"
+    )
+}
+
+func testTerminalEnrichmentPreservesCmuxSurfaceIdentity() throws {
+    // Only the hook sees CMUX_SURFACE_ID — the process scanner reads proc_pidinfo
     // and can never recover it. If the enrichment merge drops the hook's value,
     // the session permanently loses its only focusable identity.
     let directory = FileManager.default.temporaryDirectory
@@ -1138,7 +1207,7 @@ func testTerminalEnrichmentPreservesCmuxPanelIdentity() throws {
         updatedAt: Date(timeIntervalSince1970: 1_000),
         terminal: TerminalContext(
             termProgram: "ghostty",
-            cmuxPanelID: "PANEL-ABC",
+            cmuxSurfaceID: "SURFACE-ABC",
             tty: "/dev/ttys010",
             windowTitleHint: "old title"
         )
@@ -1167,9 +1236,9 @@ func testTerminalEnrichmentPreservesCmuxPanelIdentity() throws {
     let merged = try repository.loadSessions().first
         .unwrap(or: "enriched session disappeared")
     try expect(
-        merged.terminal.cmuxPanelID,
-        equals: "PANEL-ABC",
-        "enrichment never discards the hook's cmux panel identity"
+        merged.terminal.cmuxSurfaceID,
+        equals: "SURFACE-ABC",
+        "enrichment never discards the hook's cmux surface identity"
     )
     try expect(
         merged.terminal.windowTitleHint,
@@ -5978,10 +6047,10 @@ func testFocusPlannerRequiresOneExactGhosttyTarget() throws {
     )
 }
 
-func testFocusPlannerTargetsCmuxByPanelIdentity() throws {
+func testFocusPlannerTargetsCmuxBySurfaceIdentity() throws {
     // cmux is a Ghostty-derived terminal: it reports TERM_PROGRAM=ghostty but
     // is a distinct application (com.cmuxterm.app). Targeting "Ghostty" would
-    // address an app that need not be installed, so a captured panel ID must
+    // address an app that need not be installed, so a captured surface ID must
     // win over the Ghostty branch and address cmux directly.
     let session = AgentSession(
         tool: .claude,
@@ -5993,7 +6062,7 @@ func testFocusPlannerTargetsCmuxByPanelIdentity() throws {
         updatedAt: Date(),
         terminal: TerminalContext(
             termProgram: "ghostty",
-            cmuxPanelID: "1E0A70B7-5FBA-4C4F-83D9-01292C3E957C",
+            cmuxSurfaceID: "1E0A70B7-5FBA-4C4F-83D9-01292C3E957C",
             tty: "/dev/ttys003",
             windowTitleHint: "codex-projects — claude"
         )
@@ -6011,12 +6080,12 @@ func testFocusPlannerTargetsCmuxByPanelIdentity() throws {
     try expect(
         script.contains("Ghostty"),
         equals: false,
-        "a cmux panel never falls back to an app that may not be installed"
+        "a cmux surface never falls back to an app that may not be installed"
     )
     try expect(
         script.contains("1E0A70B7-5FBA-4C4F-83D9-01292C3E957C"),
         equals: true,
-        "the panel ID is strong identity and is used verbatim"
+        "the surface ID is strong identity and is used verbatim"
     )
     try expect(
         script.contains("working directory"),
@@ -8163,7 +8232,9 @@ let tests: [(String, () throws -> Void)] = [
     ("reaper adopts scanned Ghostty terminal for native session", testReaperAdoptsScannedGhosttyTerminalForNativeSession),
     ("reaper adopts controlling TTY without Ghostty surface", testReaperAdoptsControllingTTYWithoutGhosttySurface),
     ("terminal enrichment preserves concurrent lifecycle write", testTerminalEnrichmentPreservesConcurrentLifecycleWrite),
-    ("terminal enrichment preserves cmux panel identity", testTerminalEnrichmentPreservesCmuxPanelIdentity),
+    ("claude hook captures canonical cmux surface identity", testClaudeHookCapturesCanonicalCmuxSurfaceIdentity),
+    ("terminal context persists cmux surface identity under canonical key", testTerminalContextPersistsCmuxSurfaceIdentityUnderCanonicalKey),
+    ("terminal enrichment preserves cmux surface identity", testTerminalEnrichmentPreservesCmuxSurfaceIdentity),
     ("terminal enrichment does not replace lifecycle write after reload", testTerminalEnrichmentDoesNotReplaceLifecycleWriteAfterReload),
     ("terminal enrichment rejects concurrent process generation change", testTerminalEnrichmentRejectsConcurrentProcessGenerationChange),
     ("state repository validates and prunes enrichment overlays", testStateRepositoryValidatesAndPrunesEnrichmentOverlays),
@@ -8282,7 +8353,7 @@ let tests: [(String, () throws -> Void)] = [
     ("convoy watcher suppresses embedded server reaper fallback by directory", testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory),
     ("focus planner prioritizes tmux then terminal", testFocusPlannerPrioritizesTmuxThenTerminal),
     ("focus planner requires one exact Ghostty target", testFocusPlannerRequiresOneExactGhosttyTarget),
-    ("focus planner targets cmux by panel identity", testFocusPlannerTargetsCmuxByPanelIdentity),
+    ("focus planner targets cmux by surface identity", testFocusPlannerTargetsCmuxBySurfaceIdentity),
     ("focus planner normalizes iTerm identity and selects its window", testFocusPlannerNormalizesITermIdentityAndSelectsItsWindow),
     ("focus planner rejects empty iTerm identity without TTY", testFocusPlannerRejectsEmptyITermIdentityWithoutTTY),
     ("focus planner matches Terminal TTY exactly and raises its window", testFocusPlannerMatchesTerminalTTYExactlyAndRaisesItsWindow),

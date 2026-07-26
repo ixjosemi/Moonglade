@@ -96,7 +96,7 @@ public struct ClaudeHookProcessor: Sendable {
     ) -> TerminalContext {
         TerminalContext(
             termProgram: environment["TERM_PROGRAM"],
-            cmuxPanelID: environment["CMUX_PANEL_ID"],
+            cmuxSurfaceID: environment["CMUX_SURFACE_ID"],
             itermSessionID: environment["ITERM_SESSION_ID"],
             tmuxPane: environment["TMUX_PANE"],
             tty: environment["MOONGLADE_TTY"],

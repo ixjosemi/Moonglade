@@ -37,7 +37,7 @@ The menu always shows the real status and provider per session, using the same t
 - a MacBook with a notch for the intended UI placement;
 - Swift 6.0 or newer to build from source;
 - Node.js 20+ to run the OpenCode and Pi behavioral tests;
-- Ghostty 1.3+ with AppleScript enabled, cmux, iTerm2, or Terminal.
+- Ghostty 1.3+ with AppleScript enabled, cmux with AppleScript enabled, iTerm2, or Terminal.
 
 Apple Silicon is the tested development platform. Intel builds have not yet been validated.
 
@@ -108,7 +108,7 @@ Then quit Moonglade and delete the app bundle. Review your Claude or Codex confi
 | Host | Focus strategy | Notes |
 | --- | --- | --- |
 | Ghostty | exact surface ID, foreground PID, or TTY; unique project/title fallback | Requires Ghostty 1.3+ |
-| cmux | exact panel ID, no fallback | Resolved before Ghostty: cmux ships Ghostty's engine and reports the same `TERM_PROGRAM` |
+| cmux | exact surface ID, no fallback | Resolved before Ghostty: cmux ships Ghostty's engine and reports the same `TERM_PROGRAM`. Requires AppleScript enabled — cmux reports an empty `id` when it is off |
 | iTerm2 | exact normalized session ID, then TTY | Selects the split, tab, and window |
 | Terminal | exact TTY | Selects the tab and raises its containing window |
 | tmux | validated pane ID, then host activation | `tmux` must be in a trusted standard install location |

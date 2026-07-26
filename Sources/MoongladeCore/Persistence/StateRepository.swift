@@ -653,10 +653,10 @@ public struct StateRepository: Sendable {
                 termProgram: enriched.termProgram ?? lifecycle.terminal.termProgram,
                 ghosttyTerminalID: enriched.ghosttyTerminalID
                     ?? lifecycle.terminal.ghosttyTerminalID,
-                // Only the hook observes CMUX_PANEL_ID; the scanner reads
+                // Only the hook observes CMUX_SURFACE_ID; the scanner reads
                 // proc_pidinfo and can never recover it, so enrichment must
                 // carry the lifecycle value forward rather than drop it.
-                cmuxPanelID: lifecycle.terminal.cmuxPanelID,
+                cmuxSurfaceID: lifecycle.terminal.cmuxSurfaceID,
                 itermSessionID: lifecycle.terminal.itermSessionID,
                 tmuxPane: lifecycle.terminal.tmuxPane ?? enriched.tmuxPane,
                 tty: lifecycle.terminal.tty ?? enriched.tty,
