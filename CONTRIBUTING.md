@@ -9,7 +9,8 @@ Requirements:
 - macOS 14 or newer;
 - Swift 6.0 or newer;
 - Node.js 20 or newer for OpenCode integration tests;
-- Ghostty 1.3+, iTerm2, or Terminal for manual focus testing.
+- Ghostty 1.3+, cmux, iTerm2, or Terminal for manual focus testing. Ghostty and
+  cmux both need AppleScript enabled.
 
 ```bash
 git clone https://github.com/ixjosemi/Moonglade.git
