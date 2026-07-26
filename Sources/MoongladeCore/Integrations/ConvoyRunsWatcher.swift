@@ -438,7 +438,7 @@ public final class ConvoyRunsWatcher {
             terminal: TerminalContext(
                 termProgram: process.terminal.termProgram,
                 ghosttyTerminalID: process.terminal.ghosttyTerminalID,
-                cmuxPanelID: process.terminal.cmuxPanelID,
+                cmuxSurfaceID: process.terminal.cmuxSurfaceID,
                 itermSessionID: process.terminal.itermSessionID,
                 tmuxPane: process.terminal.tmuxPane,
                 tty: process.terminal.tty,
