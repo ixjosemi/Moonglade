@@ -435,10 +435,13 @@ public final class ConvoyRunsWatcher {
             cwd: run.targetDir,
             startedAt: startedAt,
             updatedAt: run.updatedAt,
+            // No cmux surface ID: `process` comes from the scanner, which reads
+            // proc_pidinfo and argv, and the surface ID exists only in the
+            // environment. Copying the field would always copy nil. Convoy runs
+            // under cmux stay unfocusable until the scanner learns cmux (#10).
             terminal: TerminalContext(
                 termProgram: process.terminal.termProgram,
                 ghosttyTerminalID: process.terminal.ghosttyTerminalID,
-                cmuxSurfaceID: process.terminal.cmuxSurfaceID,
                 itermSessionID: process.terminal.itermSessionID,
                 tmuxPane: process.terminal.tmuxPane,
                 tty: process.terminal.tty,
