@@ -21,6 +21,11 @@ public enum BundledResources {
     /// The name SwiftPM gives MoongladeCore's resource bundle: `<package>_<target>.bundle`.
     public static let bundleName = "Moonglade_MoongladeCore.bundle"
 
+    /// MoongladeApp's own resource bundle, which carries the compiled Metal
+    /// shader library. It is installed into Contents/Resources like the core
+    /// bundle, so it is found by the same search.
+    public static let appBundleName = "Moonglade_MoongladeApp.bundle"
+
     public static var claudeHookScriptURL: URL {
         get throws { try resourceURL(named: "claude-hook", extension: "sh", subdirectory: "Resources/hooks") }
     }
@@ -58,6 +63,7 @@ public enum BundledResources {
     /// and trapped the moment that directory was renamed. These are the
     /// layouts Moonglade actually installs into, and none is a build path.
     public static func bundleSearchPaths(
+        named bundleName: String = bundleName,
         executableURL: URL?,
         mainResourceURL: URL?
     ) -> [String] {

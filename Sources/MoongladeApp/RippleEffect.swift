@@ -1,4 +1,32 @@
+import MoongladeCore
 import SwiftUI
+
+/// The compiled Metal library, resolved the same way every other bundled
+/// resource is.
+///
+/// SwiftPM's generated `Bundle.module` for this target resolves only the
+/// `.app` root and the absolute build directory of the machine that compiled
+/// it, and `build-app.sh` installs into Contents/Resources — neither. An
+/// installed app therefore read its shader out of the developer's `.build`
+/// tree and trapped on launch the moment that tree moved. Nothing may be
+/// placed at the `.app` root to satisfy the generated accessor: contents
+/// there leave the bundle unsealed and fail `codesign --verify`.
+///
+/// A missing library disables the ripple rather than taking the panel down —
+/// the expansion is decoration, and the notch is not.
+private enum RippleShaderLibrary {
+    static let resolved: ShaderLibrary? = {
+        let searched = BundledResources.bundleSearchPaths(
+            named: BundledResources.appBundleName,
+            executableURL: Bundle.main.executableURL,
+            mainResourceURL: Bundle.main.resourceURL
+        )
+        for path in searched {
+            if let bundle = Bundle(path: path) { return ShaderLibrary.bundle(bundle) }
+        }
+        return nil
+    }()
+}
 
 /// Water-drop ripple riding on the expand spring, done entirely with public
 /// API: a `layerEffect` Metal shader (`Ripple.metal`) displaces the SwiftUI
@@ -44,9 +72,10 @@ private struct RippleShaderModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let elapsedTime = elapsedTime
-        content.visualEffect { view, proxy in
+        guard let library = RippleShaderLibrary.resolved else { return AnyView(content) }
+        return AnyView(content.visualEffect { view, proxy in
             view.layerEffect(
-                ShaderLibrary.bundle(.module).expansionRipple(
+                library.expansionRipple(
                     // The wave sets out from the bar band's center — the
                     // camera housing or the collapsed capsule — regardless
                     // of how far the card has grown.
@@ -60,6 +89,6 @@ private struct RippleShaderModifier: ViewModifier {
                 maxSampleOffset: CGSize(width: Self.amplitude, height: Self.amplitude),
                 isEnabled: elapsedTime > 0 && elapsedTime < Self.duration
             )
-        }
+        })
     }
 }
