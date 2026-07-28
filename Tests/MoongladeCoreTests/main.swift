@@ -733,7 +733,7 @@ func testReaperRejectsRecycledProcessIdentity() throws {
     ))
     let replacement = DetectedAgentProcess(
         tool: .claude, processID: pid, processIdentity: currentIdentity,
-        cwd: "/tmp/reused", terminal: TerminalContext()
+        cwd: "/tmp/reused", terminal: TerminalContext(tty: "/dev/ttys001")
     )
 
     let result = try ReaperService(repository: repository).reap(detected: [replacement])
@@ -794,6 +794,86 @@ func testReaperCreatesFallbackStateForUntrackedProcess() throws {
     // silent baseline) beats guessing "working" and lighting the spinner
     // for a session that may just be sitting at an idle prompt.
     try expect(session.status, equals: .idle, "fallback status before any plugin/hook signal arrives")
+}
+
+func testReaperSkipsFallbackForProcessWithoutTerminalIdentity() throws {
+    // Editor extension hosts spawn bundled agent binaries with pipes, not
+    // terminals: Cursor's ChatGPT extension runs its own `codex` with no
+    // controlling tty, no terminal-app ancestor, and no surface. A reaper
+    // fallback for such a process is a phantom session — it owns no
+    // surface the user could ever see it on.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let process = DetectedAgentProcess(
+        tool: .codex,
+        processID: Int32(getpid()),
+        cwd: "/",
+        terminal: TerminalContext()
+    )
+
+    let result = try ReaperService(
+        repository: repository,
+        processScanner: TestProcessScanner([process])
+    ).reap()
+
+    try expect(result.createdSessionIDs, equals: [], "no fallback for a terminal-less process")
+    try expect(try repository.loadSessions().isEmpty, equals: true, "phantom session not persisted")
+}
+
+func testReaperRemovesFallbackWhoseProcessHasNoTerminalIdentity() throws {
+    // Phantoms persisted before the visibility gate must not linger: the
+    // process is still alive, so plain liveness keeps the document, but it
+    // owns no terminal and was never a user-visible session.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let pid = Int32(getpid())
+    let identity = try SystemProcessScanner.processIdentity(of: pid)
+        .unwrap(or: "test process has no kernel identity")
+    try repository.save(AgentSession(
+        tool: .codex, sessionID: "reaper-\(pid)", pid: pid,
+        processIdentity: identity, status: .idle, cwd: "/",
+        startedAt: Date(), updatedAt: Date(), source: .reaper
+    ))
+    let process = DetectedAgentProcess(
+        tool: .codex, processID: pid, processIdentity: identity,
+        cwd: "/", terminal: TerminalContext()
+    )
+
+    let result = try ReaperService(repository: repository).reap(detected: [process])
+
+    try expect(result.removedSessionIDs, equals: ["reaper-\(pid)"], "phantom fallback removed")
+    try expect(try repository.loadSessions().isEmpty, equals: true, "no sessions remain")
+}
+
+func testReaperCreatesFallbackWithTerminalHostButNoTTY() throws {
+    // tmux panes, cmux windows, and shells detached from their controlling
+    // terminal can lack a tty while a terminal-app ancestor still marks the
+    // process as user-visible. Any single surface signal is enough.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let process = DetectedAgentProcess(
+        tool: .codex,
+        processID: Int32(getpid()),
+        cwd: "/tmp/terminal-hosted",
+        terminal: TerminalContext(termProgram: "ghostty")
+    )
+
+    let result = try ReaperService(
+        repository: repository,
+        processScanner: TestProcessScanner([process])
+    ).reap()
+
+    try expect(
+        result.createdSessionIDs,
+        equals: ["reaper-\(getpid())"],
+        "terminal-hosted process still earns its fallback"
+    )
 }
 
 func testReaperReapsAgainstProvidedScan() throws {
@@ -1685,7 +1765,7 @@ func testObservationSchedulerTickPersistsFallbackState() throws {
         tool: .opencode,
         processID: Int32(getpid()),
         cwd: "/tmp/scheduler-project",
-        terminal: TerminalContext(tty: nil)
+        terminal: TerminalContext(tty: "/dev/ttys001")
     )
     let scheduler = ObservationScheduler(
         repository: repository,
@@ -1831,7 +1911,7 @@ func testObservationSchedulerMaterializesStateOncePerTick() throws {
         tool: .opencode,
         processID: Int32(getppid()),
         cwd: "/tmp/convoy-target",
-        terminal: TerminalContext()
+        terminal: TerminalContext(tty: "/dev/ttys001")
     )
     let counter = StateMaterializationCounter()
     let scheduler = ObservationScheduler(
@@ -2020,7 +2100,7 @@ func testStartupReconciliationCompletionRefreshesStoreWithoutPolling() throws {
         tool: .opencode,
         processID: Int32(getpid()),
         cwd: "/tmp/startup-handshake",
-        terminal: TerminalContext()
+        terminal: TerminalContext(tty: "/dev/ttys001")
     )
     let scheduler = ObservationScheduler(
         repository: repository,
@@ -2107,7 +2187,7 @@ func testObservationSchedulerReapsImmediatelyWhenProcessExits() throws {
             tool: .claude,
             processID: child.processIdentifier,
             cwd: "/tmp/exit-watch",
-            terminal: TerminalContext(tty: nil)
+            terminal: TerminalContext(tty: "/dev/ttys001")
         )),
         codexSessionsDirectoryURL: directory.appendingPathComponent("codex", isDirectory: true),
         debounceInterval: 0.05
@@ -8303,6 +8383,9 @@ let tests: [(String, () throws -> Void)] = [
     ("reaper rejects recycled process identity", testReaperRejectsRecycledProcessIdentity),
     ("reaper treats zombie as dead", testReaperTreatsZombieAsDead),
     ("reaper creates fallback state for untracked process", testReaperCreatesFallbackStateForUntrackedProcess),
+    ("reaper skips fallback for process without terminal identity", testReaperSkipsFallbackForProcessWithoutTerminalIdentity),
+    ("reaper removes fallback whose process has no terminal identity", testReaperRemovesFallbackWhoseProcessHasNoTerminalIdentity),
+    ("reaper creates fallback with terminal host but no tty", testReaperCreatesFallbackWithTerminalHostButNoTTY),
     ("reaper reaps against provided scan", testReaperReapsAgainstProvidedScan),
     ("reaper rebinds daemon-hosted session to visible process", testReaperRebindsDaemonHostedSessionToVisibleProcess),
     ("reaper adopts scanned Ghostty terminal for native session", testReaperAdoptsScannedGhosttyTerminalForNativeSession),

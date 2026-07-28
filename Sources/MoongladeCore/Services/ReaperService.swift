@@ -96,6 +96,12 @@ public struct ReaperService: Sendable {
                 try adoptScannedTerminal(existing, from: process, snapshot: &snapshot)
                 continue
             }
+            // A fallback is a placeholder for a session the user can see,
+            // so it requires terminal evidence. Editor extension hosts
+            // (Cursor's bundled `codex`, VS Code servers) spawn agent
+            // binaries with pipes and no terminal ancestry; tracking them
+            // breeds phantom sessions with no surface to show them on.
+            guard Self.hasUserVisibleTerminal(process.terminal) else { continue }
             // No plugin/hook has spoken for this process yet — idle (the
             // silent baseline) beats guessing "working" and lighting the
             // spinner for what may just be a session sitting at a prompt.
@@ -198,7 +204,13 @@ public struct ReaperService: Sendable {
         }
         let key = processKey(session)
         if session.source == .reaper {
-            return !activeProcessKeys.contains(key)
+            guard let process = activeProcesses.first(where: { processKey($0) == key }) else {
+                return true
+            }
+            // A fallback kept only by liveness must not outlive the gate
+            // that created it: pre-gate phantoms (editor extension hosts)
+            // are deleted on the first tick that re-observes their process.
+            return !Self.hasUserVisibleTerminal(process.terminal)
         }
         // A freshly written native document gets one full scheduler interval
         // to be correlated with its terminal. Hooks/plugins can write before
@@ -366,6 +378,21 @@ public struct ReaperService: Sendable {
         guard let scanned else { return false }
         return SessionTitleFormatter.rowTitle(tabTitle: scanned, fallback: "")
             != SessionTitleFormatter.rowTitle(tabTitle: current, fallback: "")
+    }
+
+    /// Terminal evidence that a detected process fronts a user-visible
+    /// session: a controlling tty (shells, tmux panes), a known terminal-app
+    /// ancestor (Ghostty, cmux, iTerm), or a surface identifier from
+    /// enrichment. Any single signal suffices.
+    private static func hasUserVisibleTerminal(_ terminal: TerminalContext) -> Bool {
+        [
+            terminal.tty,
+            terminal.termProgram,
+            terminal.ghosttyTerminalID,
+            terminal.cmuxSurfaceID,
+            terminal.itermSessionID,
+            terminal.tmuxPane,
+        ].contains { $0?.isEmpty == false }
     }
 
     private func isAlive(_ session: AgentSession) -> Bool {
