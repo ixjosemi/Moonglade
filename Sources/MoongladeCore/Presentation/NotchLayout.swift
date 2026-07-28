@@ -190,9 +190,9 @@ public struct NotchLayout: Equatable, Sendable {
     /// The camera-facing edge of a hardware-notch wing reserves enough room
     /// to keep the counter cluster fully clear of the physical camera cutout.
     public static let hardwareNotchInnerWingPadding: CGFloat = 12
-    /// A small empty continuation after a physical notch, just enough to
+    /// A small empty continuation beside a physical notch, just enough to
     /// finish the hanging silhouette without mirroring a status wing.
-    public static let hardwareNotchFakeRightWingWidth: CGFloat = 28
+    public static let hardwareNotchFakeWingWidth: CGFloat = 28
 
     /// The left outer-edge padding for a compact status wing. See the
     /// side-specific properties for the wider right counter clearance.
@@ -308,17 +308,23 @@ public struct NotchLayout: Equatable, Sendable {
         }
     }
 
-    /// When statuses exist only to the left of the camera, add a simple empty
-    /// right wing for a finished silhouette. The real left wing stays intact;
-    /// no width is mirrored back into it, and a real right status takes over
-    /// as soon as one exists.
+    /// When statuses exist on only one side of the camera, add a simple empty
+    /// wing on the other side for a finished silhouette. The populated wing
+    /// stays intact; no width is mirrored back into it, and a real status
+    /// takes over the empty side as soon as one exists.
     public func balancedStatusWingWidths(
         leftWidth: CGFloat,
         rightWidth: CGFloat
     ) -> (left: CGFloat, right: CGFloat) {
-        guard presentation == .notch, leftWidth > 0, rightWidth == 0 else {
+        guard presentation == .notch else {
             return (leftWidth, rightWidth)
         }
-        return (leftWidth, Self.hardwareNotchFakeRightWingWidth)
+        if leftWidth > 0, rightWidth == 0 {
+            return (leftWidth, Self.hardwareNotchFakeWingWidth)
+        }
+        if leftWidth == 0, rightWidth > 0 {
+            return (Self.hardwareNotchFakeWingWidth, rightWidth)
+        }
+        return (leftWidth, rightWidth)
     }
 }

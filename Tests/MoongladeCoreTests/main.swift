@@ -3710,6 +3710,39 @@ func testNotchLayoutAddsOnlyAMinimalFixedRightWing() throws {
     try expect(unbalanced.right, equals: 0, "notchless drop adds no phantom status wing")
 }
 
+func testNotchLayoutAddsOnlyAMinimalFixedLeftWing() throws {
+    let notched = NotchLayout(
+        screenMinX: 0,
+        screenWidth: 1_512,
+        screenMaxY: 982,
+        safeAreaTop: 38,
+        leftNotchEdgeX: 666,
+        rightNotchEdgeX: 846
+    )
+    let activeRightWing = notched.statusWingWidth(
+        side: .right,
+        visibleIndicatorCount: 1,
+        showsIdleMark: false
+    )
+    let balanced = notched.balancedStatusWingWidths(leftWidth: 0, rightWidth: activeRightWing)
+
+    try expect(balanced.left, equals: 28, "empty left wing is only a minimal fixed visual extension")
+    try expect(balanced.right, equals: activeRightWing, "visible right wing keeps its real content width")
+
+    let pill = NotchLayout(
+        screenMinX: 0,
+        screenWidth: 2_560,
+        screenMaxY: 1_440,
+        safeAreaTop: 0,
+        leftNotchEdgeX: nil,
+        rightNotchEdgeX: nil,
+        menuBarHeight: 24
+    )
+    let unbalanced = pill.balancedStatusWingWidths(leftWidth: 0, rightWidth: 54)
+    try expect(unbalanced.left, equals: 0, "notchless drop adds no phantom status wing")
+    try expect(unbalanced.right, equals: 54, "notchless drop preserves its real right content")
+}
+
 func testNotchLayoutReservesRightOuterCurveClearanceForBlockedCount() throws {
     let layout = NotchLayout(
         screenMinX: 0,
@@ -8348,6 +8381,7 @@ let tests: [(String, () throws -> Void)] = [
     ("notch layout pins compact bar to physical notch when panel is clamped", testNotchLayoutPinsCompactBarToPhysicalNotchWhenExpandedPanelIsClamped),
     ("notch layout expanded header wings flank the camera", testNotchLayoutExpandedHeaderWingsFlankTheCamera),
     ("notch layout adds only a minimal fixed right wing", testNotchLayoutAddsOnlyAMinimalFixedRightWing),
+    ("notch layout adds only a minimal fixed left wing", testNotchLayoutAddsOnlyAMinimalFixedLeftWing),
     ("notch layout reserves right outer curve clearance for blocked count", testNotchLayoutReservesRightOuterCurveClearanceForBlockedCount),
     ("notch layout uses pill style on notchless screen", testNotchLayoutUsesPillStyleOnNotchlessScreen),
     ("notch layout pill falls back to standard menu bar height", testNotchLayoutPillFallsBackToStandardMenuBarHeight),
