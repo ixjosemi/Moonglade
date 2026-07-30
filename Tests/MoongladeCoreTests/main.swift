@@ -7163,6 +7163,99 @@ func testInstallationDoctorRejectsAForeignCodexNotifyHook() throws {
     let codex = try byTitle["Codex notify"].unwrap(or: "missing Codex check")
 
     try expect(codex.passed, equals: false, "a foreign notify hook must not pass")
+    // `moonglade install` only writes the key when no notify exists at all, so
+    // prescribing it here sends the user to a command that cannot change
+    // anything. The recovery step has to name what actually unblocks them.
+    try expect(
+        codex.detail.contains("codex-notify.sh"),
+        equals: true,
+        "detail names the script to add to the foreign chain"
+    )
+    try expect(
+        codex.detail.contains("notify chain"),
+        equals: true,
+        "detail explains that the foreign hook must forward to ours"
+    )
+}
+
+func testInstallationDoctorAcceptsAChainedCodexNotifyHook() throws {
+    // Codex's notify holds one command, so tools that want it cooperate by
+    // taking the key and passing the previous value along as an argument of
+    // their own -- escaped, because it travels as a nested JSON string. Our
+    // hook still runs, so reporting it as missing is a false alarm, and the
+    // remedy it printed was a no-op that left the user with nothing to do.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+    let ours = home.appendingPathComponent(".moonglade/bin/codex-notify.sh")
+        .standardizedFileURL.path
+        .replacingOccurrences(of: "/", with: "\\\\/")
+    try Data("""
+        notify = ["/opt/othertool/bin/othertool", "turn-ended", \
+        "--previous-notify", "[\\"\(ours)\\"]"]
+
+        model = "gpt-5"
+        """.utf8).write(to: home.appendingPathComponent(".codex/config.toml"))
+
+    let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+    let byTitle = Dictionary(uniqueKeysWithValues: checks.map { ($0.title, $0) })
+    let codex = try byTitle["Codex notify"].unwrap(or: "missing Codex check")
+
+    try expect(codex.passed, equals: true, "a chained notify hook must pass: \(codex.detail)")
+    try expect(
+        codex.detail.contains("othertool"),
+        equals: true,
+        "detail names the tool our hook is reached through"
+    )
+}
+
+func testInstallationDoctorReadsACodexNotifyArraySpanningLines() throws {
+    // A TOML array may break across lines, so the value cannot be read as "the
+    // rest of the notify line" -- doing that truncated the chain mid-argument
+    // and lost our script.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+    let ours = home.appendingPathComponent(".moonglade/bin/codex-notify.sh")
+        .standardizedFileURL.path
+    try Data("""
+        notify = [
+          "/opt/othertool/bin/othertool",
+          "--previous-notify",
+          "\(ours)",
+        ]
+
+        model = "gpt-5"
+        """.utf8).write(to: home.appendingPathComponent(".codex/config.toml"))
+
+    let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+    let byTitle = Dictionary(uniqueKeysWithValues: checks.map { ($0.title, $0) })
+    let codex = try byTitle["Codex notify"].unwrap(or: "missing Codex check")
+
+    try expect(codex.passed, equals: true, "a multi-line notify chain must pass: \(codex.detail)")
+}
+
+func testInstallationDoctorReportsAnAbsentCodexNotifyKey() throws {
+    // A config with no notify at all is the one case install really does fix,
+    // so it is the only case that may point at it.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+    try Data("model = \"gpt-5\"\n".utf8).write(
+        to: home.appendingPathComponent(".codex/config.toml")
+    )
+
+    let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+    let byTitle = Dictionary(uniqueKeysWithValues: checks.map { ($0.title, $0) })
+    let codex = try byTitle["Codex notify"].unwrap(or: "missing Codex check")
+
+    try expect(codex.passed, equals: false, "an absent notify key must not pass")
     try expect(
         codex.detail.contains("moonglade install"),
         equals: true,
@@ -8539,6 +8632,9 @@ let tests: [(String, () throws -> Void)] = [
     ("installer prepends codex notify before existing content", testInstallerPrependsCodexNotifyBeforeExistingContent),
     ("installation doctor reports healthy install", testInstallationDoctorReportsHealthyInstall),
     ("installation doctor rejects a foreign codex notify hook", testInstallationDoctorRejectsAForeignCodexNotifyHook),
+    ("installation doctor accepts a chained codex notify hook", testInstallationDoctorAcceptsAChainedCodexNotifyHook),
+    ("installation doctor reads a codex notify array spanning lines", testInstallationDoctorReadsACodexNotifyArraySpanningLines),
+    ("installation doctor reports an absent codex notify key", testInstallationDoctorReportsAnAbsentCodexNotifyKey),
     ("installation doctor pinpoints broken pieces", testInstallationDoctorPinpointsBrokenPieces),
     ("resource bundle search covers every installed layout", testResourceBundleSearchCoversEveryInstalledLayout),
     ("app resource bundle search covers the installed app layout", testAppResourceBundleSearchCoversTheInstalledAppLayout),

@@ -171,24 +171,99 @@ public struct InstallationDoctor {
                 detail: "\(display(configURL)) is missing — run: moonglade install"
             )
         }
-        // Match the exact script this installation writes, not just its name:
-        // another app's notify hook can ship a file called codex-notify.sh, and
-        // reporting that as ours would claim Codex is wired here while its
-        // events go somewhere else entirely.
+        guard let notify = Self.notifyValue(in: config) else {
+            return DoctorCheck(
+                title: "Codex notify",
+                passed: false,
+                detail: "no notify hook in \(display(configURL)) — run: moonglade install"
+            )
+        }
+        return codexNotifyCheck(notify: notify, configURL: configURL)
+    }
+
+    /// Codex's `notify` holds a single command, so tools that want it cooperate
+    /// by taking the key and carrying the previous value forward as one of their
+    /// own arguments. Our hook still runs in that arrangement, so it counts as
+    /// wired whether it owns the key or merely appears inside it — and because a
+    /// forwarded value travels as a nested string, the escapes have to come off
+    /// before the path can be compared.
+    ///
+    /// The exact path matters, not just the script name: another installation
+    /// can ship its own codex-notify.sh, and reporting that as ours would claim
+    /// Codex is wired here while its events go somewhere else entirely.
+    private func codexNotifyCheck(notify: String, configURL: URL) -> DoctorCheck {
         let ownScript = homeDirectoryURL
             .appendingPathComponent(".moonglade/bin/codex-notify.sh")
             .standardizedFileURL.path
-        let configured = config.range(
-            of: #"(?m)^\s*notify\s*=.*"# + NSRegularExpression.escapedPattern(for: ownScript),
-            options: .regularExpression
-        ) != nil
+        let owner = Self.notifyOwner(in: notify)
+        guard notify.replacingOccurrences(of: "\\", with: "").contains(ownScript) else {
+            // Installation deliberately refuses to overwrite a notify key it did
+            // not write, so `moonglade install` cannot resolve this and must not
+            // be offered as the way out.
+            return DoctorCheck(
+                title: "Codex notify",
+                passed: false,
+                detail: """
+                    \(display(configURL)) points notify at \(owner), which does not forward to \
+                    ours — add \(display(URL(fileURLWithPath: ownScript))) to that tool's notify \
+                    chain, or clear the notify line and run: moonglade install
+                    """
+            )
+        }
+        let ours = URL(fileURLWithPath: ownScript).lastPathComponent
         return DoctorCheck(
             title: "Codex notify",
-            passed: configured,
-            detail: configured
+            passed: true,
+            detail: owner == ours
                 ? "notify hook registered in \(display(configURL))"
-                : "notify hook missing from \(display(configURL)) — run: moonglade install"
+                : "notify hook reached through \(owner)'s notify chain in \(display(configURL))"
         )
+    }
+
+    /// The value of the root table's `notify` key.
+    private static func notifyValue(in config: String) -> String? {
+        guard let assignment = config.range(
+            of: #"(?m)^[ \t]*notify[ \t]*=[ \t]*"#,
+            options: .regularExpression
+        ) else { return nil }
+        let tail = config[assignment.upperBound...]
+        guard tail.first == "[" else { return String(tail.prefix { !$0.isNewline }) }
+        return String(bracketedPrefix(of: tail))
+    }
+
+    /// Consumes a TOML array, closing on bracket depth rather than at the first
+    /// newline because the value may span lines, and ignoring brackets that sit
+    /// inside strings — a forwarded chain carries whole quoted arrays as
+    /// arguments.
+    private static func bracketedPrefix(of tail: Substring) -> Substring {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for index in tail.indices {
+            if escaped {
+                escaped = false
+                continue
+            }
+            switch tail[index] {
+            case "\\": escaped = true
+            case "\"": inString.toggle()
+            case "[" where !inString: depth += 1
+            case "]" where !inString:
+                depth -= 1
+                if depth == 0 { return tail[...index] }
+            default: break
+            }
+        }
+        return tail
+    }
+
+    /// The command `notify` actually invokes, named by its last path component.
+    private static func notifyOwner(in notify: String) -> String {
+        guard let quoted = notify.range(of: #""[^"]+""#, options: .regularExpression) else {
+            return "another command"
+        }
+        let path = notify[quoted].dropFirst().dropLast()
+        return URL(fileURLWithPath: String(path)).lastPathComponent
     }
 
     private func display(_ url: URL) -> String {
