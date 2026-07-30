@@ -1,121 +1,243 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Moonglade app icon: a crescent moon and its reflected light under the notch bar, with a green dot for a session waiting at the prompt and a red dot for one that needs you">
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Moonglade app icon: a glass moon above a frosted sheet of water, its reflection breaking into ripples beneath the surface">
   <defs>
-    <!-- Night sky, bluest where the moonlight enters. No filters anywhere in
-         this file: scripts/make-icon.sh rasterizes through AppKit, which
-         renders gradients and masks but silently drops filter primitives. -->
-    <linearGradient id="sky" x1="0" y1="0" x2="0.25" y2="1">
-      <stop offset="0" stop-color="#141a2e"/>
-      <stop offset="0.5" stop-color="#0d111d"/>
-      <stop offset="1" stop-color="#07080d"/>
+    <!-- A moonglade is the streak of moonlight a body of water throws back at
+         you, so the icon is the moon and its reflection and nothing else. The
+         reflection carries the identity: a lone crescent is the stock symbol
+         for night, sleep, and do-not-disturb, and reads as none of those.
+
+         Everything here is glass. The water is a sheet of it seen edge-on, the
+         moon is a frosted body rather than a lit ball, and the reflection is
+         drawn beneath the sheet so it reads as content behind frost while the
+         glints on top stay crisp — two planes, which is what gives the tile
+         depth instead of a gradient.
+
+         scripts/make-icon.sh rasterizes through AppKit, which honours filter
+         primitives — it verifies feGaussianBlur before writing the iconset, so
+         a rasterizer that drops them fails the build instead of silently
+         flattening every glow here. -->
+
+    <!-- Ambient for the glass to pick up. The field is deliberately darker than
+         the blooms it carries: translucent material only reads as translucent
+         when there is something distinctly coloured behind it to show through,
+         and a bright flat navy leaves no headroom for that. -->
+    <linearGradient id="field" x1="0.12" y1="0" x2="0.34" y2="1">
+      <stop offset="0" stop-color="#1d2a5e"/>
+      <stop offset="0.44" stop-color="#0f1533"/>
+      <stop offset="1" stop-color="#04060d"/>
     </linearGradient>
-    <radialGradient id="moonWash" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#7d9bce" stop-opacity="0.30"/>
-      <stop offset="1" stop-color="#7d9bce" stop-opacity="0"/>
+    <radialGradient id="bloomViolet" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7d6dff" stop-opacity="0.52"/>
+      <stop offset="1" stop-color="#7d6dff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bloomBlue" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3fa4ff" stop-opacity="0.40"/>
+      <stop offset="1" stop-color="#3fa4ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="wash" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#aec1f5" stop-opacity="0.24"/>
+      <stop offset="0.54" stop-color="#7d94d4" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#7d94d4" stop-opacity="0"/>
     </radialGradient>
 
-    <!-- The moon, lit along the limb the crescent actually shows -->
-    <radialGradient id="moonBody" cx="0.3" cy="0.72" r="0.85">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.55" stop-color="#eef1fa"/>
-      <stop offset="1" stop-color="#c3cbe4"/>
+    <!-- The moon as frosted glass. Glass is dimmest where you look straight
+         through it and brightest where the surface turns away from you, so the
+         body is a thin wash and the rim carries the light. Putting the brightest
+         value in the middle instead is exactly what makes a plastic bead. -->
+    <radialGradient id="orb" cx="0.42" cy="0.36" r="0.84">
+      <stop offset="0" stop-color="#f6f9ff" stop-opacity="0.74"/>
+      <stop offset="0.52" stop-color="#dde8ff" stop-opacity="0.54"/>
+      <stop offset="1" stop-color="#b6c8ef" stop-opacity="0.34"/>
     </radialGradient>
-    <radialGradient id="moonHalo" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#c9d6f5" stop-opacity="0.40"/>
-      <stop offset="0.42" stop-color="#8ea4d8" stop-opacity="0.13"/>
-      <stop offset="1" stop-color="#8ea4d8" stop-opacity="0"/>
+    <!-- Fresnel: nothing until the last few percent of the radius, then an edge.
+         Kept deliberately faint and even, because a bright ring of uniform
+         weight all the way round is a soap bubble; the two limb arcs supply the
+         brightness, unevenly, which is what makes it a body and not a shell. -->
+    <radialGradient id="fresnel" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.84" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.95" stop-color="#e9f1ff" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.4"/>
     </radialGradient>
-    <!-- The lit sphere minus a second disc offset up and to the right. The
-         pair sits right of the icon's axis on purpose: the crescent's mass is
-         all on its outer limb, so a centred sphere reads as centred left. -->
-    <mask id="crescent">
-      <circle cx="534" cy="574" r="150" fill="#ffffff"/>
-      <circle cx="578" cy="530" r="134" fill="#000000"/>
-    </mask>
-
-    <!-- The glade: the streak of moonlight the app is named for, spilling down
-         from the moon and pooling at the foot of the icon. Radial only — a
-         gradient on a straight-edged shape shows its outline as a hard seam
-         against the sky, and the moon then reads as a projector. -->
-    <radialGradient id="glade" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#aabfe8" stop-opacity="0.17"/>
-      <stop offset="0.5" stop-color="#aabfe8" stop-opacity="0.06"/>
-      <stop offset="1" stop-color="#aabfe8" stop-opacity="0"/>
-    </radialGradient>
-
-    <!-- Light caught on the bar's top shoulders, fading down its sides -->
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
-      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0.10"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0.03"/>
+    <!-- Both limbs fade at their ends so neither arc terminates as a hard tick -->
+    <linearGradient id="limbNear" gradientUnits="userSpaceOnUse" x1="410" y1="311" x2="543" y2="240">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.1"/>
+      <stop offset="0.46" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.1"/>
     </linearGradient>
-    <radialGradient id="greenGlow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#32d74b" stop-opacity="0.38"/>
-      <stop offset="1" stop-color="#32d74b" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="redGlow" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#ff453a" stop-opacity="0.42"/>
-      <stop offset="1" stop-color="#ff453a" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="greenDot" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5ce874"/>
-      <stop offset="1" stop-color="#28b842"/>
-    </linearGradient>
-    <linearGradient id="redDot" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ff7b74"/>
-      <stop offset="1" stop-color="#f0392e"/>
+    <linearGradient id="limbFar" gradientUnits="userSpaceOnUse" x1="613" y1="375" x2="481" y2="445">
+      <stop offset="0" stop-color="#dfe9ff" stop-opacity="0.05"/>
+      <stop offset="0.5" stop-color="#f2f6ff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#dfe9ff" stop-opacity="0.05"/>
     </linearGradient>
 
-    <clipPath id="squircleClip">
+    <!-- Every ripple fades out along its own length. A rounded rect of even fill
+         has two abrupt ends, and a stack of those is a barcode no matter how it
+         is blurred. The peak sits left of centre so the bright cores do not line
+         up into a mirror-symmetric column. -->
+    <linearGradient id="slat" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#e9f0ff" stop-opacity="0"/>
+      <stop offset="0.18" stop-color="#eef4ff" stop-opacity="0.7"/>
+      <stop offset="0.46" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="0.8" stop-color="#eef4ff" stop-opacity="0.58"/>
+      <stop offset="1" stop-color="#e9f0ff" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- The sheet of water, and the light along its edge -->
+    <linearGradient id="pane" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e4edff" stop-opacity="0.17"/>
+      <stop offset="0.14" stop-color="#cddcff" stop-opacity="0.08"/>
+      <stop offset="0.5" stop-color="#96abd8" stop-opacity="0.045"/>
+      <stop offset="1" stop-color="#7e93c4" stop-opacity="0.015"/>
+    </linearGradient>
+    <linearGradient id="waterline" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.24" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="0.76" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Light caught on the tile's top shoulder and again, weaker, where it
+         turns away at the bottom, so the squircle reads as a material rather
+         than a flat swatch with a border drawn round it -->
+    <linearGradient id="tileRim" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.46"/>
+      <stop offset="0.3" stop-color="#ffffff" stop-opacity="0.07"/>
+      <stop offset="0.78" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#cfdcff" stop-opacity="0.26"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="vignette" cx="0.5" cy="0.4" r="0.75">
+      <stop offset="0.55" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.34"/>
+    </radialGradient>
+
+    <filter id="wide" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+    <filter id="bloom" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="60"/>
+    </filter>
+    <filter id="spread" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="17"/>
+    </filter>
+    <filter id="throughFrost" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="onSurface" x="-60%" y="-400%" width="220%" height="900%">
+      <feGaussianBlur stdDeviation="1.6"/>
+    </filter>
+    <filter id="edge" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="2.4"/>
+    </filter>
+    <filter id="caustic" x="-90%" y="-90%" width="280%" height="280%">
+      <feGaussianBlur stdDeviation="15"/>
+    </filter>
+    <filter id="lineGlow" x="-20%" y="-1400%" width="140%" height="2900%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+
+    <clipPath id="clip">
       <rect x="100" y="100" width="824" height="824" rx="184"/>
     </clipPath>
-    <!-- Collapsed notch bar: 40pt concave shoulders flaring into the screen
-         edge, 56pt circular lower corners — the same topology the app draws,
-         scaled up so the silhouette still reads at icon sizes. -->
-    <path id="bar" d="M300 100 C322.09 100 340 117.91 340 140 L340 194 C340 224.93 365.07 250 396 250 L628 250 C658.93 250 684 224.93 684 194 L684 140 C684 117.91 701.91 100 724 100 Z"/>
   </defs>
 
-  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#sky)"/>
-  <g clip-path="url(#squircleClip)">
-    <ellipse cx="880" cy="180" rx="440" ry="380" fill="url(#moonWash)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#field)"/>
+  <g clip-path="url(#clip)">
+    <!-- The violet sits below the waterline on purpose: it is the one colour
+         the sheet has to transmit, and seeing it dimmed and flattened by the
+         frost is what proves the sheet is there. The blue stays in open sky
+         where nothing filters it, so the two halves differ in material and not
+         only in hue. -->
+    <ellipse cx="806" cy="654" rx="360" ry="320" fill="url(#bloomViolet)" filter="url(#bloom)"/>
+    <ellipse cx="238" cy="282" rx="330" ry="300" fill="url(#bloomBlue)" filter="url(#bloom)"/>
+    <ellipse cx="512" cy="344" rx="430" ry="410" fill="url(#wash)"/>
 
-    <!-- Stars: seven, so the sky reads as sky and not as texture -->
-    <g fill="#dfe6f6">
-      <circle cx="196" cy="352" r="6" opacity="0.72"/>
-      <circle cx="258" cy="510" r="4" opacity="0.45"/>
-      <circle cx="164" cy="676" r="5" opacity="0.55"/>
-      <circle cx="828" cy="404" r="5.5" opacity="0.62"/>
-      <circle cx="776" cy="560" r="3.5" opacity="0.38"/>
-      <circle cx="866" cy="700" r="4.5" opacity="0.5"/>
-      <circle cx="300" cy="806" r="3.5" opacity="0.35"/>
+    <!-- Three stars, only enough to place the scene at night -->
+    <g fill="#dde6fa">
+      <circle cx="240" cy="228" r="4.5" opacity="0.34"/>
+      <circle cx="790" cy="266" r="3.5" opacity="0.26"/>
+      <circle cx="300" cy="172" r="3" opacity="0.18"/>
     </g>
 
-    <!-- The glade, beneath the moon: a soft fall of light and its pool -->
-    <ellipse cx="512" cy="778" rx="118" ry="150" fill="url(#glade)"/>
-    <ellipse cx="512" cy="880" rx="250" ry="76" fill="url(#glade)"/>
+    <path d="M100 100 L556 100 L232 924 L100 924 Z" fill="url(#gloss)" filter="url(#wide)"/>
 
-    <!-- The moon: the icon's one bright shape, so it survives 16pt -->
-    <circle cx="534" cy="574" r="310" fill="url(#moonHalo)"/>
-    <g mask="url(#crescent)">
-      <circle cx="534" cy="574" r="150" fill="url(#moonBody)"/>
+    <!-- The moon. Glass, not a pearl: light gathers as a hard little specular
+         on the limb facing the source, travels through the body, and lights the
+         opposite limb on its way out. A single soft blob high on a sphere is
+         what makes plastic. -->
+    <circle cx="512" cy="344" r="176" fill="#c3d3ff" opacity="0.3" filter="url(#wide)"/>
+    <circle cx="512" cy="344" r="106" fill="url(#orb)"/>
+    <ellipse cx="528" cy="390" rx="50" ry="24" fill="#ffffff" opacity="0.4" filter="url(#caustic)"/>
+    <!-- Two maria, barely there. Without them a translucent disc is a lens; a
+         disc with faint interior structure is a moon. -->
+    <g fill="#7f8fbb" opacity="0.07">
+      <ellipse cx="482" cy="318" rx="30" ry="24"/>
+      <ellipse cx="540" cy="374" rx="20" ry="16"/>
+    </g>
+    <circle cx="512" cy="344" r="106" fill="url(#fresnel)"/>
+    <path d="M410 311 A106 106 0 0 1 543 240" fill="none" stroke="url(#limbNear)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M613 375 A106 106 0 0 1 481 445" fill="none" stroke="url(#limbFar)" stroke-width="6" stroke-linecap="round"/>
+    <!-- The specular sits on the rim, not floating inside the body: a highlight
+         adrift in the middle of a disc is a painted dot, not a reflection -->
+    <circle cx="452" cy="276" r="8.5" fill="#ffffff" opacity="0.98" filter="url(#edge)"/>
+    <circle cx="436" cy="294" r="4" fill="#ffffff" opacity="0.55" filter="url(#edge)"/>
+
+    <!-- The glade's body: the moon's light transmitted through the frost as one
+         continuous soft column, so the ripples over it read as breaks in
+         something rather than as bars floating in the dark. -->
+    <ellipse cx="521" cy="608" rx="88" ry="112" fill="#cfdeff" opacity="0.56" filter="url(#spread)"/>
+    <ellipse cx="519" cy="536" rx="52" ry="34" fill="#e6eeff" opacity="0.46" filter="url(#spread)"/>
+
+    <!-- The glade, beneath the surface: the moon's disc mirrored about the
+         waterline, its chord widths perturbed off their exact values and each
+         row nudged off centre, then displaced right of the moon's axis the way
+         refraction displaces anything seen through a medium it enters at an
+         angle. The gaps between rows accelerate but not monotonically (16, 24,
+         30, 22, 28, 34, 38, 48) — the reversal at the fourth is what keeps the
+         stack from settling into a rhythm, and a rhythm reads as the rungs of a
+         ladder however carefully each row is shaded. Two strays sit off the
+         axis for the same reason. -->
+    <g fill="#e9f0ff" filter="url(#throughFrost)">
+      <rect x="512" y="508" width="26" height="6" rx="3.0" fill="url(#slat)" opacity="0.546"/>
+      <rect x="487" y="524" width="56" height="7" rx="3.5" fill="url(#slat)" opacity="0.91"/>
+      <rect x="511" y="548" width="44" height="7" rx="3.5" fill="url(#slat)" opacity="0.624"/>
+      <rect x="447" y="578" width="140" height="8" rx="4.0" fill="url(#slat)" opacity="0.754"/>
+      <rect x="487" y="600" width="96" height="9" rx="4.5" fill="url(#slat)" opacity="0.442"/>
+      <rect x="420" y="628" width="190" height="10" rx="5.0" fill="url(#slat)" opacity="0.39"/>
+      <rect x="467" y="662" width="128" height="11" rx="5.5" fill="url(#slat)" opacity="0.286"/>
+      <rect x="417" y="700" width="208" height="12" rx="6.0" fill="url(#slat)" opacity="0.208"/>
+      <rect x="469" y="748" width="120" height="12" rx="6.0" fill="url(#slat)" opacity="0.13"/>
+      <rect x="605" y="614" width="32" height="6" rx="3.0" fill="url(#slat)" opacity="0.234"/>
+      <rect x="391" y="690" width="36" height="6" rx="3.0" fill="url(#slat)" opacity="0.182"/>
     </g>
 
-    <!-- The bar hanging off the top edge: flat black, exactly as the
-         collapsed state renders — the moonlight only catches its rim. -->
-    <use href="#bar" fill="#000000"/>
-    <use href="#bar" fill="none" stroke="url(#rim)" stroke-width="5"/>
+    <!-- the sheet itself, washing everything under it -->
+    <rect x="100" y="500" width="824" height="424" fill="url(#pane)"/>
 
-    <!-- Left wing: a session waiting at the prompt -->
-    <circle cx="420" cy="168" r="66" fill="url(#greenGlow)"/>
-    <circle cx="420" cy="168" r="23" fill="url(#greenDot)"/>
+    <!-- its edge: the horizon, brightest where the moon meets it -->
+    <rect x="100" y="497" width="824" height="6" fill="url(#waterline)" opacity="0.5" filter="url(#lineGlow)"/>
+    <rect x="100" y="499" width="824" height="2.5" fill="url(#waterline)"/>
+    <!-- the slab's far edge, dimmer and a few pixels down: an edge with visible
+         thickness is a solid, a single rule is a divider drawn on a card -->
+    <rect x="100" y="509" width="824" height="1.5" fill="url(#waterline)" opacity="0.3"/>
 
-    <!-- Camera housing: the band beside it stays pure black, always -->
-    <circle cx="512" cy="168" r="15" fill="#15161b"/>
-    <circle cx="512" cy="168" r="6.5" fill="#24262d"/>
+    <!-- The ripples nearest the horizon are also caught on top of the sheet,
+         where they stay crisp. That contrast against the frosted copies beneath
+         is what tells the eye there are two surfaces and not one flat wash. -->
+    <g fill="#ffffff" filter="url(#onSurface)">
+      <rect x="513" y="508" width="24" height="2.5" rx="1.25" fill="url(#slat)" opacity="0.462"/>
+      <rect x="488" y="524" width="54" height="2.5" rx="1.25" fill="url(#slat)" opacity="0.77"/>
+      <rect x="512" y="548" width="42" height="2.5" rx="1.25" fill="url(#slat)" opacity="0.528"/>
+      <rect x="451" y="578" width="132" height="2.5" rx="1.25" fill="url(#slat)" opacity="0.638"/>
+      <rect x="491" y="600" width="88" height="2.5" rx="1.25" fill="url(#slat)" opacity="0.374"/>
+      <rect x="424" y="628" width="182" height="2.5" rx="1.25" fill="url(#slat)" opacity="0.33"/>
+    </g>
 
-    <!-- Right wing: a session that needs you, mid radar ping -->
-    <circle cx="604" cy="168" r="72" fill="url(#redGlow)"/>
-    <circle cx="604" cy="168" r="23" fill="url(#redDot)"/>
-    <circle cx="604" cy="168" r="41" fill="none" stroke="#ff453a" stroke-width="5" opacity="0.3"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#vignette)"/>
+    <rect x="109" y="109" width="806" height="806" rx="176" fill="none" stroke="#ffffff" stroke-width="2" opacity="0.07"/>
   </g>
-  <rect x="102" y="102" width="820" height="820" rx="182" fill="none" stroke="#3d4560" stroke-width="4" opacity="0.65"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="none" stroke="url(#tileRim)" stroke-width="3"/>
 </svg>
