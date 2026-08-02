@@ -29,15 +29,27 @@ package enum BoundedProcessRunner {
 
         let outputFinished = DispatchSemaphore(value: 0)
         let outputState = OutputState(maximumBytes: maximumOutputBytes)
+        // Raw read(2), not FileHandle.read(upToCount:): the FileHandle call
+        // loops internally until it fills the requested length or hits EOF,
+        // so a short burst of output would sit unappended for as long as any
+        // inherited copy of the write end stays open. read(2) hands over
+        // whatever is in the pipe as soon as it arrives.
+        let readDescriptor = outputPipe.fileHandleForReading.fileDescriptor
         DispatchQueue.global(qos: .utility).async {
             defer { outputFinished.signal() }
-            do {
-                while let chunk = try outputPipe.fileHandleForReading.read(upToCount: 64 * 1_024),
-                      !chunk.isEmpty {
-                    outputState.append(chunk)
+            var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+            while true {
+                let count = buffer.withUnsafeMutableBytes {
+                    Darwin.read(readDescriptor, $0.baseAddress, $0.count)
                 }
-            } catch {
-                outputState.record(error: error)
+                if count > 0 {
+                    outputState.append(Data(buffer[0..<count]))
+                    continue
+                }
+                if count == 0 { break }
+                if errno == EINTR { continue }
+                outputState.record(error: POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO))
+                break
             }
         }
 
@@ -59,28 +71,44 @@ package enum BoundedProcessRunner {
             _ = outputFinished.wait(timeout: .now() + 1)
             throw POSIXError(.ETIMEDOUT)
         }
-        guard outputFinished.wait(timeout: .now() + 1) == .success else {
-            throw POSIXError(.ETIMEDOUT)
-        }
-        if let error = outputState.error {
+        // The process has exited, so everything it could write is already in
+        // the pipe. EOF may still never come: a grandchild that inherited the
+        // write end (a shell backgrounding a helper) holds it open past the
+        // parent's death. After the drain grace the gathered output is the
+        // command's complete output — return it rather than miscasting a
+        // successful run as a timeout. The abandoned reader parks until the
+        // orphan lets go; its handle is never closed from here, because a
+        // concurrent close would let the descriptor number be recycled under
+        // the still-blocked read.
+        _ = outputFinished.wait(timeout: .now() + 1)
+        let output = outputState.snapshot()
+        if let error = output.error {
             throw error
         }
-        if outputState.didExceedLimit {
+        if output.didExceedLimit {
             throw POSIXError(.EFBIG)
         }
-        return BoundedProcessResult(status: process.terminationStatus, output: outputState.data)
+        return BoundedProcessResult(status: process.terminationStatus, output: output.data)
     }
 }
 
 private final class OutputState: @unchecked Sendable {
     private let lock = NSLock()
     private let maximumBytes: Int
-    private(set) var data = Data()
-    private(set) var didExceedLimit = false
-    private(set) var error: Error?
+    private var data = Data()
+    private var didExceedLimit = false
+    private var error: Error?
 
     init(maximumBytes: Int) {
         self.maximumBytes = max(0, maximumBytes)
+    }
+
+    /// The reader may still be appending when the drain grace expires, so
+    /// every read of the gathered state goes through the lock as one unit.
+    func snapshot() -> (data: Data, didExceedLimit: Bool, error: Error?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (data, didExceedLimit, error)
     }
 
     func append(_ chunk: Data) {

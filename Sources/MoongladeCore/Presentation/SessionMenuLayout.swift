@@ -3,12 +3,6 @@ import Foundation
 /// Shared expanded-menu spacing. Keeping these values outside the SwiftUI
 /// tree makes the compact horizontal layout explicit and testable.
 public enum SessionMenuLayout {
-    public enum ActionMode: Equatable, Sendable {
-        case menu
-        case renaming
-        case confirmingKill
-    }
-
     public static let errorRowHeight: CGFloat = 25
     public static let contentHorizontalInset: CGFloat = 4
     /// Gap between the notch bar — whose wings now hold the header — and the
@@ -32,19 +26,11 @@ public enum SessionMenuLayout {
     /// that received the click out from under the pointer. Longer lists still
     /// scroll inside the card.
     public static let maximumSessionListHeight: CGFloat = 300
-    public static func expandedActionsHeight(for mode: ActionMode) -> CGFloat {
-        switch mode {
-        case .menu:
-            let actionRowsHeight: CGFloat = 4 * 32
-            let separatorHeight: CGFloat = 3
-            let verticalInsets: CGFloat = 4 + 9
-            return actionRowsHeight + separatorHeight + verticalInsets
-        case .renaming:
-            return 34
-        case .confirmingKill:
-            return 44
-        }
-    }
+    /// Four 32pt action rows, their three hairline separators, and the
+    /// area's vertical insets. The list reserves this whenever a row's
+    /// actions are open; the rename and kill sub-modes render shorter
+    /// content inside the same reservation rather than resizing the list.
+    public static let expandedActionsHeight: CGFloat = 144
 
     /// The largest card the panel must accommodate: a fitting three-row
     /// expanded list and every vertical inset rendered by `SessionMenuCard`.
@@ -63,17 +49,7 @@ public enum SessionMenuLayout {
     ) -> CGFloat {
         let count = max(0, sessionCount)
         let rowsHeight = CGFloat(count) * sessionRowHeight
-        let actionsHeight = hasExpandedActions ? expandedActionsHeight(for: .menu) : 0
-        return min(rowsHeight + actionsHeight, maximumSessionListHeight)
-    }
-
-    public static func sessionListHeight(
-        sessionCount: Int,
-        actionMode: ActionMode?
-    ) -> CGFloat {
-        let count = max(0, sessionCount)
-        let rowsHeight = CGFloat(count) * sessionRowHeight
-        let actionsHeight = actionMode.map(expandedActionsHeight(for:)) ?? 0
+        let actionsHeight = hasExpandedActions ? expandedActionsHeight : 0
         return min(rowsHeight + actionsHeight, maximumSessionListHeight)
     }
 
@@ -86,7 +62,7 @@ public enum SessionMenuLayout {
     ) -> Bool {
         let count = max(0, sessionCount)
         let rowsHeight = CGFloat(count) * sessionRowHeight
-        let actionsHeight = hasExpandedActions ? expandedActionsHeight(for: .menu) : 0
+        let actionsHeight = hasExpandedActions ? expandedActionsHeight : 0
         return rowsHeight + actionsHeight > maximumSessionListHeight
     }
 }

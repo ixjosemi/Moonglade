@@ -1,10 +1,23 @@
 import Foundation
 import Darwin
 
-enum SecureFileReaderError: Error, Equatable, Sendable {
+enum SecureFileReaderError: Error, Equatable, Sendable, CustomStringConvertible {
     case insecure
     case tooLarge
     case changedWhileReading
+
+    /// Surfaces in CLI output ("moonglade: <error>"), where the bare case
+    /// name would leave the user with no idea what to fix.
+    var description: String {
+        switch self {
+        case .insecure:
+            "file is not a private regular file owned by you (fix: chmod og-w <file>)"
+        case .tooLarge:
+            "file exceeds the maximum size this reader accepts"
+        case .changedWhileReading:
+            "file changed while it was being read"
+        }
+    }
 }
 
 enum SecureFileReader {

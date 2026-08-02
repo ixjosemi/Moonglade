@@ -896,7 +896,7 @@ private struct AgentIconView: View {
 
 private struct SessionMenuCard: View {
     private static let terminalActionQueue = DispatchQueue(
-        label: "com.moonglade.terminal-actions",
+        label: "com.moonglade.session-actions",
         qos: .userInitiated
     )
     let sessions: [AgentSession]
@@ -940,7 +940,7 @@ private struct SessionMenuCard: View {
                     }
                     .frame(height: SessionMenuLayout.sessionListHeight(
                         sessionCount: sessions.count,
-                        actionMode: actionsSessionID == nil ? nil : .menu
+                        hasExpandedActions: actionsSessionID != nil
                     ))
                     .onChange(of: actionsSessionID) { _, sessionID in
                         guard let sessionID else { return }
@@ -1055,7 +1055,7 @@ private struct SessionRow: View {
     /// Sub-modes of the inline action area: the button strip, the rename
     /// field, or the kill confirmation. All live inside the row itself so
     /// nothing ever floats outside the notch silhouette.
-    private typealias ActionMode = SessionMenuLayout.ActionMode
+    private enum ActionMode { case menu, renaming, confirmingKill }
 
     @State private var isHovered = false
     @State private var branchName: String?

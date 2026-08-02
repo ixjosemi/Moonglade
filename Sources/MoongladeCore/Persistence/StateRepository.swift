@@ -8,6 +8,7 @@ public enum StateRepositoryError: Error, Equatable, Sendable {
     case ownershipIndexTooLarge
     case invalidOwnershipIndex
     case sessionIdentifierTooLong
+    case writeLockTimeout
 }
 
 package struct StateSnapshot: Sendable {
@@ -117,6 +118,12 @@ public struct StateRepository: Sendable {
         }
     }
 
+    /// How long a writer polls for another process's advisory lock before
+    /// failing with `writeLockTimeout`. Far above any real critical section —
+    /// they are short local filesystem operations — while keeping a wedged
+    /// holder from parking every hook on the machine. `package` so tests can
+    /// shorten the wait; production code never mutates it.
+    package static var writeLockAcquisitionTimeout: TimeInterval = 5
     private static let maximumStateFileSize = 1_048_576
     private static let maximumEnrichmentFileSize = 16_384
     private static let maximumOwnershipIndexFileSize = 16 * 1_048_576
@@ -366,6 +373,7 @@ public struct StateRepository: Sendable {
         private static let maximumEntries = 256
         private let lock = NSLock()
         private var reportedFileNames: Set<String> = []
+        private var reportedDuplicateFileNames: Set<String> = []
 
         func reportOnce(_ fileName: String, error: Error) {
             lock.lock()
@@ -381,7 +389,16 @@ public struct StateRepository: Sendable {
             )
         }
 
+        /// Once per process, like `reportOnce`: duplicates persist on disk
+        /// until a writer retires one, and loads run far too often to log
+        /// the same pair on every tick.
         func reportDuplicate(_ fileName: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard reportedDuplicateFileNames.insert(fileName).inserted else { return }
+            if reportedDuplicateFileNames.count > Self.maximumEntries {
+                reportedDuplicateFileNames.removeFirst()
+            }
             NSLog("MOONGLADE_DUPLICATE_STATE: %@", Self.redactedFileName(fileName))
         }
 
@@ -558,7 +575,6 @@ public struct StateRepository: Sendable {
     }
 
     private func saveLocked(_ session: AgentSession, updating snapshot: inout StateSnapshot) throws {
-        try prepareDirectory()
         let existingSessions = session.source == .reaper ? [] : snapshot.lifecycleSessions
         let session = preservingProcessIdentity(in: session, from: existingSessions)
         if session.source != .reaper {
@@ -716,6 +732,14 @@ public struct StateRepository: Sendable {
     }
 
     public func remove(_ session: AgentSession) throws {
+        // A directory that never existed holds neither the document nor the
+        // overlay, and its parent has no lock file to open — return before
+        // the lock acquisition can fail on the missing path.
+        var directoryMetadata = stat()
+        guard Darwin.lstat(directoryURL.path, &directoryMetadata) == 0 else {
+            if errno == ENOENT { return }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         let fileURL = directoryURL.appendingPathComponent(try fileName(for: session))
         try withWriteLock {
             var removed = false
@@ -1154,6 +1178,13 @@ private final class StateDirectoryWriteLock: @unchecked Sendable {
         return try body()
     }
 
+    /// Acquires the advisory file lock without ever blocking indefinitely.
+    ///
+    /// Integration hooks call into here from inside an agent's turn. A holder
+    /// that dies releases the lock through the kernel, but a holder that is
+    /// merely wedged would park every hook on this machine — and with them
+    /// every agent — behind an unbounded `F_LOCK`. Polling `F_TLOCK` against
+    /// a deadline turns that machine-wide hang into one loud, local failure.
     private func acquireFileLock(at lockURL: URL) throws {
         let opened = Darwin.open(
             lockURL.path,
@@ -1163,13 +1194,24 @@ private final class StateDirectoryWriteLock: @unchecked Sendable {
         guard opened >= 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        guard Darwin.lockf(opened, F_LOCK, 0) == 0 else {
-            let failure = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            _ = Darwin.close(opened)
-            throw failure
+        let deadline = Date().addingTimeInterval(StateRepository.writeLockAcquisitionTimeout)
+        while Darwin.lockf(opened, F_TLOCK, 0) != 0 {
+            guard errno == EAGAIN || errno == EACCES || errno == EINTR else {
+                let failure = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                _ = Darwin.close(opened)
+                throw failure
+            }
+            guard Date() < deadline else {
+                _ = Darwin.close(opened)
+                NSLog("MOONGLADE_STATE_LOCK_TIMEOUT: a writer held the state lock past the deadline")
+                throw StateRepositoryError.writeLockTimeout
+            }
+            usleep(Self.lockRetryIntervalMicroseconds)
         }
         descriptor = opened
     }
+
+    private static let lockRetryIntervalMicroseconds: UInt32 = 25_000
 
     private func releaseFileLock() {
         guard descriptor >= 0 else { return }

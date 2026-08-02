@@ -10,6 +10,10 @@ public final class ConvoyRunsWatcher {
     /// timestamp convoy records, guarding pid reuse across old runs.
     private static let processStartSlack: TimeInterval = 120
     package static let maximumOwnershipWatchDirectoryCount = 64
+    /// Upper bound of the parsed-metadata cache below. Sized like the watcher
+    /// bound today, but it caps a different resource — memory held by parsed
+    /// runs — so it is its own knob rather than a reuse of that one.
+    private static let maximumParsedRunCacheEntries = 64
 
     private let runsDirectoryURL: URL
     private let repository: StateRepository
@@ -320,7 +324,7 @@ public final class ConvoyRunsWatcher {
     private func touchParsedRun(_ url: URL) {
         parsedRunAccessOrder.removeAll { $0 == url }
         parsedRunAccessOrder.append(url)
-        while parsedRunAccessOrder.count > Self.maximumOwnershipWatchDirectoryCount {
+        while parsedRunAccessOrder.count > Self.maximumParsedRunCacheEntries {
             let evicted = parsedRunAccessOrder.removeFirst()
             parsedRunsByFileURL[evicted] = nil
         }

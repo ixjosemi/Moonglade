@@ -98,11 +98,14 @@ public struct InstallationDoctor {
 
     private func claudeHooksCheck() -> DoctorCheck {
         let settingsURL = homeDirectoryURL.appendingPathComponent(".claude/settings.json")
-        guard let settingsData = try? SecureFileReader.read(at: settingsURL) else {
+        let settingsData: Data
+        do {
+            settingsData = try SecureFileReader.read(at: settingsURL)
+        } catch {
             return DoctorCheck(
                 title: "Claude Code hooks",
                 passed: false,
-                detail: "\(display(settingsURL)) is missing — run: moonglade install"
+                detail: unreadableFileDetail(for: settingsURL, error: error)
             )
         }
         let installed = ClaudeSettingsMerger.isInstalled(
@@ -166,12 +169,22 @@ public struct InstallationDoctor {
 
     private func codexNotifyCheck() -> DoctorCheck {
         let configURL = homeDirectoryURL.appendingPathComponent(".codex/config.toml")
-        guard let configData = try? SecureFileReader.read(at: configURL),
-              let config = String(data: configData, encoding: .utf8) else {
+        let config: String
+        do {
+            let configData = try SecureFileReader.read(at: configURL)
+            guard let decoded = String(data: configData, encoding: .utf8) else {
+                return DoctorCheck(
+                    title: "Codex notify",
+                    passed: false,
+                    detail: "\(display(configURL)) is not valid UTF-8"
+                )
+            }
+            config = decoded
+        } catch {
             return DoctorCheck(
                 title: "Codex notify",
                 passed: false,
-                detail: "\(display(configURL)) is missing — run: moonglade install"
+                detail: unreadableFileDetail(for: configURL, error: error)
             )
         }
         guard let notify = Self.notifyValue(in: config) else {
@@ -314,5 +327,20 @@ public struct InstallationDoctor {
         let homePath = homeDirectoryURL.standardizedFileURL.path
         guard path.hasPrefix(homePath + "/") else { return path }
         return "~" + path.dropFirst(homePath.count)
+    }
+
+    /// A file the doctor cannot read is not always missing: a group- or
+    /// other-writable config fails the secure read, and "run: moonglade
+    /// install" would send the user in exactly the wrong direction.
+    private func unreadableFileDetail(for fileURL: URL, error: Error) -> String {
+        switch error {
+        case SecureFileReaderError.insecure:
+            return "\(display(fileURL)) is not a private regular file owned by you"
+                + " — run: chmod og-w \(display(fileURL))"
+        case let posixError as POSIXError where posixError.code == .ENOENT:
+            return "\(display(fileURL)) is missing — run: moonglade install"
+        default:
+            return "\(display(fileURL)) could not be read: \(error)"
+        }
     }
 }

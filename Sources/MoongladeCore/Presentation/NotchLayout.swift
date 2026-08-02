@@ -79,18 +79,16 @@ public struct NotchLayout: Equatable, Sendable {
 
     /// The panel has room for three expanded rows without creating a nested
     /// scroll surface. Longer lists retain their own bounded scroll view.
-    public static let menuMaxHeight = SessionMenuLayout.maximumCardHeight()
-
-    public static func menuMaxHeight(hasError: Bool) -> CGFloat {
-        SessionMenuLayout.maximumCardHeight(hasError: hasError)
-    }
+    /// The budget always reserves the error row: a termination or focus
+    /// error can surface after the fixed AppKit window was sized, and the
+    /// window must never clip that late message.
+    public static let menuMaxHeight = SessionMenuLayout.maximumCardHeight(hasError: true)
 
     public static func expandedHeight(
         compactHeight: CGFloat,
-        presentation: Presentation,
-        hasError: Bool
+        presentation: Presentation
     ) -> CGFloat {
-        compactHeight + menuMaxHeight(hasError: hasError)
+        compactHeight + menuMaxHeight
             + Self.expandedBottomPadding
             + (presentation == .pill
                 ? Self.pillExpandedTopGap + Self.pillExpandedHeaderTopPadding
@@ -145,7 +143,11 @@ public struct NotchLayout: Equatable, Sendable {
             presentation = .notch
             notchLeadingX = leftNotchEdgeX
             topGap = 0
-            height = safeSafeAreaTop
+            // A screen can report its camera housing while its safe area
+            // reads zero (fullscreen hides the menu bar). A zero-height bar
+            // would be invisible and unhoverable, so the standard menu-bar
+            // height stands in until the safe area returns.
+            height = safeSafeAreaTop > 0 ? safeSafeAreaTop : Self.fallbackMenuBarHeight
             notchWidth = max(rightNotchEdgeX - leftNotchEdgeX, 168)
             width = expandedWidth
             // Centre the broad expanded card on the physical camera housing,
@@ -176,11 +178,7 @@ public struct NotchLayout: Equatable, Sendable {
         // fully inside the window.
         expandedHeight = Self.expandedHeight(
             compactHeight: height,
-            presentation: presentation,
-            // The card can surface a termination or focus error after the
-            // panel is created. Reserve that row up front so the fixed AppKit
-            // window never clips a late error message.
-            hasError: true
+            presentation: presentation
         )
     }
 

@@ -656,7 +656,7 @@ func testStateFilenameIdentifierRoundTripsSpecialCharacters() throws {
     )
 }
 
-func testAubprocessThatNeverExitsIsTerminatedAtItsDeadline() throws {
+func testASubprocessThatNeverExitsIsTerminatedAtItsDeadline() throws {
     let startedAt = Date()
     do {
         _ = try BoundedProcessRunner.run(
@@ -671,7 +671,7 @@ func testAubprocessThatNeverExitsIsTerminatedAtItsDeadline() throws {
     try expect(Date().timeIntervalSince(startedAt) < 1, equals: true, "timeout is bounded")
 }
 
-func testAubprocessThatOverfillsItsPipeStillCompletes() throws {
+func testASubprocessThatOverfillsItsPipeStillCompletes() throws {
     let result = try BoundedProcessRunner.run(
         executableURL: URL(fileURLWithPath: "/bin/dd"),
         arguments: ["if=/dev/zero", "bs=1048576", "count=1"],
@@ -681,6 +681,27 @@ func testAubprocessThatOverfillsItsPipeStillCompletes() throws {
 
     try expect(result.status, equals: 0, "large-output process status")
     try expect(result.output.count, equals: 1_048_576, "large output is drained")
+}
+
+func testAnOrphanHoldingThePipeDoesNotTurnSuccessIntoATimeout() throws {
+    // A child may leave behind a grandchild that inherited its stdout — a
+    // shell backgrounding a helper is enough. The command itself exited
+    // successfully and wrote everything it ever will, so the runner must
+    // return that output after its drain grace instead of throwing ETIMEDOUT.
+    // The shell here is a test fixture creating the orphan, not a production
+    // codepath; product code never executes strings through a shell.
+    let result = try BoundedProcessRunner.run(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "echo ready; sleep 5 &"],
+        timeout: 3
+    )
+
+    try expect(result.status, equals: 0, "the command itself exited cleanly")
+    try expect(
+        String(decoding: result.output, as: UTF8.self),
+        equals: "ready\n",
+        "output written before exit is returned despite the held pipe"
+    )
 }
 
 func testTheFrontTerminalQueryIsNotRepeatedWithinItsTTL() throws {
@@ -732,12 +753,7 @@ func testPointerMonitorsAreUnnecessaryWithOneDisplay() throws {
 func testTheCardHeightBudgetIncludesTheErrorRow() throws {
     try expect(SessionMenuLayout.maximumCardHeight(), equals: 316, "card height without error")
     try expect(SessionMenuLayout.maximumCardHeight(hasError: true), equals: 341, "card height with error")
-}
-
-func testActionHeightTracksTheMode() throws {
-    try expect(SessionMenuLayout.expandedActionsHeight(for: .menu), equals: 144, "menu actions height")
-    try expect(SessionMenuLayout.expandedActionsHeight(for: .renaming), equals: 34, "rename height")
-    try expect(SessionMenuLayout.expandedActionsHeight(for: .confirmingKill), equals: 44, "kill confirmation height")
+    try expect(NotchLayout.menuMaxHeight, equals: 341, "the panel budget always reserves the error row")
 }
 
 func testAHardwareNotchWithNoMenuBarStillUsesNotchGeometry() throws {
@@ -750,6 +766,9 @@ func testAHardwareNotchWithNoMenuBarStillUsesNotchGeometry() throws {
         rightNotchEdgeX: 846
     )
     try expect(layout.presentation, equals: .notch, "hardware notch presentation")
+    // A zero-height bar would be invisible and unhoverable; the standard
+    // menu-bar height stands in until the safe area returns.
+    try expect(layout.height, equals: 24, "the bar keeps a usable height without a safe area")
 }
 
 func testNotchLayoutSupportsASecondaryDisplayOrigin() throws {
@@ -7705,6 +7724,32 @@ func testInstallationDoctorReportsHealthyInstall() throws {
     )
 }
 
+func testInstallationDoctorDiagnosesLooseSettingsPermissionsInsteadOfMissingInstall() throws {
+    // A group-writable settings file fails the secure read. Reporting that as
+    // "missing — run: moonglade install" sends the user to a command that
+    // cannot fix it; the check must name the permissions instead.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o666],
+        ofItemAtPath: home.appendingPathComponent(".claude/settings.json").path
+    )
+
+    let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+    let byTitle = Dictionary(uniqueKeysWithValues: checks.map { ($0.title, $0) })
+    let claude = try byTitle["Claude Code hooks"].unwrap(or: "missing Claude check")
+
+    try expect(claude.passed, equals: false, "loose permissions must not pass")
+    try expect(
+        claude.detail.contains("chmod og-w"),
+        equals: true,
+        "detail prescribes the permission fix, not a reinstall"
+    )
+}
+
 func testInstallationDoctorRejectsAForeignCodexNotifyHook() throws {
     // A notify entry naming codex-notify.sh but living under a different
     // directory belongs to another installation. Matching the script name alone
@@ -8925,6 +8970,106 @@ func testRemovingASessionTakesTheSameWriteLockAsSaving() throws {
     )
 }
 
+func testAWedgedForeignLockHolderFailsWritersAtTheDeadline() throws {
+    // A holder that is wedged rather than dead would otherwise park every
+    // hook process — and with them every agent's turn — behind a blocking
+    // lockf. The writer must fail loudly at the deadline instead.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let stateDirectory = root.appendingPathComponent("state", isDirectory: true)
+    try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let holder = Process()
+    holder.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    holder.arguments = [
+        "--hold-state-lock",
+        root.appendingPathComponent(".moonglade-state-write.lock").path,
+        "1200",
+    ]
+    let holderOutput = Pipe()
+    holder.standardOutput = holderOutput
+    try holder.run()
+    defer {
+        holder.terminate()
+        holder.waitUntilExit()
+    }
+    let marker = holderOutput.fileHandleForReading.readData(ofLength: 7)
+    try expect(
+        String(decoding: marker, as: UTF8.self),
+        equals: "locked\n",
+        "the foreign process reports the lock as held"
+    )
+
+    let defaultTimeout = StateRepository.writeLockAcquisitionTimeout
+    StateRepository.writeLockAcquisitionTimeout = 0.3
+    defer { StateRepository.writeLockAcquisitionTimeout = defaultTimeout }
+    let repository = StateRepository(directoryURL: stateDirectory)
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "lock-timeout",
+        pid: 4_500,
+        status: .working,
+        cwd: "/tmp/lock-timeout",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    )
+
+    let attemptStartedAt = Date()
+    var failure: Error?
+    do {
+        try repository.save(session)
+    } catch {
+        failure = error
+    }
+
+    try expect(
+        failure as? StateRepositoryError,
+        equals: .writeLockTimeout,
+        "a wedged foreign holder surfaces as a timeout, not a hang"
+    )
+    try expect(
+        Date().timeIntervalSince(attemptStartedAt) < 1.0,
+        equals: true,
+        "the writer gave up at its deadline"
+    )
+
+    holder.waitUntilExit()
+    try repository.save(session)
+    try expect(
+        try repository.loadSessions().map(\.sessionID),
+        equals: ["lock-timeout"],
+        "the same writer succeeds once the holder releases the lock"
+    )
+}
+
+func testRemovingFromAMissingStateDirectoryIsANoOp() throws {
+    // ~/.moonglade may never have existed on this machine. Removal has no
+    // documents or overlays to retire, so it must return quietly instead of
+    // failing on the lock file's missing parent — or creating anything.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repository = StateRepository(
+        directoryURL: root.appendingPathComponent("state", isDirectory: true)
+    )
+
+    try repository.remove(AgentSession(
+        tool: .claude,
+        sessionID: "never-existed",
+        pid: 4_501,
+        status: .idle,
+        cwd: "/tmp/never-existed",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    ))
+
+    try expect(
+        FileManager.default.fileExists(atPath: root.path),
+        equals: false,
+        "removal creates nothing on the way out"
+    )
+}
+
 /// Counts descriptors this process currently holds. The directory watchers
 /// close theirs from a dispatch source cancel handler, so a watcher that is
 /// never cancelled shows up here and nowhere else.
@@ -9243,15 +9388,17 @@ let tests: [(String, () throws -> Void)] = [
     ("pruning removes overlays with no lifecycle owner", testPruningRemovesOverlaysWithNoLifecycleOwner),
     ("concurrent state writers do not interleave", testConcurrentStateWritersDoNotInterleave),
     ("removing a session takes the same write lock as saving", testRemovingASessionTakesTheSameWriteLockAsSaving),
+    ("a wedged foreign lock holder fails writers at the deadline", testAWedgedForeignLockHolderFailsWritersAtTheDeadline),
+    ("removing from a missing state directory is a no-op", testRemovingFromAMissingStateDirectoryIsANoOp),
     ("state filename identifier round trips special characters", testStateFilenameIdentifierRoundTripsSpecialCharacters),
-    ("a subprocess that never exits is terminated at its deadline", testAubprocessThatNeverExitsIsTerminatedAtItsDeadline),
-    ("a subprocess that overfills its pipe still completes", testAubprocessThatOverfillsItsPipeStillCompletes),
+    ("a subprocess that never exits is terminated at its deadline", testASubprocessThatNeverExitsIsTerminatedAtItsDeadline),
+    ("a subprocess that overfills its pipe still completes", testASubprocessThatOverfillsItsPipeStillCompletes),
+    ("an orphan holding the pipe does not turn success into a timeout", testAnOrphanHoldingThePipeDoesNotTurnSuccessIntoATimeout),
     ("the front-terminal query is not repeated within its TTL", testTheFrontTerminalQueryIsNotRepeatedWithinItsTTL),
     ("the heartbeat backs off after a scan finds no agents", testTheHeartbeatBacksOffAfterAScanFindsNoAgents),
     ("the heartbeat returns to five seconds as soon as an agent appears", testTheHeartbeatReturnsToFiveSecondsAsSoonAsAnAgentAppears),
     ("pointer monitors are unnecessary with one display", testPointerMonitorsAreUnnecessaryWithOneDisplay),
     ("the card height budget includes the error row", testTheCardHeightBudgetIncludesTheErrorRow),
-    ("action height tracks the mode", testActionHeightTracksTheMode),
     ("a hardware notch with no menu bar still uses notch geometry", testAHardwareNotchWithNoMenuBarStillUsesNotchGeometry),
     ("notch layout supports a secondary display origin", testNotchLayoutSupportsASecondaryDisplayOrigin),
     ("notch layout guards non-finite geometry", testNotchLayoutGuardsNonFiniteGeometry),
@@ -9429,6 +9576,7 @@ let tests: [(String, () throws -> Void)] = [
     ("installer replaces marked integration files on reinstall", testInstallerReplacesMarkedIntegrationFilesOnReinstall),
     ("installer prepends codex notify before existing content", testInstallerPrependsCodexNotifyBeforeExistingContent),
     ("installation doctor reports healthy install", testInstallationDoctorReportsHealthyInstall),
+    ("installation doctor diagnoses loose settings permissions", testInstallationDoctorDiagnosesLooseSettingsPermissionsInsteadOfMissingInstall),
     ("installation doctor rejects a foreign codex notify hook", testInstallationDoctorRejectsAForeignCodexNotifyHook),
     ("installation doctor accepts a chained codex notify hook", testInstallationDoctorAcceptsAChainedCodexNotifyHook),
     ("installation doctor reads a codex notify array spanning lines", testInstallationDoctorReadsACodexNotifyArraySpanningLines),
@@ -9478,6 +9626,24 @@ if CommandLine.arguments.count == 3,
     } catch {
         exit(1)
     }
+} else if CommandLine.arguments.count == 4,
+          CommandLine.arguments[1] == "--hold-state-lock" {
+    // Child mode for the lock-timeout test: POSIX record locks are held per
+    // process, so a wedged foreign holder can only be simulated from outside
+    // the test process.
+    let descriptor = Darwin.open(
+        CommandLine.arguments[2],
+        O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+        0o600
+    )
+    guard descriptor >= 0,
+          Darwin.lockf(descriptor, F_LOCK, 0) == 0,
+          let holdMilliseconds = UInt32(CommandLine.arguments[3]) else {
+        exit(1)
+    }
+    FileHandle.standardOutput.write(Data("locked\n".utf8))
+    usleep(holdMilliseconds * 1_000)
+    exit(0)
 } else {
     do {
         for (name, test) in tests {
