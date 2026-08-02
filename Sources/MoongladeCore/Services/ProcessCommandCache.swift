@@ -29,9 +29,22 @@ public struct ProcessCommand: Equatable, Sendable {
 public final class ProcessCommandCache: @unchecked Sendable {
     private let lock = NSLock()
     private var commandsByIdentity: [ProcessIdentity: ProcessCommand] = [:]
-    private var requestedIdentities: Set<ProcessIdentity> = []
+    private var requestedIdentitiesByScan: [UUID: Set<ProcessIdentity>] = [:]
+    private var generationByScan: [UUID: UInt64] = [:]
+    private var latestScanGeneration: UInt64 = 0
+    private var legacyScan = UUID()
 
     public init() {}
+
+    public func beginScan() -> UUID {
+        let token = UUID()
+        lock.lock()
+        latestScanGeneration &+= 1
+        requestedIdentitiesByScan[token] = []
+        generationByScan[token] = latestScanGeneration
+        lock.unlock()
+        return token
+    }
 
     /// Returns the remembered command line for `identity`, reading it once on
     /// first sight. `read` runs outside the lock: it performs syscalls, and a
@@ -40,8 +53,16 @@ public final class ProcessCommandCache: @unchecked Sendable {
         for identity: ProcessIdentity,
         read: () -> ProcessCommand
     ) -> ProcessCommand {
+        command(for: identity, scanToken: legacyScan, read: read)
+    }
+
+    public func command(
+        for identity: ProcessIdentity,
+        scanToken: UUID,
+        read: () -> ProcessCommand
+    ) -> ProcessCommand {
         lock.lock()
-        requestedIdentities.insert(identity)
+        requestedIdentitiesByScan[scanToken, default: []].insert(identity)
         let cached = commandsByIdentity[identity]
         lock.unlock()
         if let cached { return cached }
@@ -59,8 +80,26 @@ public final class ProcessCommandCache: @unchecked Sendable {
     /// successful one rather than discarding still-live entries.
     public func sweep() {
         lock.lock()
+        let requestedIdentities = requestedIdentitiesByScan[legacyScan, default: []]
         commandsByIdentity = commandsByIdentity.filter { requestedIdentities.contains($0.key) }
-        requestedIdentities.removeAll(keepingCapacity: true)
+        requestedIdentitiesByScan[legacyScan] = []
+        lock.unlock()
+    }
+
+    public func sweep(scanToken: UUID) {
+        lock.lock()
+        guard generationByScan[scanToken] == latestScanGeneration else {
+            requestedIdentitiesByScan.removeValue(forKey: scanToken)
+            generationByScan.removeValue(forKey: scanToken)
+            lock.unlock()
+            return
+        }
+        guard let requestedIdentities = requestedIdentitiesByScan.removeValue(forKey: scanToken) else {
+            lock.unlock()
+            return
+        }
+        commandsByIdentity = commandsByIdentity.filter { requestedIdentities.contains($0.key) }
+        generationByScan.removeValue(forKey: scanToken)
         lock.unlock()
     }
 }

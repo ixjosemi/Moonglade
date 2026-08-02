@@ -18,6 +18,12 @@ public final class ConvoyRunsWatcher {
     /// Only the active run changes between scans, so historical runs are
     /// parsed at most once per process lifetime.
     private var parsedRunsByFileURL: [URL: (fingerprint: MetadataFingerprint, run: ConvoyRun?)] = [:]
+    private var parsedRunAccessOrder: [URL] = []
+    private var ownershipInventoryDirty = true
+    private var cachedOwnershipInventory: (
+        fingerprint: MetadataFingerprint?,
+        value: (sessionIDs: Set<String>, watchDirectoryURLs: Set<URL>, isComplete: Bool)
+    )?
     private var trackedRuns: [String: TrackedRun] = [:]
     package private(set) var ownershipWatchDirectoryURLs: Set<URL> = []
 
@@ -194,7 +200,28 @@ public final class ConvoyRunsWatcher {
     /// correlated to a live Convoy process and shown as a pipeline row.
     @discardableResult
     package func refreshOpenCodeOwnershipIndex() throws -> Bool {
+        let directoryFingerprint = runsDirectoryFingerprint()
+        if !ownershipInventoryDirty,
+           let cachedOwnershipInventory,
+           cachedOwnershipInventory.fingerprint == directoryFingerprint {
+            ownershipWatchDirectoryURLs = Set(
+                cachedOwnershipInventory.value.watchDirectoryURLs
+                    .sorted { $0.lastPathComponent > $1.lastPathComponent }
+                    .prefix(Self.maximumOwnershipWatchDirectoryCount)
+            )
+            return false
+        }
         let inventory = try openCodeOwnershipInventory()
+        if inventory.isComplete {
+            cachedOwnershipInventory = (directoryFingerprint, inventory)
+            ownershipInventoryDirty = false
+        } else {
+            // An incomplete view is not a stable inventory. Keep retrying on
+            // the next heartbeat even when the directory fingerprint did not
+            // change: metadata may become readable without a directory event.
+            cachedOwnershipInventory = nil
+            ownershipInventoryDirty = true
+        }
         ownershipWatchDirectoryURLs = Set(
             inventory.watchDirectoryURLs
                 .sorted { $0.lastPathComponent > $1.lastPathComponent }
@@ -202,7 +229,8 @@ public final class ConvoyRunsWatcher {
         )
         return try repository.mergeConvoyOwnedOpenCodeSessionIDs(
             inventory.sessionIDs,
-            allowingInvalidIndexRepair: inventory.isComplete
+            allowingInvalidIndexRepair: inventory.isComplete,
+            inventoryIsComplete: inventory.isComplete
         )
     }
 
@@ -276,6 +304,26 @@ public final class ConvoyRunsWatcher {
             availableMetadataURLs.contains($0.key)
         }
         return (sessionIDs, watchDirectoryURLs, isComplete)
+    }
+
+    package func invalidateOwnershipInventory() {
+        ownershipInventoryDirty = true
+    }
+
+    private func runsDirectoryFingerprint() -> MetadataFingerprint? {
+        var metadata = stat()
+        guard Darwin.lstat(runsDirectoryURL.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR else { return nil }
+        return MetadataFingerprint(metadata)
+    }
+
+    private func touchParsedRun(_ url: URL) {
+        parsedRunAccessOrder.removeAll { $0 == url }
+        parsedRunAccessOrder.append(url)
+        while parsedRunAccessOrder.count > Self.maximumOwnershipWatchDirectoryCount {
+            let evicted = parsedRunAccessOrder.removeFirst()
+            parsedRunsByFileURL[evicted] = nil
+        }
     }
 
     public func suppressOpenCodeSessions(for result: ScanResult) throws {
@@ -375,11 +423,13 @@ public final class ConvoyRunsWatcher {
         let fingerprint = MetadataFingerprint(metadata)
         guard fingerprint.modifiedAt >= cutoff else { return nil }
         if let cached = parsedRunsByFileURL[url], cached.fingerprint == fingerprint {
+            touchParsedRun(url)
             return ParsedMetadata(run: cached.run)
         }
         metadataParseObserver?(url)
         guard let data = try? BoundedInput.read(from: handle) else {
             parsedRunsByFileURL[url] = (fingerprint, nil)
+            touchParsedRun(url)
             return ParsedMetadata(run: nil)
         }
         var metadataAfterRead = stat()
@@ -389,6 +439,7 @@ public final class ConvoyRunsWatcher {
         }
         let run = ConvoyRun.decode(data)
         parsedRunsByFileURL[url] = (fingerprint, run)
+        touchParsedRun(url)
         return ParsedMetadata(run: run)
     }
 

@@ -20,11 +20,12 @@ public enum ClaudeSettingsMerger {
         guard var root = try JSONSerialization.jsonObject(with: settingsData) as? [String: Any] else {
             throw InstallationError.invalidClaudeSettings
         }
-        var allHooks = root["hooks"] as? [String: Any] ?? [:]
+        let (existingHooks, _) = try hooksObject(in: root)
+        var allHooks = existingHooks
         for event in events {
-            var groups = allHooks[event.name] as? [[String: Any]] ?? []
+            var groups = try eventGroups(event.name, in: allHooks)
             let command = command(hookCommand: hookCommand, eventName: event.name)
-            if !contains(command: command, in: groups) {
+            if try !contains(command: command, in: groups) {
                 groups.append(group(command: command, matcher: event.matcher))
             }
             allHooks[event.name] = groups
@@ -37,13 +38,23 @@ public enum ClaudeSettingsMerger {
         guard var root = try JSONSerialization.jsonObject(with: settingsData) as? [String: Any] else {
             throw InstallationError.invalidClaudeSettings
         }
-        var allHooks = root["hooks"] as? [String: Any] ?? [:]
+        let (existingHooks, hooksWerePresent) = try hooksObject(in: root)
+        var allHooks = existingHooks
         for event in events {
             let command = command(hookCommand: hookCommand, eventName: event.name)
-            let groups = allHooks[event.name] as? [[String: Any]] ?? []
-            allHooks[event.name] = groups.filter { !contains(command: command, in: [$0]) }
+            let groups = try eventGroups(event.name, in: allHooks)
+            let remaining = try groups.filter { try !contains(command: command, in: [$0]) }
+            if remaining.isEmpty {
+                allHooks.removeValue(forKey: event.name)
+            } else {
+                allHooks[event.name] = remaining
+            }
         }
-        root["hooks"] = allHooks
+        if allHooks.isEmpty, !hooksWerePresent {
+            root.removeValue(forKey: "hooks")
+        } else {
+            root["hooks"] = allHooks
+        }
         return try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
     }
 
@@ -51,20 +62,44 @@ public enum ClaudeSettingsMerger {
     /// the read-only counterpart of `merge` used by the installation doctor.
     public static func isInstalled(settingsData: Data, hookCommand: String) -> Bool {
         guard let root = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any],
-              let allHooks = root["hooks"] as? [String: Any] else {
-            return false
-        }
-        return events.allSatisfy { event in
-            contains(
+              let (allHooks, _) = try? hooksObject(in: root) else { return false }
+        return (try? events.allSatisfy { event in
+            try contains(
                 command: command(hookCommand: hookCommand, eventName: event.name),
-                in: allHooks[event.name] as? [[String: Any]] ?? []
+                in: eventGroups(event.name, in: allHooks)
             )
-        }
+        }) ?? false
     }
 
-    private static func contains(command: String, in groups: [[String: Any]]) -> Bool {
-        groups.contains { group in
-            let hooks = group["hooks"] as? [[String: Any]] ?? []
+    private static func hooksObject(in root: [String: Any]) throws -> ([String: Any], Bool) {
+        guard let rawHooks = root["hooks"] else { return ([:], false) }
+        guard let hooks = rawHooks as? [String: Any] else {
+            throw InstallationError.invalidClaudeSettings
+        }
+        return (hooks, true)
+    }
+
+    private static func eventGroups(
+        _ eventName: String,
+        in hooks: [String: Any]
+    ) throws -> [[String: Any]] {
+        guard let rawGroups = hooks[eventName] else { return [] }
+        guard let groups = rawGroups as? [[String: Any]] else {
+            throw InstallationError.invalidClaudeSettings
+        }
+        for group in groups {
+            guard let rawHooks = group["hooks"], rawHooks is [[String: Any]] else {
+                throw InstallationError.invalidClaudeSettings
+            }
+        }
+        return groups
+    }
+
+    private static func contains(command: String, in groups: [[String: Any]]) throws -> Bool {
+        try groups.contains { group in
+            guard let hooks = group["hooks"] as? [[String: Any]] else {
+                throw InstallationError.invalidClaudeSettings
+            }
             return hooks.contains { $0["command"] as? String == command }
         }
     }

@@ -5,3 +5,4 @@
 *.sh text eol=lf
 *.icns binary
 *.png binary
+*.metallib binary

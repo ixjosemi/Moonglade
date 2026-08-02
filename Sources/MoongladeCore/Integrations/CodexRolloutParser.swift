@@ -36,7 +36,7 @@ public struct CodexRolloutParser: Sendable {
         guard let updatedAt = Self.parseDate(envelope.timestamp) else { return nil }
         if envelope.type == "session_meta" {
             sessionID = envelope.payload.id
-            cwd = envelope.payload.cwd
+            cwd = envelope.payload.cwd.flatMap(normalizedAbsolutePath)
             startedAt = envelope.payload.timestamp.flatMap(Self.parseDate) ?? updatedAt
             return makeSession(status: .working, reason: nil, updatedAt: updatedAt)
         }

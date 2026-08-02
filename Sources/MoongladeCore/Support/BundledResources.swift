@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum ResourceError: Error, Equatable, Sendable, CustomStringConvertible {
     case bundleMissing(searched: [String])
@@ -52,6 +53,21 @@ public enum BundledResources {
     /// the binary it installs.
     public static var bundleURL: URL {
         get throws { try locatedBundle.get().bundleURL }
+    }
+
+    public static func containsResource(
+        named name: String,
+        withExtension fileExtension: String,
+        inBundleAt path: String
+    ) -> Bool {
+        var metadata = stat()
+        guard Darwin.lstat(path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR,
+              let bundle = Bundle(path: path),
+              let resourceURL = bundle.url(forResource: name, withExtension: fileExtension),
+              Darwin.lstat(resourceURL.path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG else { return false }
+        return true
     }
 
     /// Locations that may hold the resource bundle, in priority order.

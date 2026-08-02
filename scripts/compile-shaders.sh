@@ -10,6 +10,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p Sources/MoongladeApp/Resources
 xcrun -sdk macosx metal \
+    -mmacos-version-min=14.0 \
     Sources/MoongladeApp/Ripple.metal \
     -o Sources/MoongladeApp/Resources/default.metallib
 echo "Wrote Sources/MoongladeApp/Resources/default.metallib"

@@ -11,21 +11,27 @@ public struct ReaperService: Sendable {
     /// that has been quiet for at least one full pass is verified against the
     /// detected agent set; two consecutive misses distinguish stale state
     /// from one transient per-process metadata read failure.
-    public static let staleSessionInterval: TimeInterval = 5
+    public static let staleSessionInterval: TimeInterval = ObservationCadence.activeInterval
+    public static func staleSessionInterval(forHeartbeatInterval interval: TimeInterval) -> TimeInterval {
+        interval
+    }
 
     private let repository: StateRepository
     private let processScanner: any ProcessScanning
     private let now: @Sendable () -> Date
     private let nativeMisses = NativeSessionMissTracker()
+    public var liveStaleSessionInterval: TimeInterval
 
     public init(
         repository: StateRepository,
         processScanner: any ProcessScanning = SystemProcessScanner(),
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        staleSessionInterval: TimeInterval = Self.staleSessionInterval
     ) {
         self.repository = repository
         self.processScanner = processScanner
         self.now = now
+        liveStaleSessionInterval = staleSessionInterval
     }
 
     public func reap() throws -> ReaperResult {
@@ -216,7 +222,7 @@ public struct ReaperService: Sendable {
         // to be correlated with its terminal. Hooks/plugins can write before
         // the scanner observes the process, so removing it earlier races a
         // legitimate startup.
-        guard now().timeIntervalSince(session.updatedAt) >= Self.staleSessionInterval,
+        guard now().timeIntervalSince(session.updatedAt) >= liveStaleSessionInterval,
               !activeProcessKeys.contains(key) else {
             nativeMisses.clear(sessionID: session.id)
             return false
@@ -332,27 +338,27 @@ public struct ReaperService: Sendable {
         snapshot: inout StateSnapshot
     ) throws {
         guard session.source != .reaper else { return }
-        guard let session = try repository.reload(session, updating: &snapshot),
-              session.source != .reaper,
-              processMatches(session, process) else {
-            return
-        }
+        let current = snapshot.sessions.first(where: { $0.id == session.id }) ?? session
+        guard current.source != .reaper, processMatches(current, process) else { return }
         let scannedTerminalID = process.terminal.ghosttyTerminalID
         let adoptsIdentifier = scannedTerminalID != nil
-            && session.terminal.ghosttyTerminalID != scannedTerminalID
-        let adoptsProgram = session.terminal.termProgram == nil
+            && current.terminal.ghosttyTerminalID != scannedTerminalID
+        let adoptsProgram = current.terminal.termProgram == nil
             && process.terminal.termProgram != nil
-        let adoptsTmuxPane = session.terminal.tmuxPane == nil
+        let adoptsTmuxPane = current.terminal.tmuxPane == nil
             && process.terminal.tmuxPane != nil
-        let adoptsTTY = session.terminal.tty == nil
+        let adoptsTTY = current.terminal.tty == nil
             && process.terminal.tty != nil
         let adoptsTitle = session.tool != .convoy && titleMeaningfullyChanged(
             scanned: process.terminal.windowTitleHint,
-            current: session.terminal.windowTitleHint
+            current: current.terminal.windowTitleHint
         )
         guard adoptsIdentifier || adoptsProgram || adoptsTmuxPane || adoptsTTY || adoptsTitle else {
             return
         }
+        guard let session = try repository.reload(current, updating: &snapshot),
+              session.source != .reaper,
+              processMatches(session, process) else { return }
         _ = try repository.saveEnrichment(
             for: session,
             process: process,

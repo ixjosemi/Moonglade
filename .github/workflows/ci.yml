@@ -9,6 +9,19 @@ permissions:
   contents: read
 
 jobs:
+  shader:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Detect shader drift
+        run: |
+          tmp="$(mktemp -d)/default.metallib"
+          xcrun -sdk macosx metal -mmacos-version-min=14.0 \
+            Sources/MoongladeApp/Ripple.metal -o "$tmp"
+          cmp "$tmp" Sources/MoongladeApp/Resources/default.metallib
   test:
     runs-on: macos-15
     timeout-minutes: 15
@@ -32,5 +45,6 @@ jobs:
       - name: Verify bundle
         run: |
           codesign --verify --deep --strict .build/Moonglade.app
-          test -x .build/Moonglade.app/Contents/MacOS/Moonglade
-          test -x .build/Moonglade.app/Contents/Resources/bin/moonglade
+           test -x .build/Moonglade.app/Contents/MacOS/Moonglade
+           test -x .build/Moonglade.app/Contents/Resources/bin/moonglade
+           test -f .build/Moonglade.app/Contents/Resources/Moonglade_MoongladeApp.bundle/default.metallib

@@ -111,7 +111,7 @@ private struct NotchCustomGlassBackdrop: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NotchCustomGlassView, context: Context) {
-        view.apply(frostRadius: frostRadius)
+        view.apply(cornerStyle: cornerStyle, frostRadius: frostRadius)
     }
 }
 
@@ -137,7 +137,7 @@ final class NotchCustomGlassView: NSView {
             && NSClassFromString("CASDFElementLayer") is CALayer.Type
             && NSClassFromString("CASDFOutputEffect") is NSObject.Type
 
-    private let cornerStyle: HangingNotchCornerStyle
+    private var cornerStyle: HangingNotchCornerStyle
     private var frostRadius: Double
     private let shapeMask = CAShapeLayer()
     private var backdrop: CALayer?
@@ -158,16 +158,20 @@ final class NotchCustomGlassView: NSView {
     /// Live re-tune from the Settings slider. CAFilter inputs are copied
     /// when assigned into `filters`, so mutating the old instance is inert —
     /// a rebuilt filter swapped in atomically is the reliable path.
-    func apply(frostRadius: Double) {
-        guard frostRadius != self.frostRadius else { return }
+    func apply(cornerStyle: HangingNotchCornerStyle, frostRadius: Double) {
+        let styleChanged = cornerStyle != self.cornerStyle
+        self.cornerStyle = cornerStyle
+        guard styleChanged || frostRadius != self.frostRadius else { return }
         self.frostRadius = frostRadius
         guard let backdrop, let filter = Self.makeGlassFilter(frostRadius: frostRadius) else {
+            needsLayout = true
             return
         }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         backdrop.filters = [filter]
         CATransaction.commit()
+        needsLayout = true
     }
 
     @available(*, unavailable)

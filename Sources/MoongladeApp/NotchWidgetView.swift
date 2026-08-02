@@ -264,7 +264,10 @@ struct NotchWidgetView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isExpanded)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86),
+            value: isExpanded
+        )
         .onChange(of: pointerTracker.snapshot) { _, snapshot in
             handlePointerContainmentChange(snapshot)
         }
@@ -854,7 +857,7 @@ private func indicatorColor(for style: StatusIndicatorStyle) -> Color {
 /// on macOS 11+ so no rasterized assets are needed.
 private enum AgentIcons {
     static let byTool: [AgentTool: NSImage] = Dictionary(
-        uniqueKeysWithValues: AgentTool.allCases.compactMap { tool in
+        AgentTool.allCases.compactMap { tool in
             // A brand mark is decoration: AgentIconView already draws a
             // monogram for any tool without an image, so an unreadable
             // resource bundle must degrade the row rather than take the panel
@@ -863,7 +866,8 @@ private enum AgentIcons {
             guard let iconURL = try? BundledResources.iconURL(for: tool),
                   let image = NSImage(contentsOf: iconURL) else { return nil }
             return (tool, image)
-        }
+        },
+        uniquingKeysWith: { $1 }
     )
 }
 
@@ -891,6 +895,10 @@ private struct AgentIconView: View {
 // MARK: - Session menu
 
 private struct SessionMenuCard: View {
+    private static let terminalActionQueue = DispatchQueue(
+        label: "com.moonglade.terminal-actions",
+        qos: .userInitiated
+    )
     let sessions: [AgentSession]
     let stateDirectoryURL: URL
     let dismiss: () -> Void
@@ -907,6 +915,7 @@ private struct SessionMenuCard: View {
     /// The row order this menu opened with, held for as long as it is on
     /// screen so no row can slide out from under the pointer mid-reach.
     @State private var pinnedOrder = PinnedSessionOrder()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: SessionMenuLayout.cardStackSpacing) {
@@ -931,12 +940,14 @@ private struct SessionMenuCard: View {
                     }
                     .frame(height: SessionMenuLayout.sessionListHeight(
                         sessionCount: sessions.count,
-                        hasExpandedActions: actionsSessionID != nil
+                        actionMode: actionsSessionID == nil ? nil : .menu
                     ))
                     .onChange(of: actionsSessionID) { _, sessionID in
                         guard let sessionID else { return }
                         DispatchQueue.main.async {
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                            withAnimation(
+                                reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.9)
+                            ) {
                                 proxy.scrollTo(sessionID, anchor: .bottom)
                             }
                         }
@@ -982,7 +993,9 @@ private struct SessionMenuCard: View {
     }
 
     private func toggleActions(for session: AgentSession) {
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+        withAnimation(
+            reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.9)
+        ) {
             actionsSessionID = actionsSessionID == session.id ? nil : session.id
         }
         onRowInteractionChange(actionsSessionID != nil)
@@ -992,11 +1005,11 @@ private struct SessionMenuCard: View {
     /// The state document needs no cleanup here: the scheduler's exit
     /// watcher sees the death and the reaper removes it on its tick.
     private func killSession(_ session: AgentSession) {
-        Task.detached(priority: .userInitiated) {
+        Self.terminalActionQueue.async {
             do {
                 try TerminationService.terminate(session)
             } catch {
-                await MainActor.run {
+                DispatchQueue.main.async {
                     errorMessage = "Could not kill this session."
                 }
             }
@@ -1007,19 +1020,19 @@ private struct SessionMenuCard: View {
         // FocusService shells out to osascript/tmux, which can take
         // hundreds of milliseconds; keep it off the main thread so the
         // menu stays responsive.
-        Task.detached(priority: .userInitiated) {
+        Self.terminalActionQueue.async {
             do {
                 let latest = try StateRepository(directoryURL: stateDirectoryURL)
                     .loadSessions()
                     .first { $0.id == session.id }
                 guard let latest else { throw FocusError.sessionUnavailable }
                 try FocusService.focus(latest)
-                await MainActor.run {
+                DispatchQueue.main.async {
                     acknowledge(latest)
                     dismiss()
                 }
             } catch {
-                await MainActor.run {
+                DispatchQueue.main.async {
                     errorMessage = "Could not focus this terminal session."
                 }
             }
@@ -1042,7 +1055,7 @@ private struct SessionRow: View {
     /// Sub-modes of the inline action area: the button strip, the rename
     /// field, or the kill confirmation. All live inside the row itself so
     /// nothing ever floats outside the notch silhouette.
-    private enum ActionMode { case menu, renaming, confirmingKill }
+    private typealias ActionMode = SessionMenuLayout.ActionMode
 
     @State private var isHovered = false
     @State private var branchName: String?

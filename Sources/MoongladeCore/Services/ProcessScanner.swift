@@ -75,10 +75,13 @@ public struct SystemProcessScanner: ProcessScanning {
     }
 
     public func basicActiveProcesses() throws -> [DetectedAgentProcess] {
-        let classified = try Self.allProcessIDs().compactMap(detectAgentProcess)
+        let scanToken = commandCache.beginScan()
+        let classified = try Self.allProcessIDs().compactMap { processID in
+            detectAgentProcess(processID, scanToken: scanToken)
+        }
         // A scan asks the command cache about every visible process, so
         // sweeping here evicts exactly the ones that have since exited.
-        commandCache.sweep()
+        commandCache.sweep(scanToken: scanToken)
         return Self.droppingRuntimeLaunchers(classified)
     }
 
@@ -99,7 +102,8 @@ public struct SystemProcessScanner: ProcessScanning {
         )
         assignmentMemory.remember(matched)
         let matchedByKey = Dictionary(
-            uniqueKeysWithValues: matched.map { (GhosttySessionMatcher.assignmentKey(for: $0), $0) }
+            matched.map { (GhosttySessionMatcher.assignmentKey(for: $0), $0) },
+            uniquingKeysWith: { $1 }
         )
         let unresolvedGhosttyProcesses = ghosttyProcesses.filter {
             matchedByKey[GhosttySessionMatcher.assignmentKey(for: $0)] == nil
@@ -135,14 +139,14 @@ public struct SystemProcessScanner: ProcessScanning {
     /// Classifies one process, returning nil unless it is a running agent
     /// whose metadata is fully readable. Processes that exit mid-scan simply
     /// disappear from the result instead of failing the whole scan.
-    private func detectAgentProcess(_ processID: pid_t) -> ClassifiedAgentProcess? {
+    private func detectAgentProcess(_ processID: pid_t, scanToken: UUID) -> ClassifiedAgentProcess? {
         guard let initialInfo = Self.bsdInfo(processID: processID),
               initialInfo.pbi_status != UInt32(SZOMB) else {
             return nil
         }
         let initialIdentity = Self.processIdentity(from: initialInfo, processID: processID)
         guard let classification = Self.agentTool(
-                of: command(ofProcess: processID, identity: initialIdentity)
+                of: command(ofProcess: processID, identity: initialIdentity, scanToken: scanToken)
               ),
               let cwd = Self.workingDirectory(processID: processID),
               let bsdInfo = Self.bsdInfo(processID: processID),
@@ -330,15 +334,25 @@ public struct SystemProcessScanner: ProcessScanning {
     /// identity is unreadable — root-owned intermediaries such as
     /// /usr/bin/login deny proc_pidinfo — is read directly rather than filed
     /// under a key that cannot tell its generations apart.
-    private func command(ofProcess processID: pid_t) -> ProcessCommand {
+    private func command(ofProcess processID: pid_t, scanToken: UUID? = nil) -> ProcessCommand {
         guard let identity = Self.processIdentity(of: processID) else {
             return Self.readCommand(ofProcess: processID)
         }
-        return command(ofProcess: processID, identity: identity)
+        return command(ofProcess: processID, identity: identity, scanToken: scanToken)
     }
 
-    private func command(ofProcess processID: pid_t, identity: ProcessIdentity) -> ProcessCommand {
-        commandCache.command(for: identity) { Self.readCommand(ofProcess: processID) }
+    private func command(
+        ofProcess processID: pid_t,
+        identity: ProcessIdentity,
+        scanToken: UUID? = nil
+    ) -> ProcessCommand {
+        if let scanToken {
+            return commandCache.command(
+                for: identity,
+                scanToken: scanToken
+            ) { Self.readCommand(ofProcess: processID) }
+        }
+        return commandCache.command(for: identity) { Self.readCommand(ofProcess: processID) }
     }
 
     /// Four arguments are enough for every classifier: argv[0] names the
@@ -460,24 +474,11 @@ public struct SystemProcessScanner: ProcessScanning {
         arguments: [String],
         timeout: TimeInterval
     ) throws -> (status: Int32, output: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        let exited = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in exited.signal() }
-        try process.run()
-        guard exited.wait(timeout: .now() + timeout) == .success else {
-            process.terminate()
-            if exited.wait(timeout: .now() + 0.25) == .timedOut {
-                Darwin.kill(process.processIdentifier, SIGKILL)
-                _ = exited.wait(timeout: .now() + 0.25)
-            }
-            throw POSIXError(.ETIMEDOUT)
-        }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        let result = try BoundedProcessRunner.run(
+            executableURL: URL(fileURLWithPath: executable),
+            arguments: arguments,
+            timeout: timeout
+        )
+        return (result.status, String(decoding: result.output, as: UTF8.self))
     }
 }

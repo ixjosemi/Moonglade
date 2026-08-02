@@ -179,11 +179,12 @@ public enum FocusPlanner {
             ?? identifier
     }
 
-    static func appleScriptString(_ value: String) -> String {
+    package static func appleScriptString(_ value: String) -> String {
         value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
     }
 }
 
@@ -201,29 +202,30 @@ enum FocusActionRunner {
     static func run(_ actions: [FocusAction]) throws {
         var firstError: Error?
         for action in actions {
-            let process = Process()
+            let resolvedExecutableURL: URL
+            let arguments: [String]
             switch action {
-            case let .run(executable, arguments):
-                process.executableURL = try executableURL(named: executable)
-                process.arguments = arguments
+            case let .run(executable, actionArguments):
+                resolvedExecutableURL = try executableURL(named: executable)
+                arguments = actionArguments
             case let .appleScript(script):
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                process.arguments = ["-e", script]
+                resolvedExecutableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                arguments = ["-e", script]
             }
             do {
-                try process.run()
-            } catch {
-                if firstError == nil { firstError = error }
-                continue
-            }
-            process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                if firstError == nil {
+                let result = try BoundedProcessRunner.run(
+                    executableURL: resolvedExecutableURL,
+                    arguments: arguments,
+                    timeout: 10
+                )
+                if result.status != 0, firstError == nil {
                     firstError = FocusError.commandFailed(
-                        process.executableURL?.path ?? "command",
-                        process.terminationStatus
+                        resolvedExecutableURL.path,
+                        result.status
                     )
                 }
+            } catch {
+                if firstError == nil { firstError = error }
             }
         }
         if let firstError { throw firstError }
