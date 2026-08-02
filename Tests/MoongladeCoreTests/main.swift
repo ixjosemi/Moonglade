@@ -8770,6 +8770,74 @@ func testProcessCommandCacheForgetsProcessesMissingFromLatestScan() throws {
     try expect(reads, equals: 2, "entries for vanished processes are dropped instead of accumulating")
 }
 
+/// Counts descriptors this process currently holds. The directory watchers
+/// close theirs from a dispatch source cancel handler, so a watcher that is
+/// never cancelled shows up here and nowhere else.
+private func openFileDescriptorCount() -> Int {
+    var count = 0
+    for descriptor in 0..<Int32(getdtablesize()) where Darwin.fcntl(descriptor, F_GETFD) != -1 {
+        count += 1
+    }
+    return count
+}
+
+func testReleasingTheSchedulerClosesItsDirectoryWatchers() throws {
+    // The scheduler owns O_EVTONLY descriptors on the Codex and Convoy
+    // directories. Dropping the last reference has to cancel those sources:
+    // a teardown that only schedules work onto the internal queue can never
+    // run, because nothing is left to run it for.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let stateDirectory = root.appendingPathComponent("state")
+    let codexSessions = root.appendingPathComponent("codex-sessions")
+    let convoyRuns = root.appendingPathComponent("convoy-runs")
+    for directory in [stateDirectory, codexSessions, convoyRuns] {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    func runOneSchedulerLifetime() {
+        let scheduler = ObservationScheduler(
+            repository: StateRepository(directoryURL: stateDirectory),
+            processScanner: TestProcessScanner([]),
+            codexSessionsDirectoryURL: codexSessions,
+            convoyRunsDirectoryURL: convoyRuns,
+            heartbeatInterval: 3_600,
+            debounceInterval: 0.01
+        )
+        scheduler.start()
+        scheduler.waitUntilIdle()
+    }
+
+    // The first lifetime warms every lazily created singleton the scheduler
+    // touches, so the baseline measures descriptors and nothing else.
+    runOneSchedulerLifetime()
+    let baseline = try settledFileDescriptorCount(notExceeding: .max)
+    for _ in 0..<5 {
+        runOneSchedulerLifetime()
+    }
+
+    // A dispatch source closes its descriptor from a cancel handler that runs
+    // on the source's own queue, so teardown lands shortly after the release
+    // rather than during it. Leaked descriptors never come back.
+    try expect(
+        try settledFileDescriptorCount(notExceeding: baseline) <= baseline,
+        equals: true,
+        "a released scheduler leaves no directory watcher descriptor open"
+    )
+}
+
+/// Samples the descriptor count until it drops to `limit` or a deadline
+/// passes, so an asynchronous close is waited for rather than raced.
+private func settledFileDescriptorCount(notExceeding limit: Int) throws -> Int {
+    let deadline = Date().addingTimeInterval(2)
+    var count = openFileDescriptorCount()
+    while count > limit, Date() < deadline {
+        usleep(20_000)
+        count = openFileDescriptorCount()
+    }
+    return count
+}
+
 func testEveryCommandCacheScanEndsWithoutBookkeeping() throws {
     // Per-scan request sets are the cache's only unbounded structure. A scan
     // that ends — swept, superseded, or abandoned — must leave nothing behind,
@@ -9068,6 +9136,7 @@ let tests: [(String, () throws -> Void)] = [
     ("process command cache forgets processes missing from latest scan", testProcessCommandCacheForgetsProcessesMissingFromLatestScan),
     ("every command cache scan ends without bookkeeping", testEveryCommandCacheScanEndsWithoutBookkeeping),
     ("an abandoned scan does not evict live command cache entries", testAnAbandonedScanDoesNotEvictLiveCommandCacheEntries),
+    ("releasing the scheduler closes its directory watchers", testReleasingTheSchedulerClosesItsDirectoryWatchers),
     ("reaper prunes superseded sessions for same process", testReaperPrunesSupersededSessionsForSameProcess),
     ("reaper prefers native session over newer fallback", testReaperPrefersNativeSessionOverNewerFallback),
     ("observation scheduler tick persists fallback state", testObservationSchedulerTickPersistsFallbackState),

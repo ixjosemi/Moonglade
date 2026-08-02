@@ -74,7 +74,16 @@ public final class ObservationScheduler {
         reaper = ReaperService(repository: repository, processScanner: processScanner)
     }
 
-    deinit { stop() }
+    /// `stop()` cannot run here: its work is queued behind a weak reference
+    /// that is already gone by the time the queue drains, so the descriptors
+    /// the watchers hold would never be closed. Nothing else can reach this
+    /// instance any more — a pending block would have kept it alive — so the
+    /// confined state is safe to touch directly.
+    deinit {
+        idleWaiters.forEach { $0.signal() }
+        idleWaiters.removeAll()
+        cancelObservationSources()
+    }
 
     public func start() {
         stop()
@@ -170,17 +179,27 @@ public final class ObservationScheduler {
             self.idleWaiters.forEach { $0.signal() }
             self.idleWaiters.removeAll()
             self.lastVerifiedProcesses = nil
-            self.codexDirectorySource?.cancel()
-            self.codexDirectorySource = nil
-            self.heartbeatTimer?.cancel()
-            self.heartbeatTimer = nil
-            self.convoyRunsDirectorySource?.cancel()
-            self.convoyRunsDirectorySource = nil
-            self.convoyRunDirectorySources.values.forEach { $0.cancel() }
-            self.convoyRunDirectorySources.removeAll()
-            self.exitWatchers.values.forEach { $0.cancel() }
-            self.exitWatchers.removeAll()
+            self.cancelObservationSources()
         }
+    }
+
+    /// Cancels every dispatch source this scheduler owns. The file-system
+    /// sources close their descriptors from a cancel handler, so skipping this
+    /// leaks one descriptor per watched directory.
+    ///
+    /// Called on `workQueue` from `stop()`, and off it from `deinit`, which is
+    /// the one point where no other reference to this instance can exist.
+    private func cancelObservationSources() {
+        codexDirectorySource?.cancel()
+        codexDirectorySource = nil
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+        convoyRunsDirectorySource?.cancel()
+        convoyRunsDirectorySource = nil
+        convoyRunDirectorySources.values.forEach { $0.cancel() }
+        convoyRunDirectorySources.removeAll()
+        exitWatchers.values.forEach { $0.cancel() }
+        exitWatchers.removeAll()
     }
 
     public func requestTick() {
