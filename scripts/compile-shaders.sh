@@ -4,13 +4,13 @@
 # run this after editing Sources/MoongladeApp/Ripple.metal and commit the
 # regenerated default.metallib alongside it.
 #
-# Requires the Metal toolchain: xcodebuild -downloadComponent MetalToolchain
+# Requires the full Xcode Metal toolchain; Command Line Tools do not include
+# the `metal` compiler.
 set -eu
 
 cd "$(dirname "$0")/.."
 mkdir -p Sources/MoongladeApp/Resources
 xcrun -sdk macosx metal \
-    -mmacos-version-min=14.0 \
     Sources/MoongladeApp/Ripple.metal \
     -o Sources/MoongladeApp/Resources/default.metallib
 echo "Wrote Sources/MoongladeApp/Resources/default.metallib"

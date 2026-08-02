@@ -19,7 +19,7 @@ jobs:
       - name: Detect shader drift
         run: |
           tmp="$(mktemp -d)/default.metallib"
-          xcrun -sdk macosx metal -mmacos-version-min=14.0 \
+           xcrun -sdk macosx metal \
             Sources/MoongladeApp/Ripple.metal -o "$tmp"
           cmp "$tmp" Sources/MoongladeApp/Resources/default.metallib
   test:
