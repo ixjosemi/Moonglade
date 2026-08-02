@@ -287,7 +287,16 @@ public struct StateRepository: Sendable {
     }
 
     package func pruneOrphanedEnrichments(against snapshot: StateSnapshot) throws {
-        let ownedFileNames = Set(try snapshot.lifecycleSessions.map(enrichmentFileName(for:)))
+        var ownedFileNames = Set(try snapshot.lifecycleSessions.map(enrichmentFileName(for:)))
+        // A Convoy-owned OpenCode document is deliberately never decoded, so it
+        // cannot appear in the lifecycle list. Its owner is alive all the same:
+        // ownership suppresses a phase session from the UI, it does not retire
+        // the plugin's document or the overlay bound to it.
+        for sessionID in snapshot.convoyOwnedOpenCodeSessionIDs {
+            ownedFileNames.insert(
+                try enrichmentFileName(tool: .opencode, sessionID: sessionID)
+            )
+        }
         let fileURLs: [URL]
         do {
             fileURLs = try FileManager.default.contentsOfDirectory(

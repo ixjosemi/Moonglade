@@ -579,6 +579,72 @@ func testConvoyOwnedOpenCodeDocumentsAreNotDecoded() throws {
     try expect(StateRepository.documentsDecodedForTesting, equals: 1, "owned OpenCode is not decoded")
 }
 
+func testPruningKeepsOverlaysForConvoyOwnedOpenCodeSessions() throws {
+    // Skipping the decode of a Convoy-owned document keeps it out of the
+    // lifecycle list, but the document and its overlay are still owned and
+    // still on disk. Orphan pruning reads that list, so it must not mistake a
+    // suppressed session for one whose owner is gone.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let owned = AgentSession(
+        tool: .opencode,
+        sessionID: "owned-phase",
+        pid: Int32(getpid()),
+        status: .working,
+        cwd: "/tmp/owned-phase",
+        startedAt: Date(timeIntervalSince1970: 1),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    )
+    try repository.save(owned)
+    var snapshot = try repository.loadSnapshot()
+    _ = try repository.saveEnrichment(
+        for: owned,
+        process: DetectedAgentProcess(
+            tool: .opencode,
+            processID: Int32(getpid()),
+            processIdentity: SystemProcessScanner.processIdentity(of: Int32(getpid())),
+            cwd: "/tmp/owned-phase",
+            terminal: TerminalContext(termProgram: "ghostty", tty: "/dev/ttys001")
+        ),
+        terminal: TerminalContext(termProgram: "ghostty", tty: "/dev/ttys001"),
+        updating: &snapshot
+    )
+    let overlayURL = try FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil
+    ).first { $0.pathExtension == "overlay" }.unwrap(or: "overlay was not written")
+    try repository.mergeConvoyOwnedOpenCodeSessionIDs(["owned-phase"])
+
+    try repository.pruneOrphanedEnrichments(against: try repository.loadSnapshot())
+
+    try expect(
+        FileManager.default.fileExists(atPath: overlayURL.path),
+        equals: true,
+        "a suppressed session's overlay is not an orphan"
+    )
+}
+
+func testPruningRemovesOverlaysWithNoLifecycleOwner() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let orphanURL = directory.appendingPathComponent("enrichment-claude-b3JwaGFu.overlay")
+    try Data("{}".utf8).write(to: orphanURL)
+
+    try repository.pruneOrphanedEnrichments(against: try repository.loadSnapshot())
+
+    try expect(
+        FileManager.default.fileExists(atPath: orphanURL.path),
+        equals: false,
+        "an overlay with no lifecycle owner is still pruned"
+    )
+}
+
 func testStateFilenameIdentifierRoundTripsSpecialCharacters() throws {
     let repository = StateRepository(directoryURL: FileManager.default.temporaryDirectory)
     let identifier = "session/+with/slash"
@@ -9173,6 +9239,8 @@ let tests: [(String, () throws -> Void)] = [
     ("installing through a symlinked settings file writes the target", testInstallingThroughASymlinkedSettingsFileWritesTheTarget),
     ("preparing an already-private directory does not touch its mode", testPreparingAnAlreadyPrivateDirectoryDoesNotTouchItsMode),
     ("Convoy-owned OpenCode documents are not decoded", testConvoyOwnedOpenCodeDocumentsAreNotDecoded),
+    ("pruning keeps overlays for Convoy-owned OpenCode sessions", testPruningKeepsOverlaysForConvoyOwnedOpenCodeSessions),
+    ("pruning removes overlays with no lifecycle owner", testPruningRemovesOverlaysWithNoLifecycleOwner),
     ("concurrent state writers do not interleave", testConcurrentStateWritersDoNotInterleave),
     ("removing a session takes the same write lock as saving", testRemovingASessionTakesTheSameWriteLockAsSaving),
     ("state filename identifier round trips special characters", testStateFilenameIdentifierRoundTripsSpecialCharacters),
