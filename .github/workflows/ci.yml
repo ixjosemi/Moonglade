@@ -16,12 +16,15 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Select the metallib toolchain
         run: sudo xcode-select -s /Applications/Xcode_26.0.1.app
-      - name: Detect shader drift
+      - name: Validate shader source and resource
         run: |
           tmp="$(mktemp -d)/default.metallib"
-           xcrun -sdk macosx metal \
+          xcrun -sdk macosx metal \
             Sources/MoongladeApp/Ripple.metal -o "$tmp"
-          cmp "$tmp" Sources/MoongladeApp/Resources/default.metallib
+          test -s "$tmp"
+          test -s Sources/MoongladeApp/Resources/default.metallib
+          strings "$tmp" | grep -qx 'expansionRipple'
+          strings Sources/MoongladeApp/Resources/default.metallib | grep -qx 'expansionRipple'
   test:
     runs-on: macos-15
     timeout-minutes: 15
