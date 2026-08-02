@@ -35,7 +35,10 @@ public enum SessionMenuLayout {
     public static func expandedActionsHeight(for mode: ActionMode) -> CGFloat {
         switch mode {
         case .menu:
-            return 4 * 32 + 3 * 1 + 4 + 9
+            let actionRowsHeight: CGFloat = 4 * 32
+            let separatorHeight: CGFloat = 3
+            let verticalInsets: CGFloat = 4 + 9
+            return actionRowsHeight + separatorHeight + verticalInsets
         case .renaming:
             return 34
         case .confirmingKill:
