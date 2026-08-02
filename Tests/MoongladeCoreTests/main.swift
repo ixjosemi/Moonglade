@@ -8718,8 +8718,9 @@ func testProcessCommandCacheReadsEachProcessGenerationOnce() throws {
         reads += 1
         return ProcessCommand(executablePath: "/usr/local/bin/claude", leadingArguments: ["claude"])
     }
-    let first = cache.command(for: identity, read: read)
-    let second = cache.command(for: identity, read: read)
+    let scan = cache.beginScan()
+    let first = cache.command(for: identity, scanToken: scan, read: read)
+    let second = cache.command(for: identity, scanToken: scan, read: read)
     try expect(reads, equals: 1, "an immutable command line is read once per process generation")
     try expect(first, equals: second, "the cached snapshot is returned verbatim")
 }
@@ -8731,11 +8732,16 @@ func testProcessCommandCacheRereadsRecycledProcessIdentifier() throws {
         reads += 1
         return ProcessCommand(executablePath: path, leadingArguments: [])
     }
-    _ = cache.command(for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)) {
+    let scan = cache.beginScan()
+    _ = cache.command(
+        for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1),
+        scanToken: scan
+    ) {
         read(path: "/bin/zsh")
     }
     let recycled = cache.command(
-        for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 2)
+        for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 2),
+        scanToken: scan
     ) {
         read(path: "/usr/local/bin/claude")
     }
@@ -8755,11 +8761,58 @@ func testProcessCommandCacheForgetsProcessesMissingFromLatestScan() throws {
         reads += 1
         return ProcessCommand(executablePath: "/bin/zsh", leadingArguments: [])
     }
-    _ = cache.command(for: identity, read: read)
-    cache.sweep() // the scan that saw the process keeps its entry
-    cache.sweep() // the next scan does not, so the entry goes
-    _ = cache.command(for: identity, read: read)
+    let seen = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: seen, read: read)
+    cache.sweep(scanToken: seen) // the scan that saw the process keeps its entry
+    cache.sweep(scanToken: cache.beginScan()) // the next scan does not, so the entry goes
+    let later = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: later, read: read)
     try expect(reads, equals: 2, "entries for vanished processes are dropped instead of accumulating")
+}
+
+func testEveryCommandCacheScanEndsWithoutBookkeeping() throws {
+    // Per-scan request sets are the cache's only unbounded structure. A scan
+    // that ends — swept, superseded, or abandoned — must leave nothing behind,
+    // or the bookkeeping outgrows the table it exists to bound.
+    let cache = ProcessCommandCache()
+    let identity = ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)
+    func read() -> ProcessCommand {
+        ProcessCommand(executablePath: "/bin/zsh", leadingArguments: [])
+    }
+    for _ in 0..<4 {
+        let token = cache.beginScan()
+        _ = cache.command(for: identity, scanToken: token, read: read)
+        cache.sweep(scanToken: token)
+    }
+    let superseded = cache.beginScan()
+    let latest = cache.beginScan()
+    cache.sweep(scanToken: superseded)
+    cache.sweep(scanToken: latest)
+    cache.discardScan(cache.beginScan())
+
+    try expect(cache.trackedScanCount, equals: 0, "no scan bookkeeping outlives its scan")
+}
+
+func testAnAbandonedScanDoesNotEvictLiveCommandCacheEntries() throws {
+    // A scan that fails before it lists the process table gathered no
+    // eviction evidence, so it must defer to the last complete scan rather
+    // than dropping entries that scan proved live.
+    let cache = ProcessCommandCache()
+    let identity = ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)
+    var reads = 0
+    func read() -> ProcessCommand {
+        reads += 1
+        return ProcessCommand(executablePath: "/bin/zsh", leadingArguments: [])
+    }
+    let complete = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: complete, read: read)
+    cache.sweep(scanToken: complete)
+
+    cache.discardScan(cache.beginScan())
+
+    let next = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: next, read: read)
+    try expect(reads, equals: 1, "an abandoned scan evicts nothing")
 }
 
 private func orderedTestSession(
@@ -9013,6 +9066,8 @@ let tests: [(String, () throws -> Void)] = [
     ("process command cache reads each process generation once", testProcessCommandCacheReadsEachProcessGenerationOnce),
     ("process command cache rereads recycled process identifier", testProcessCommandCacheRereadsRecycledProcessIdentifier),
     ("process command cache forgets processes missing from latest scan", testProcessCommandCacheForgetsProcessesMissingFromLatestScan),
+    ("every command cache scan ends without bookkeeping", testEveryCommandCacheScanEndsWithoutBookkeeping),
+    ("an abandoned scan does not evict live command cache entries", testAnAbandonedScanDoesNotEvictLiveCommandCacheEntries),
     ("reaper prunes superseded sessions for same process", testReaperPrunesSupersededSessionsForSameProcess),
     ("reaper prefers native session over newer fallback", testReaperPrefersNativeSessionOverNewerFallback),
     ("observation scheduler tick persists fallback state", testObservationSchedulerTickPersistsFallbackState),

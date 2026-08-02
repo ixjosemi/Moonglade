@@ -76,11 +76,22 @@ public struct SystemProcessScanner: ProcessScanning {
 
     public func basicActiveProcesses() throws -> [DetectedAgentProcess] {
         let scanToken = commandCache.beginScan()
-        let classified = try Self.allProcessIDs().compactMap { processID in
+        let processIDs: [pid_t]
+        do {
+            processIDs = try Self.allProcessIDs()
+        } catch {
+            // Without the process table this scan saw nothing, so it has no
+            // eviction evidence to offer — release its bookkeeping and leave
+            // the previous scan's entries alone.
+            commandCache.discardScan(scanToken)
+            throw error
+        }
+        let classified = processIDs.compactMap { processID in
             detectAgentProcess(processID, scanToken: scanToken)
         }
-        // A scan asks the command cache about every visible process, so
-        // sweeping here evicts exactly the ones that have since exited.
+        // A scan asks the command cache about every visible process and every
+        // terminal ancestor it walks, so sweeping here evicts exactly the ones
+        // that have since exited.
         commandCache.sweep(scanToken: scanToken)
         return Self.droppingRuntimeLaunchers(classified)
     }
@@ -163,7 +174,7 @@ public struct SystemProcessScanner: ProcessScanning {
                 processIdentity: identity,
                 cwd: cwd,
                 terminal: TerminalContext(
-                    termProgram: hostTerminalProgram(descendant: bsdInfo),
+                    termProgram: hostTerminalProgram(descendant: bsdInfo, scanToken: scanToken),
                     tty: Self.controllingTTY(bsdInfo)
                 ),
                 elapsedSeconds: max(0, Date().timeIntervalSince1970 - startedAt)
@@ -215,11 +226,11 @@ public struct SystemProcessScanner: ProcessScanning {
     /// Both the kernel-resolved executable path and argv[0] are checked, for
     /// the same reason as agent matching: either side may hide behind a
     /// symlink. The walk is bounded and stops at launchd.
-    private func hostTerminalProgram(descendant: proc_bsdinfo) -> String? {
+    private func hostTerminalProgram(descendant: proc_bsdinfo, scanToken: UUID) -> String? {
         var ancestorProcessID = pid_t(descendant.pbi_ppid)
         for _ in 0..<8 {
             guard ancestorProcessID > 1 else { return nil }
-            if let program = terminalProgram(ofProcess: ancestorProcessID) {
+            if let program = terminalProgram(ofProcess: ancestorProcessID, scanToken: scanToken) {
                 return program
             }
             guard let parent = Self.parentProcessID(of: ancestorProcessID) else { return nil }
@@ -248,8 +259,8 @@ public struct SystemProcessScanner: ProcessScanning {
         return info.kp_eproc.e_ppid
     }
 
-    private func terminalProgram(ofProcess processID: pid_t) -> String? {
-        Self.classify(command(ofProcess: processID)) { identifier in
+    private func terminalProgram(ofProcess processID: pid_t, scanToken: UUID) -> String? {
+        Self.classify(command(ofProcess: processID, scanToken: scanToken)) { identifier in
             Self.terminalAppMarkers.first { identifier.contains($0.pathMarker) }?.termProgram
         }
     }
@@ -334,7 +345,7 @@ public struct SystemProcessScanner: ProcessScanning {
     /// identity is unreadable — root-owned intermediaries such as
     /// /usr/bin/login deny proc_pidinfo — is read directly rather than filed
     /// under a key that cannot tell its generations apart.
-    private func command(ofProcess processID: pid_t, scanToken: UUID? = nil) -> ProcessCommand {
+    private func command(ofProcess processID: pid_t, scanToken: UUID) -> ProcessCommand {
         guard let identity = Self.processIdentity(of: processID) else {
             return Self.readCommand(ofProcess: processID)
         }
@@ -344,15 +355,12 @@ public struct SystemProcessScanner: ProcessScanning {
     private func command(
         ofProcess processID: pid_t,
         identity: ProcessIdentity,
-        scanToken: UUID? = nil
+        scanToken: UUID
     ) -> ProcessCommand {
-        if let scanToken {
-            return commandCache.command(
-                for: identity,
-                scanToken: scanToken
-            ) { Self.readCommand(ofProcess: processID) }
-        }
-        return commandCache.command(for: identity) { Self.readCommand(ofProcess: processID) }
+        commandCache.command(
+            for: identity,
+            scanToken: scanToken
+        ) { Self.readCommand(ofProcess: processID) }
     }
 
     /// Four arguments are enough for every classifier: argv[0] names the
