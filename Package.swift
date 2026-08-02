@@ -26,7 +26,13 @@ let package = Package(
             // swift build does not compile Metal sources, so the shader ships
             // as a prebuilt default.metallib; regenerate it from Ripple.metal
             // with scripts/compile-shaders.sh after editing the source.
-            exclude: ["Ripple.metal"],
+            // The hash stamp records which source the committed library was
+            // built from. CI reads it to detect drift; nothing loads it at
+            // runtime, so it ships with the source and stays out of the bundle.
+            exclude: [
+                "Ripple.metal",
+                "Resources/default.metallib.source-sha256",
+            ],
             resources: [.copy("Resources/default.metallib")]
         ),
         .executableTarget(
