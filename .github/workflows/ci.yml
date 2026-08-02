@@ -10,10 +10,12 @@ permissions:
 
 jobs:
   shader:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Select the metallib toolchain
+        run: sudo xcode-select -s /Applications/Xcode_26.0.1.app
       - name: Detect shader drift
         run: |
           tmp="$(mktemp -d)/default.metallib"
