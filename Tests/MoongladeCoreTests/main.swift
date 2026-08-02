@@ -9325,6 +9325,68 @@ func testHoverSelectionDropsEverythingWhenTheListIsReplaced() throws {
     )
 }
 
+func testActionListHoverGeometryResolvesTheRowUnderThePointer() throws {
+    // Enter/exit pairs from animated tracking areas arrive late or out of
+    // order; deriving the highlight from the pointer's list-local position on
+    // every move cannot lag behind the pointer.
+    let width: CGFloat = 200
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: 0, listWidth: width, rowCount: 4),
+        equals: 0,
+        "the list's top edge belongs to the first row"
+    )
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: 31.9, listWidth: width, rowCount: 4),
+        equals: 0,
+        "the bottom of the first row still highlights it"
+    )
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: 32.5, listWidth: width, rowCount: 4),
+        equals: 0,
+        "the hairline gap joins the row above it — no dead zones inside the list"
+    )
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: 33, listWidth: width, rowCount: 4),
+        equals: 1,
+        "crossing the gap hands the highlight to the next row"
+    )
+    // Four rows of 32 with three 1pt gaps span 131 points.
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: 130.9, listWidth: width, rowCount: 4),
+        equals: 3,
+        "the bottom of the last row still highlights it"
+    )
+}
+
+func testActionListHoverGeometryRejectsPointsOutsideTheList() throws {
+    let width: CGFloat = 200
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: -0.1, listWidth: width, rowCount: 4),
+        equals: nil,
+        "above the list nothing is highlighted"
+    )
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: 131, listWidth: width, rowCount: 4),
+        equals: nil,
+        "below the last row nothing is highlighted"
+    )
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: -1, y: 10, listWidth: width, rowCount: 4),
+        equals: nil,
+        "left of the list nothing is highlighted"
+    )
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 200, y: 10, listWidth: width, rowCount: 4),
+        equals: nil,
+        "the trailing edge is exclusive"
+    )
+    try expect(
+        SessionMenuLayout.actionRowIndex(x: 10, y: 10, listWidth: width, rowCount: 0),
+        equals: nil,
+        "an empty list has no rows to highlight"
+    )
+}
+
 func testInlineActionsClickGateLetsPlainHoverThrough() throws {
     // The whole point: with no button held the catcher must be transparent, or
     // it swallows every hover and click aimed at the row beneath it.
@@ -9612,6 +9674,8 @@ let tests: [(String, () throws -> Void)] = [
     ("hover selection survives an exit that arrives after the next enter", testHoverSelectionSurvivesAnExitThatArrivesAfterTheNextEnter),
     ("hover selection clears when the selected row exits", testHoverSelectionClearsWhenTheSelectedRowExits),
     ("hover selection drops everything when the list is replaced", testHoverSelectionDropsEverythingWhenTheListIsReplaced),
+    ("action list hover geometry resolves the row under the pointer", testActionListHoverGeometryResolvesTheRowUnderThePointer),
+    ("action list hover geometry rejects points outside the list", testActionListHoverGeometryRejectsPointsOutsideTheList),
     ("inline actions click gate lets plain hover through", testInlineActionsClickGateLetsPlainHoverThrough),
     ("inline actions click gate claims right and control clicks", testInlineActionsClickGateClaimsRightAndControlClicks),
 ]

@@ -1057,6 +1057,7 @@ private struct SessionRow: View {
     /// nothing ever floats outside the notch silhouette.
     private enum ActionMode { case menu, renaming, confirmingKill }
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @State private var branchName: String?
     @State private var mode: ActionMode = .menu
@@ -1065,6 +1066,10 @@ private struct SessionRow: View {
     /// the whole list, so an exit that arrives late cannot unlight the entry
     /// the pointer actually reached.
     @State private var hoveredAction = HoverSelection<String>()
+    /// Measured width of the inline menu list, fed to the geometric hover
+    /// resolver. Zero until the first layout pass; the per-row fallback
+    /// covers that window.
+    @State private var actionListWidth: CGFloat = 0
     @FocusState private var renameFieldIsFocused: Bool
 
     var body: some View {
@@ -1212,108 +1217,241 @@ private struct SessionRow: View {
         _ label: String,
         systemImage: String,
         isDestructive: Bool = false,
-        fillsWidth: Bool = true,
         action: @escaping () -> Void
     ) -> ActionListRow {
         ActionListRow(
             label: label,
             systemImage: systemImage,
             isDestructive: isDestructive,
-            fillsWidth: fillsWidth,
             isHovered: hoveredAction.hovered == label,
             setHovered: { hoveredAction.update(label, isHovered: $0) },
             action: action
         )
     }
 
+    /// One source of order for the inline menu: the rows render from this
+    /// array and the continuous-hover resolver indexes back into it, so the
+    /// highlight can never disagree with the visible order.
+    private var menuActions: [InlineMenuAction] {
+        [
+            InlineMenuAction(label: "Rename Session", systemImage: "pencil", perform: beginRename),
+            InlineMenuAction(label: "Copy Project Path", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(session.cwd, forType: .string)
+                toggleActions()
+            },
+            InlineMenuAction(label: "Reveal in Finder", systemImage: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting(
+                    [URL(fileURLWithPath: session.cwd)]
+                )
+                toggleActions()
+            },
+            InlineMenuAction(label: "Kill Session", systemImage: "xmark.octagon", isDestructive: true) {
+                switchMode(to: .confirmingKill)
+            },
+        ]
+    }
+
     @ViewBuilder
     private var actionArea: some View {
         switch mode {
         case .menu:
-            VStack(spacing: 1) {
-                actionRow("Rename Session", systemImage: "pencil") {
-                    beginRename()
-                }
-                actionRow("Copy Project Path", systemImage: "doc.on.doc") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(session.cwd, forType: .string)
-                    toggleActions()
-                }
-                actionRow("Reveal in Finder", systemImage: "folder") {
-                    NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: session.cwd)]
-                    )
-                    toggleActions()
-                }
-                actionRow(
-                    "Kill Session",
-                    systemImage: "xmark.octagon",
-                    isDestructive: true
-                ) {
-                    mode = .confirmingKill
-                }
-            }
+            menuActionList
+                .transition(.opacity)
         case .renaming:
-            HStack(spacing: 6) {
-                TextField(session.projectName, text: $renameDraft)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .focused($renameFieldIsFocused)
-                    .onSubmit(commitRename)
-                    .onExitCommand(perform: cancelRename)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(.white.opacity(0.1))
-                    )
+            // The field wears the same glass as the action rows — hairline
+            // border over a whisper of light — and answers focus by waking
+            // the hairline rather than growing chrome.
+            HStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.5))
+                    TextField(session.projectName, text: $renameDraft)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.94))
+                        .focused($renameFieldIsFocused)
+                        .onSubmit(commitRename)
+                        .onExitCommand(perform: cancelRename)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: SessionMenuLayout.actionRowHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(.white.opacity(renameFieldIsFocused ? 0.08 : 0.05))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(
+                                    .white.opacity(renameFieldIsFocused ? 0.22 : 0.1),
+                                    lineWidth: 0.5
+                                )
+                        )
+                )
                 iconButton("checkmark", accessibilityLabel: "Save name", action: commitRename)
                 iconButton("xmark", accessibilityLabel: "Cancel rename", action: cancelRename)
             }
+            .padding(.horizontal, 2)
+            .transition(.opacity)
         case .confirmingKill:
-            HStack(spacing: 8) {
+            // One calm line: the question breathes at the leading edge and
+            // the verdict waits at the trailing one — capsules echoing the
+            // pill silhouette, with the destructive one in red glass.
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.octagon.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.red.opacity(0.85))
                 Text("Kill the process and close its pane?")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.78))
                     .lineLimit(1)
-                Spacer(minLength: 0)
-                actionRow(
-                    "Kill",
-                    systemImage: "xmark.octagon",
-                    isDestructive: true,
-                    fillsWidth: false
-                ) {
+                Spacer(minLength: 8)
+                confirmCapsule("Cancel", isDestructive: false) {
+                    switchMode(to: .menu)
+                }
+                confirmCapsule("Kill", isDestructive: true) {
                     kill(session)
                     toggleActions()
                 }
-                actionRow("Cancel", systemImage: "arrow.uturn.backward", fillsWidth: false) {
-                    mode = .menu
-                }
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 4)
+            .frame(height: SessionMenuLayout.actionRowHeight)
+            .transition(.opacity)
+        }
+    }
+
+    /// The list resolves its highlight geometrically on every pointer sample:
+    /// per-row `.onHover` still runs as the fallback for a pointer that is
+    /// already resting where a row appears, but any movement recomputes the
+    /// selection from the pointer's position, so the highlight can never trail
+    /// the pointer while the expansion spring is replacing tracking areas.
+    private var menuActionList: some View {
+        let actions = menuActions
+        return VStack(spacing: SessionMenuLayout.actionRowSpacing) {
+            ForEach(actions) { entry in
+                actionRow(
+                    entry.label,
+                    systemImage: entry.systemImage,
+                    isDestructive: entry.isDestructive,
+                    action: entry.perform
+                )
+            }
+        }
+        .background(
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { actionListWidth = geometry.size.width }
+                    .onChange(of: geometry.size.width) { _, width in
+                        actionListWidth = width
+                    }
+            }
+        )
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case let .active(location):
+                guard let index = SessionMenuLayout.actionRowIndex(
+                    x: location.x,
+                    y: location.y,
+                    listWidth: actionListWidth,
+                    rowCount: actions.count
+                ) else { return }
+                // Samples arrive at pointer frequency; only a change in the
+                // resolved entry may invalidate the view.
+                let label = actions[index].label
+                guard hoveredAction.hovered != label else { return }
+                hoveredAction.update(label, isHovered: true)
+            case .ended:
+                guard hoveredAction.hovered != nil else { return }
+                hoveredAction.clear()
             }
         }
     }
 
+    /// Rename's confirm/cancel: circles cut from the same glass as the rows,
+    /// sized against the field so the trio reads as one control.
     private func iconButton(
         _ systemImage: String,
         accessibilityLabel: String,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let isHovered = hoveredAction.hovered == accessibilityLabel
+        return Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.75))
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(.white.opacity(0.08)))
+                .foregroundStyle(.white.opacity(isHovered ? 0.95 : 0.7))
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(.white.opacity(isHovered ? 0.13 : 0.06))
+                        .overlay(
+                            Circle().strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
+                        )
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .onHover { hoveredAction.update(accessibilityLabel, isHovered: $0) }
         .accessibilityLabel(accessibilityLabel)
+    }
+
+    /// Kill confirmation verdicts: capsules matching the app's pill
+    /// silhouette. The destructive one wears red glass; the neutral one the
+    /// standard hairline treatment.
+    private func confirmCapsule(
+        _ label: String,
+        isDestructive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isHovered = hoveredAction.hovered == label
+        return Button(action: action) {
+            Text(label)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(
+                    isDestructive
+                        ? Color.red.opacity(isHovered ? 1 : 0.9)
+                        : Color.white.opacity(isHovered ? 0.95 : 0.8)
+                )
+                .padding(.horizontal, 13)
+                .frame(height: 26)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(
+                            isDestructive
+                                ? Color.red.opacity(isHovered ? 0.28 : 0.16)
+                                : Color.white.opacity(isHovered ? 0.13 : 0.06)
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(
+                                    isDestructive
+                                        ? Color.red.opacity(0.35)
+                                        : Color.white.opacity(0.1),
+                                    lineWidth: 0.5
+                                )
+                        )
+                )
+                .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveredAction.update(label, isHovered: $0) }
+        .accessibilityLabel(label)
+    }
+
+    /// Sub-mode swaps cross-fade with the same spring the row opened with,
+    /// so the area reads as one surface changing its mind rather than a
+    /// hard cut between unrelated panels.
+    private func switchMode(to newMode: ActionMode) {
+        withAnimation(
+            reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.9)
+        ) {
+            mode = newMode
+        }
     }
 
     private func beginRename() {
         renameDraft = renamePrefill
-        mode = .renaming
+        switchMode(to: .renaming)
         // The panel refuses key status except during this edit; grant it
         // first, then focus the field once the window can accept it.
         setKeyboardFocus(true)
@@ -1328,7 +1466,7 @@ private struct SessionRow: View {
 
     private func cancelRename() {
         endRenameKeyboard()
-        mode = .menu
+        switchMode(to: .menu)
     }
 
     private func endRenameKeyboard() {
@@ -1359,6 +1497,16 @@ private struct SettingsGearButton: View {
     }
 }
 
+/// A menu entry of the inline action list, held as data so the rendered
+/// order and the geometric hover resolver share one definition.
+private struct InlineMenuAction: Identifiable {
+    let label: String
+    let systemImage: String
+    var isDestructive = false
+    let perform: () -> Void
+    var id: String { label }
+}
+
 /// One entry of the inline action list: icon, label, hover highlight — the
 /// look of a menu item, rendered inside the row instead of a floating menu.
 /// The metrics line up optically with the roomier session row above while
@@ -1367,12 +1515,10 @@ private struct ActionListRow: View {
     let label: String
     let systemImage: String
     var isDestructive = false
-    /// List entries span the row; the kill-confirmation buttons keep their
-    /// natural width so the question stays on the same line.
-    var fillsWidth = true
     /// Hover is owned by the enclosing row's `HoverSelection`, not by a flag
     /// per entry: sibling flags disagree when a fast pointer makes AppKit
-    /// deliver the hand-off out of order. `SessionRow.actionRow` binds these.
+    /// deliver the hand-off out of order. `SessionRow.actionRow` binds these,
+    /// and the list-level continuous hover overwrites them from geometry.
     let isHovered: Bool
     let setHovered: (Bool) -> Void
     let action: () -> Void
@@ -1385,9 +1531,7 @@ private struct ActionListRow: View {
                     .frame(width: 14)
                 Text(label)
                     .font(.system(size: 12.5, weight: .medium))
-                if fillsWidth {
-                    Spacer(minLength: 0)
-                }
+                Spacer(minLength: 0)
             }
             .foregroundStyle(
                 isDestructive
@@ -1395,11 +1539,13 @@ private struct ActionListRow: View {
                     : Color.white.opacity(isHovered ? 0.95 : 0.8)
             )
             .padding(.horizontal, 10)
-            .frame(height: 32)
-            .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
+            // The height feeds `SessionMenuLayout.actionRowIndex`; a literal
+            // here would silently desynchronize the hover resolver.
+            .frame(height: SessionMenuLayout.actionRowHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(backgroundOpacity)
+                    .fill(backgroundFill)
             )
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
@@ -1407,12 +1553,11 @@ private struct ActionListRow: View {
         .onHover(perform: setHovered)
     }
 
-    private var backgroundOpacity: Color {
+    private var backgroundFill: Color {
         if isDestructive && isHovered {
             return .red.opacity(0.18)
         }
-        let restingOpacity = fillsWidth ? 0.0 : 0.08
-        return .white.opacity(isHovered ? 0.1 : restingOpacity)
+        return .white.opacity(isHovered ? 0.1 : 0)
     }
 }
 
