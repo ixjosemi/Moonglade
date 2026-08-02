@@ -297,19 +297,21 @@ public struct StateRepository: Sendable {
         } catch CocoaError.fileReadNoSuchFile {
             return
         }
-        for fileURL in fileURLs
-            where isRecognizedEnrichmentFile(fileURL)
-                && !ownedFileNames.contains(fileURL.lastPathComponent) {
-            var metadata = stat()
-            guard Darwin.lstat(fileURL.path, &metadata) == 0 else {
-                if errno == ENOENT { continue }
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-            guard metadata.st_uid == getuid() else {
-                throw StateRepositoryError.insecureDirectory
-            }
-            if Darwin.unlink(fileURL.path) != 0, errno != ENOENT {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        try withWriteLock {
+            for fileURL in fileURLs
+                where isRecognizedEnrichmentFile(fileURL)
+                    && !ownedFileNames.contains(fileURL.lastPathComponent) {
+                var metadata = stat()
+                guard Darwin.lstat(fileURL.path, &metadata) == 0 else {
+                    if errno == ENOENT { continue }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                guard metadata.st_uid == getuid() else {
+                    throw StateRepositoryError.insecureDirectory
+                }
+                if Darwin.unlink(fileURL.path) != 0, errno != ENOENT {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
             }
         }
     }
@@ -410,6 +412,23 @@ public struct StateRepository: Sendable {
     ) throws -> Bool {
         try validateOwnershipSessionIDs(sessionIDs)
         try prepareDirectory()
+        // Read-modify-write of a single index file: without the lock a
+        // concurrent merge reads the same baseline and the later rename wins,
+        // silently dropping the other writer's IDs.
+        return try withWriteLock {
+            try mergeConvoyOwnedOpenCodeSessionIDsLocked(
+                sessionIDs,
+                allowingInvalidIndexRepair: allowingInvalidIndexRepair,
+                inventoryIsComplete: inventoryIsComplete
+            )
+        }
+    }
+
+    private func mergeConvoyOwnedOpenCodeSessionIDsLocked(
+        _ sessionIDs: Set<String>,
+        allowingInvalidIndexRepair: Bool,
+        inventoryIsComplete: Bool
+    ) throws -> Bool {
         let existing: Set<String>
         let repairsInvalidIndex: Bool
         do {
@@ -570,24 +589,11 @@ public struct StateRepository: Sendable {
     }
 
     private func withWriteLock<Value>(_ body: () throws -> Value) throws -> Value {
-        let lockURL = directoryURL.deletingLastPathComponent()
-            .appendingPathComponent(".moonglade-state-write.lock")
-        let descriptor = Darwin.open(
-            lockURL.path,
-            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
-            0o600
+        try StateDirectoryWriteLock.forDirectory(directoryURL).withLock(
+            at: directoryURL.deletingLastPathComponent()
+                .appendingPathComponent(".moonglade-state-write.lock"),
+            body
         )
-        guard descriptor >= 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        defer {
-            _ = Darwin.lockf(descriptor, F_ULOCK, 0)
-            _ = Darwin.close(descriptor)
-        }
-        guard Darwin.lockf(descriptor, F_LOCK, 0) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        return try body()
     }
 
     /// Publishes app-owned process and terminal metadata without replacing the
@@ -606,6 +612,24 @@ public struct StateRepository: Sendable {
             return nil
         }
         try prepareDirectory()
+        return try withWriteLock {
+            try saveEnrichmentLocked(
+                for: session,
+                processIdentity: processIdentity,
+                process: process,
+                terminal: terminal,
+                updating: &snapshot
+            )
+        }
+    }
+
+    private func saveEnrichmentLocked(
+        for session: AgentSession,
+        processIdentity: ProcessIdentity,
+        process: DetectedAgentProcess,
+        terminal: TerminalContext?,
+        updating snapshot: inout StateSnapshot
+    ) throws -> AgentSession? {
         guard let lifecycle = try loadLifecycleDocument(matching: session) else {
             _ = try removeEnrichment(for: session)
             snapshot.remove(session)
@@ -684,19 +708,21 @@ public struct StateRepository: Sendable {
 
     public func remove(_ session: AgentSession) throws {
         let fileURL = directoryURL.appendingPathComponent(try fileName(for: session))
-        var removed = false
-        do {
-            try FileManager.default.removeItem(at: fileURL)
-            removed = true
-        } catch CocoaError.fileNoSuchFile {
-            // The lifecycle writer may already have removed its document; its
-            // app-owned overlay must still be retired.
-        }
-        if try removeEnrichment(for: session) {
-            removed = true
-        }
-        if removed {
-            StateChangeNotifier.post()
+        try withWriteLock {
+            var removed = false
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+                removed = true
+            } catch CocoaError.fileNoSuchFile {
+                // The lifecycle writer may already have removed its document;
+                // its app-owned overlay must still be retired.
+            }
+            if try removeEnrichment(for: session) {
+                removed = true
+            }
+            if removed {
+                StateChangeNotifier.post()
+            }
         }
     }
 
@@ -887,7 +913,11 @@ public struct StateRepository: Sendable {
     }
 
     private func enrichmentFileName(for session: AgentSession) throws -> String {
-        "\(Self.enrichmentFilePrefix)\(session.tool.rawValue)-\(try encodedIdentifier(for: session)).\(Self.enrichmentFileExtension)"
+        try enrichmentFileName(tool: session.tool, sessionID: session.sessionID)
+    }
+
+    private func enrichmentFileName(tool: AgentTool, sessionID: String) throws -> String {
+        "\(Self.enrichmentFilePrefix)\(tool.rawValue)-\(try encodedIdentifier(sessionID)).\(Self.enrichmentFileExtension)"
     }
 
     private func encodedIdentifier(for session: AgentSession) throws -> String {
@@ -1065,5 +1095,77 @@ public struct StateRepository: Sendable {
             && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
             && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
             && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+    }
+}
+
+/// Serialises every mutation of one state directory.
+///
+/// Two layers are needed because they solve different halves of the problem.
+/// The advisory file lock excludes *other* processes: integration hooks run as
+/// short-lived CLI invocations while the app is writing. It cannot exclude
+/// this process from itself — POSIX record locks are held per process, so
+/// every thread acquires immediately, and the first descriptor closed releases
+/// the lock for all of them. The recursive mutex covers that half, and its
+/// depth count keeps the descriptor open until the outermost caller returns,
+/// so a nested write (a save that retires superseded documents) neither
+/// deadlocks nor drops the lock its caller is standing on.
+///
+/// One instance exists per state directory for the lifetime of the process.
+/// A process writes to a single directory in production; the registry only
+/// grows across the many temporary directories a test run creates.
+private final class StateDirectoryWriteLock: @unchecked Sendable {
+    private static let registryLock = NSLock()
+    private static var locksByDirectoryPath: [String: StateDirectoryWriteLock] = [:]
+
+    static func forDirectory(_ directoryURL: URL) -> StateDirectoryWriteLock {
+        let key = directoryURL.standardizedFileURL.path
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        if let existing = locksByDirectoryPath[key] { return existing }
+        let created = StateDirectoryWriteLock()
+        locksByDirectoryPath[key] = created
+        return created
+    }
+
+    private let mutex = NSRecursiveLock()
+    private var depth = 0
+    private var descriptor: Int32 = -1
+
+    func withLock<Value>(at lockURL: URL, _ body: () throws -> Value) throws -> Value {
+        mutex.lock()
+        defer { mutex.unlock() }
+        if depth == 0 {
+            try acquireFileLock(at: lockURL)
+        }
+        depth += 1
+        defer {
+            depth -= 1
+            if depth == 0 { releaseFileLock() }
+        }
+        return try body()
+    }
+
+    private func acquireFileLock(at lockURL: URL) throws {
+        let opened = Darwin.open(
+            lockURL.path,
+            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+            0o600
+        )
+        guard opened >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard Darwin.lockf(opened, F_LOCK, 0) == 0 else {
+            let failure = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            _ = Darwin.close(opened)
+            throw failure
+        }
+        descriptor = opened
+    }
+
+    private func releaseFileLock() {
+        guard descriptor >= 0 else { return }
+        _ = Darwin.lockf(descriptor, F_ULOCK, 0)
+        _ = Darwin.close(descriptor)
+        descriptor = -1
     }
 }

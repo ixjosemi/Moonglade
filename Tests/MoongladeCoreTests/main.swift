@@ -23,6 +23,12 @@ final class TestCounter: @unchecked Sendable {
         lock.unlock()
     }
 
+    func decrement() {
+        lock.lock()
+        value -= 1
+        lock.unlock()
+    }
+
     func read() -> Int {
         lock.lock()
         defer { lock.unlock() }
@@ -8770,6 +8776,89 @@ func testProcessCommandCacheForgetsProcessesMissingFromLatestScan() throws {
     try expect(reads, equals: 2, "entries for vanished processes are dropped instead of accumulating")
 }
 
+func testConcurrentStateWritersDoNotInterleave() throws {
+    // The write lock exists so a hook process and the app cannot tear each
+    // other's directory mutations apart. POSIX record locks are owned per
+    // process, so threads inside one process need their own exclusion, and
+    // the first descriptor closed drops the file lock for every holder.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let overlap = TestCounter()
+    let inFlight = TestCounter()
+    // A save materialises its snapshot while holding the lock, so overlapping
+    // observer calls are overlapping critical sections.
+    let repository = StateRepository(directoryURL: directory) {
+        if inFlight.read() != 0 { overlap.increment() }
+        inFlight.increment()
+        usleep(2_000)
+        inFlight.decrement()
+    }
+
+    let group = DispatchGroup()
+    for index in 0..<8 {
+        DispatchQueue.global(qos: .userInitiated).async(group: group) {
+            try? repository.save(AgentSession(
+                tool: .claude,
+                sessionID: "writer-\(index)",
+                pid: Int32(2_000 + index),
+                status: .working,
+                cwd: "/tmp/writer-\(index)",
+                startedAt: Date(timeIntervalSince1970: 0),
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            ))
+        }
+    }
+    group.wait()
+
+    try expect(overlap.read(), equals: 0, "state writes never overlap inside one process")
+    try expect(
+        try repository.loadSessions().count,
+        equals: 8,
+        "every concurrent write landed"
+    )
+}
+
+func testRemovingASessionTakesTheSameWriteLockAsSaving() throws {
+    // save() removes superseded documents while already holding the lock. If
+    // remove() re-acquired non-reentrantly it would deadlock; if it closed its
+    // own descriptor on the way out it would drop the caller's lock.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let fallback = AgentSession(
+        tool: .claude,
+        sessionID: "reaper-3100",
+        pid: 3_100,
+        status: .idle,
+        cwd: "/tmp/superseded",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 1),
+        source: .reaper
+    )
+    try repository.save(fallback)
+
+    let native = AgentSession(
+        tool: .claude,
+        sessionID: "native-session",
+        pid: 3_100,
+        status: .working,
+        cwd: "/tmp/superseded",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 2)
+    )
+    try repository.save(native)
+
+    try expect(
+        try repository.loadSessions().map(\.sessionID),
+        equals: ["native-session"],
+        "the nested removal ran to completion under one held lock"
+    )
+}
+
 /// Counts descriptors this process currently holds. The directory watchers
 /// close theirs from a dispatch source cancel handler, so a watcher that is
 /// never cancelled shows up here and nowhere else.
@@ -9084,6 +9173,8 @@ let tests: [(String, () throws -> Void)] = [
     ("installing through a symlinked settings file writes the target", testInstallingThroughASymlinkedSettingsFileWritesTheTarget),
     ("preparing an already-private directory does not touch its mode", testPreparingAnAlreadyPrivateDirectoryDoesNotTouchItsMode),
     ("Convoy-owned OpenCode documents are not decoded", testConvoyOwnedOpenCodeDocumentsAreNotDecoded),
+    ("concurrent state writers do not interleave", testConcurrentStateWritersDoNotInterleave),
+    ("removing a session takes the same write lock as saving", testRemovingASessionTakesTheSameWriteLockAsSaving),
     ("state filename identifier round trips special characters", testStateFilenameIdentifierRoundTripsSpecialCharacters),
     ("a subprocess that never exits is terminated at its deadline", testAubprocessThatNeverExitsIsTerminatedAtItsDeadline),
     ("a subprocess that overfills its pipe still completes", testAubprocessThatOverfillsItsPipeStillCompletes),
