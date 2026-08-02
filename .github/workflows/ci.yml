@@ -9,6 +9,37 @@ permissions:
   contents: read
 
 jobs:
+  shader:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The committed metallib is the only shader the app ever loads, and
+      # swift build never rebuilds it. Editing Ripple.metal without running
+      # scripts/compile-shaders.sh ships the old shader silently, so the
+      # recorded source hash is what makes that drift a build failure.
+      - name: Detect shader drift
+        run: |
+          recorded="$(cat Sources/MoongladeApp/Resources/default.metallib.source-sha256)"
+          actual="$(shasum -a 256 Sources/MoongladeApp/Ripple.metal | cut -d' ' -f1)"
+          if [ "$recorded" != "$actual" ]; then
+            echo "Ripple.metal changed without regenerating default.metallib." >&2
+            echo "  recorded: $recorded" >&2
+            echo "  actual:   $actual" >&2
+            echo "Run ./scripts/compile-shaders.sh and commit both files." >&2
+            exit 1
+          fi
+      - name: Select the metallib toolchain
+        run: sudo xcode-select -s /Applications/Xcode_26.0.1.app
+      - name: Validate shader source and resource
+        run: |
+          tmp="$(mktemp -d)/default.metallib"
+          xcrun -sdk macosx metal \
+            Sources/MoongladeApp/Ripple.metal -o "$tmp"
+          test -s "$tmp"
+          test -s Sources/MoongladeApp/Resources/default.metallib
+          strings "$tmp" | grep -qx 'expansionRipple'
+          strings Sources/MoongladeApp/Resources/default.metallib | grep -qx 'expansionRipple'
   test:
     runs-on: macos-15
     timeout-minutes: 15
@@ -34,3 +65,4 @@ jobs:
           codesign --verify --deep --strict .build/Moonglade.app
           test -x .build/Moonglade.app/Contents/MacOS/Moonglade
           test -x .build/Moonglade.app/Contents/Resources/bin/moonglade
+          test -f .build/Moonglade.app/Contents/Resources/Moonglade_MoongladeApp.bundle/default.metallib

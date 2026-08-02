@@ -18,11 +18,12 @@ public final class GhosttyAssignmentMemory: @unchecked Sendable {
 
     public func remember(_ matched: [DetectedAgentProcess]) {
         let current = Dictionary(
-            uniqueKeysWithValues: matched.compactMap { process in
+            matched.compactMap { process in
                 process.terminal.ghosttyTerminalID.map {
                     (GhosttySessionMatcher.assignmentKey(for: process), $0)
                 }
-            }
+            },
+            uniquingKeysWith: { $1 }
         )
         lock.lock()
         assignmentsByProcessKey = current
@@ -48,6 +49,7 @@ public final class GhosttyTerminalQueryCache: @unchecked Sendable {
     private var refreshedAt: Date = .distantPast
     private var failedProcessKeys: Set<String>?
     private var failedAt: Date = .distantPast
+    private var queryGeneration: UInt64 = 0
 
     public init(
         timeToLive: TimeInterval,
@@ -81,18 +83,26 @@ public final class GhosttyTerminalQueryCache: @unchecked Sendable {
             return nil
         }
         lock.unlock()
+        lock.lock()
+        queryGeneration &+= 1
+        let generation = queryGeneration
+        lock.unlock()
         guard let refreshed = query() else {
             lock.lock()
-            failedProcessKeys = processKeys
-            failedAt = now
+            if generation == queryGeneration {
+                failedProcessKeys = processKeys
+                failedAt = now
+            }
             lock.unlock()
             return nil
         }
         lock.lock()
-        cachedTerminals = refreshed
-        cachedProcessKeys = processKeys
-        refreshedAt = now
-        failedProcessKeys = nil
+        if generation == queryGeneration {
+            cachedTerminals = refreshed
+            cachedProcessKeys = processKeys
+            refreshedAt = now
+            failedProcessKeys = nil
+        }
         lock.unlock()
         return refreshed
     }

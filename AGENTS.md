@@ -20,7 +20,7 @@ SwiftPM cannot compile Metal sources, so `Sources/MoongladeApp/Ripple.metal` is 
 ./scripts/compile-shaders.sh
 ```
 
-It needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`).
+It needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). The script also rewrites `Resources/default.metallib.source-sha256`, which records the source the committed library was built from; commit it alongside the library. CI compares that hash against `Ripple.metal` and fails when they disagree, so an edited shader with a stale library is caught instead of shipping silently.
 
 ## Engineering rules
 

@@ -73,4 +73,5 @@ do {
         FileHandle.standardError.write(Data("moonglade: \(error)\n".utf8))
         exit(1)
     }
+    NSLog("MOONGLADE_HOOK_FAILURE: local hook processing failed")
 }

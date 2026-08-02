@@ -1,6 +1,6 @@
 import Foundation
 
-private func normalizedAbsolutePath(_ path: String) -> String? {
+package func normalizedAbsolutePath(_ path: String) -> String? {
     guard !path.isEmpty,
           !path.utf8.contains(0),
           (path as NSString).isAbsolutePath else { return nil }
@@ -31,29 +31,47 @@ public enum GitWorkspaceInspector {
     }
 
     private static func headContents(gitEntry: URL) -> String? {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: gitEntry.path, isDirectory: &isDirectory)
-        else { return nil }
+        var gitMetadata = stat()
+        guard Darwin.lstat(gitEntry.path, &gitMetadata) == 0,
+              gitMetadata.st_uid == getuid() else { return nil }
+        let isDirectory = gitMetadata.st_mode & S_IFMT == S_IFDIR
+        guard isDirectory || gitMetadata.st_mode & S_IFMT == S_IFREG else { return nil }
         let headURL: URL
-        if isDirectory.boolValue {
+        if isDirectory {
             headURL = gitEntry.appendingPathComponent("HEAD")
         } else {
             // A linked worktree's `.git` is a one-line file pointing at the
             // repository's `.git/worktrees/<name>` metadata directory.
-            guard let pointer = try? String(contentsOf: gitEntry, encoding: .utf8),
+            guard let pointerData = try? SecureFileReader.read(
+                at: gitEntry,
+                maximumSize: 1_048_576,
+                followSymlinks: false
+            ),
+                  let pointer = String(data: pointerData, encoding: .utf8),
                   let firstLine = pointer.split(separator: "\n").first,
                   firstLine.hasPrefix(worktreePointerPrefix)
             else { return nil }
             let metadataPath = String(firstLine.dropFirst(worktreePointerPrefix.count))
-            headURL = URL(fileURLWithPath: metadataPath).appendingPathComponent("HEAD")
+            guard let normalizedMetadataPath = normalizedAbsolutePath(metadataPath) else {
+                return nil
+            }
+            headURL = URL(fileURLWithPath: normalizedMetadataPath).appendingPathComponent("HEAD")
         }
-        return try? String(contentsOf: headURL, encoding: .utf8)
+        guard let headData = try? SecureFileReader.read(
+            at: headURL,
+            maximumSize: 1_048_576,
+            followSymlinks: false
+        ) else { return nil }
+        return String(data: headData, encoding: .utf8)
     }
 
     private static func branch(fromHead head: String) -> String? {
         guard let firstLine = head.split(separator: "\n").first else { return nil }
         if firstLine.hasPrefix(referencePrefix) {
-            return String(firstLine.dropFirst(referencePrefix.count))
+            return SessionTitleFormatter.truncate(
+                String(firstLine.dropFirst(referencePrefix.count)),
+                to: SessionTitleFormatter.maximumTitleLength
+            )
         }
         // Detached HEAD stores a raw commit hash; show the short form.
         return String(firstLine.prefix(7))

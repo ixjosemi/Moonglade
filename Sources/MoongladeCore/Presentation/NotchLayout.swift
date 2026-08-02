@@ -79,7 +79,21 @@ public struct NotchLayout: Equatable, Sendable {
 
     /// The panel has room for three expanded rows without creating a nested
     /// scroll surface. Longer lists retain their own bounded scroll view.
-    public static let menuMaxHeight = SessionMenuLayout.maximumCardHeight
+    /// The budget always reserves the error row: a termination or focus
+    /// error can surface after the fixed AppKit window was sized, and the
+    /// window must never clip that late message.
+    public static let menuMaxHeight = SessionMenuLayout.maximumCardHeight(hasError: true)
+
+    public static func expandedHeight(
+        compactHeight: CGFloat,
+        presentation: Presentation
+    ) -> CGFloat {
+        compactHeight + menuMaxHeight
+            + Self.expandedBottomPadding
+            + (presentation == .pill
+                ? Self.pillExpandedTopGap + Self.pillExpandedHeaderTopPadding
+                : 0)
+    }
     /// Breathing room between the pill and the bottom of the menu-bar strip,
     /// so the capsule floats inside the strip instead of sitting flush on
     /// the boundary with app content.
@@ -112,15 +126,28 @@ public struct NotchLayout: Equatable, Sendable {
         rightNotchEdgeX: CGFloat?,
         menuBarHeight: CGFloat = 0
     ) {
-        let centerX = screenMinX + screenWidth / 2
+        let safeScreenMinX = screenMinX.isFinite ? screenMinX : 0
+        let safeScreenWidth = screenWidth.isFinite ? max(1, screenWidth) : 1
+        let safeScreenMaxY = screenMaxY.isFinite ? screenMaxY : 0
+        let safeSafeAreaTop = safeAreaTop.isFinite ? max(0, safeAreaTop) : 0
+        let safeMenuBarHeight = menuBarHeight.isFinite ? menuBarHeight : 0
+        let safeLeftNotchEdgeX = leftNotchEdgeX?.isFinite == true ? leftNotchEdgeX : nil
+        let safeRightNotchEdgeX = rightNotchEdgeX?.isFinite == true ? rightNotchEdgeX : nil
+        let centerX = safeScreenMinX + safeScreenWidth / 2
         // A display narrower than the ideal menu still gets a fully visible
         // panel. Normal macOS displays are comfortably wider than 720 pt.
-        let expandedWidth = min(Self.expandedPanelWidth, max(1, screenWidth))
-        if safeAreaTop > 0, let leftNotchEdgeX, let rightNotchEdgeX {
+        let expandedWidth = min(Self.expandedPanelWidth, safeScreenWidth)
+        if let leftNotchEdgeX = safeLeftNotchEdgeX,
+           let rightNotchEdgeX = safeRightNotchEdgeX,
+           rightNotchEdgeX > leftNotchEdgeX {
             presentation = .notch
             notchLeadingX = leftNotchEdgeX
             topGap = 0
-            height = safeAreaTop
+            // A screen can report its camera housing while its safe area
+            // reads zero (fullscreen hides the menu bar). A zero-height bar
+            // would be invisible and unhoverable, so the standard menu-bar
+            // height stands in until the safe area returns.
+            height = safeSafeAreaTop > 0 ? safeSafeAreaTop : Self.fallbackMenuBarHeight
             notchWidth = max(rightNotchEdgeX - leftNotchEdgeX, 168)
             width = expandedWidth
             // Centre the broad expanded card on the physical camera housing,
@@ -128,32 +155,31 @@ public struct NotchLayout: Equatable, Sendable {
             // to the actual notch through `barLeadingOffset`.
             let notchCenterX = (leftNotchEdgeX + rightNotchEdgeX) / 2
             originX = min(
-                max(notchCenterX - width / 2, screenMinX),
-                screenMinX + screenWidth - width
+                max(notchCenterX - width / 2, safeScreenMinX),
+                safeScreenMinX + safeScreenWidth - width
             )
-            originY = screenMaxY - height
+            originY = safeScreenMaxY - height
         } else {
             presentation = .pill
             notchLeadingX = nil
             // The gap plus the pill must stay entirely within the menu-bar
             // strip so neither ever overlaps the app content below it.
-            let menuBar = menuBarHeight > 0 ? menuBarHeight : Self.fallbackMenuBarHeight
+            let menuBar = safeMenuBarHeight > 0 ? safeMenuBarHeight : Self.fallbackMenuBarHeight
             topGap = Self.pillTopGap
             height = max(1, menuBar - Self.pillTopGap - Self.pillBottomInset)
             notchWidth = 0
             width = expandedWidth
             originX = centerX - width / 2
-            originY = screenMaxY - height
+            originY = safeScreenMaxY - height
         }
         // The panel keeps its top on the screen edge; the bottom padding,
         // the expanded gap, and the pill's header padding all live inside
         // it, so the expanded shell grows by each to keep the tallest card
         // fully inside the window.
-        expandedHeight = height + Self.menuMaxHeight
-            + Self.expandedBottomPadding
-            + (presentation == .pill
-                ? Self.pillExpandedTopGap + Self.pillExpandedHeaderTopPadding
-                : 0)
+        expandedHeight = Self.expandedHeight(
+            compactHeight: height,
+            presentation: presentation
+        )
     }
 
     /// Width one status indicator occupies in the compact bar: glyph, a

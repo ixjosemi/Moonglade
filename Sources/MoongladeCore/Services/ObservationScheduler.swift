@@ -15,8 +15,9 @@ public final class ObservationScheduler {
     private let codexSessionsDirectoryURL: URL
     private let convoyRunsDirectoryURL: URL
     private let heartbeatInterval: TimeInterval
+    private var currentHeartbeatInterval: TimeInterval
     private let debounceInterval: TimeInterval
-    private let reaper: ReaperService
+    private var reaper: ReaperService
     private let workQueue = DispatchQueue(
         label: "com.moonglade.observation",
         qos: .utility
@@ -37,6 +38,7 @@ public final class ObservationScheduler {
     private var tickScheduled = false
     private var pendingReasons: TickReasons = []
     private var pendingConvoyMetadataURLs: Set<URL> = []
+    private var idleWaiters: [DispatchSemaphore] = []
     private var lastVerifiedProcesses: [DetectedAgentProcess]?
     private var generation = 0
     private var convoyMetadataRevision: UInt64 = 0
@@ -67,8 +69,20 @@ public final class ObservationScheduler {
             ?? FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".convoy/runs", isDirectory: true)
         self.heartbeatInterval = heartbeatInterval
+        currentHeartbeatInterval = heartbeatInterval
         self.debounceInterval = debounceInterval
         reaper = ReaperService(repository: repository, processScanner: processScanner)
+    }
+
+    /// `stop()` cannot run here: its work is queued behind a weak reference
+    /// that is already gone by the time the queue drains, so the descriptors
+    /// the watchers hold would never be closed. Nothing else can reach this
+    /// instance any more — a pending block would have kept it alive — so the
+    /// confined state is safe to touch directly.
+    deinit {
+        idleWaiters.forEach { $0.signal() }
+        idleWaiters.removeAll()
+        cancelObservationSources()
     }
 
     public func start() {
@@ -92,10 +106,22 @@ public final class ObservationScheduler {
             guard let self else { return }
             self.startObservationSources()
             self.refreshConvoyOwnershipIndex()
+            let detected: [DetectedAgentProcess]
             do {
-                _ = try self.reaper.reap(
-                    detected: self.processScanner.basicActiveProcesses()
+                detected = try self.processScanner.basicActiveProcesses()
+            } catch {
+                NSLog("Moonglade initial process reconciliation failed")
+                self.finishInitialReconciliationWhenConvoyMetadataIsQuiet(
+                    startupGeneration: startupGeneration,
+                    startedAt: .now(),
+                    completion: completion
                 )
+                return
+            }
+            do {
+                if !detected.isEmpty {
+                    _ = try self.reaper.reap(detected: detected)
+                }
             } catch {
                 NSLog(
                     "Moonglade initial process reconciliation failed: %@",
@@ -104,6 +130,7 @@ public final class ObservationScheduler {
             }
             self.finishInitialReconciliationWhenConvoyMetadataIsQuiet(
                 startupGeneration: startupGeneration,
+                startedAt: .now(),
                 completion: completion
             )
         }
@@ -111,6 +138,7 @@ public final class ObservationScheduler {
 
     private func finishInitialReconciliationWhenConvoyMetadataIsQuiet(
         startupGeneration: Int,
+        startedAt: DispatchTime,
         completion: (@MainActor @Sendable () -> Void)?
     ) {
         dispatchPrecondition(condition: .onQueue(workQueue))
@@ -119,9 +147,12 @@ public final class ObservationScheduler {
         refreshConvoyOwnershipIndex()
         workQueue.asyncAfter(deadline: .now() + debounceInterval) { [weak self] in
             guard let self, self.generation == finalizationGeneration else { return }
-            guard self.convoyMetadataRevision == inventoryRevision else {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - startedAt.uptimeNanoseconds
+            let deadlineReached = elapsed >= 5_000_000_000
+            guard deadlineReached || self.convoyMetadataRevision == inventoryRevision else {
                 self.finishInitialReconciliationWhenConvoyMetadataIsQuiet(
                     startupGeneration: startupGeneration,
+                    startedAt: startedAt,
                     completion: completion
                 )
                 return
@@ -139,23 +170,36 @@ public final class ObservationScheduler {
 
     public func stop() {
         lifecycleGeneration += 1
-        workQueue.async { [self] in
+        workQueue.async { [weak self] in
+            guard let self else { return }
             self.generation += 1
             self.tickScheduled = false
             self.pendingReasons = []
             self.pendingConvoyMetadataURLs = []
+            self.idleWaiters.forEach { $0.signal() }
+            self.idleWaiters.removeAll()
             self.lastVerifiedProcesses = nil
-            self.codexDirectorySource?.cancel()
-            self.codexDirectorySource = nil
-            self.heartbeatTimer?.cancel()
-            self.heartbeatTimer = nil
-            self.convoyRunsDirectorySource?.cancel()
-            self.convoyRunsDirectorySource = nil
-            self.convoyRunDirectorySources.values.forEach { $0.cancel() }
-            self.convoyRunDirectorySources.removeAll()
-            self.exitWatchers.values.forEach { $0.cancel() }
-            self.exitWatchers.removeAll()
+            self.cancelObservationSources()
         }
+    }
+
+    /// Cancels every dispatch source this scheduler owns. The file-system
+    /// sources close their descriptors from a cancel handler, so skipping this
+    /// leaks one descriptor per watched directory.
+    ///
+    /// Called on `workQueue` from `stop()`, and off it from `deinit`, which is
+    /// the one point where no other reference to this instance can exist.
+    private func cancelObservationSources() {
+        codexDirectorySource?.cancel()
+        codexDirectorySource = nil
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+        convoyRunsDirectorySource?.cancel()
+        convoyRunsDirectorySource = nil
+        convoyRunDirectorySources.values.forEach { $0.cancel() }
+        convoyRunDirectorySources.removeAll()
+        exitWatchers.values.forEach { $0.cancel() }
+        exitWatchers.removeAll()
     }
 
     public func requestTick() {
@@ -165,6 +209,7 @@ public final class ObservationScheduler {
     package func requestConvoyMetadataTick() {
         workQueue.async { [weak self] in
             guard let self else { return }
+            self.convoyWatcher?.invalidateOwnershipInventory()
             self.convoyMetadataRevision &+= 1
             self.scheduleCoalescedTick(reason: .convoyMetadata)
         }
@@ -175,7 +220,19 @@ public final class ObservationScheduler {
     }
 
     package func waitUntilIdle() {
-        workQueue.sync {}
+        let waiter = DispatchSemaphore(value: 0)
+        workQueue.async { [weak self] in
+            guard let self else {
+                waiter.signal()
+                return
+            }
+            if !self.tickScheduled {
+                waiter.signal()
+            } else {
+                self.idleWaiters.append(waiter)
+            }
+        }
+        _ = waiter.wait(timeout: .now() + max(1, debounceInterval * 4))
     }
 
     private func startObservationSources() {
@@ -185,9 +242,9 @@ public final class ObservationScheduler {
         guard heartbeatTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: workQueue)
         timer.schedule(
-            deadline: .now() + heartbeatInterval,
-            repeating: heartbeatInterval,
-            leeway: .milliseconds(Int(heartbeatInterval * 200))
+            deadline: .now() + currentHeartbeatInterval,
+            repeating: currentHeartbeatInterval,
+            leeway: .milliseconds(Int(currentHeartbeatInterval * 200))
         )
         timer.setEventHandler { [weak self] in self?.scheduleCoalescedTick(reason: .heartbeat) }
         heartbeatTimer = timer
@@ -219,6 +276,9 @@ public final class ObservationScheduler {
                 reasons: reasons,
                 invalidatedConvoyMetadataURLs: invalidatedConvoyMetadataURLs
             )
+            guard !self.tickScheduled else { return }
+            self.idleWaiters.forEach { $0.signal() }
+            self.idleWaiters.removeAll()
         }
     }
 
@@ -227,6 +287,7 @@ public final class ObservationScheduler {
         invalidatedConvoyMetadataURLs: Set<URL>
     ) {
         dispatchPrecondition(condition: .onQueue(workQueue))
+        startCodexDirectorySource()
         refreshConvoyOwnershipIndex()
         if reasons == .convoyMetadata, let detected = lastVerifiedProcesses {
             tickConvoyMetadata(
@@ -243,12 +304,20 @@ public final class ObservationScheduler {
             return
         }
         lastVerifiedProcesses = detected
+        updateHeartbeatCadence(agentCount: detected.count)
         var snapshot: StateSnapshot
         do {
             snapshot = try repository.loadSnapshot()
         } catch {
             NSLog("Moonglade state snapshot failed: %@", String(describing: error))
             return
+        }
+        if snapshot.skippedDocumentCount == 0 {
+            do {
+                try repository.pruneOrphanedEnrichments(against: snapshot)
+            } catch {
+                NSLog("Moonglade orphan enrichment pruning failed")
+            }
         }
         let convoyResult = scanConvoyRuns(
             detected: detected,
@@ -276,7 +345,12 @@ public final class ObservationScheduler {
         } catch {
             NSLog("Moonglade terminal enrichment failed: %@", String(describing: error))
         }
-        refreshCodexWatcher(detected: enriched, snapshot: &snapshot)
+        refreshCodexWatcher(
+            detected: enriched,
+            snapshot: &snapshot,
+            shouldScan: reasons.contains(.codexMetadata)
+                || enriched.contains(where: { $0.tool == .codex })
+        )
             if let convoyResult {
             do {
                 try convoyWatcher?.suppressOpenCodeSessions(
@@ -293,6 +367,21 @@ public final class ObservationScheduler {
             )
         }
         refreshExitWatchers(detected: detected)
+    }
+
+    private func updateHeartbeatCadence(agentCount: Int) {
+        dispatchPrecondition(condition: .onQueue(workQueue))
+        let interval = ObservationCadence.interval(afterAgentCount: agentCount)
+        guard interval != currentHeartbeatInterval else { return }
+        currentHeartbeatInterval = interval
+        reaper.liveStaleSessionInterval = ReaperService.staleSessionInterval(
+            forHeartbeatInterval: interval
+        )
+        heartbeatTimer?.schedule(
+            deadline: .now() + interval,
+            repeating: interval,
+            leeway: .milliseconds(Int(interval * 200))
+        )
     }
 
     /// A Convoy vnode event carries metadata, not liveness evidence. Reuse the
@@ -384,9 +473,10 @@ public final class ObservationScheduler {
     /// that dies before registration is caught by the heartbeat backstop.
     private func refreshExitWatchers(detected: [DetectedAgentProcess]) {
         dispatchPrecondition(condition: .onQueue(workQueue))
-        let processesByKey = Dictionary(uniqueKeysWithValues: detected.map {
-            (processGenerationKey($0), $0)
-        })
+        let processesByKey = Dictionary(
+            detected.map { (processGenerationKey($0), $0) },
+            uniquingKeysWith: { $1 }
+        )
         for (key, watcher) in exitWatchers where processesByKey[key] == nil {
             watcher.cancel()
             exitWatchers[key] = nil
@@ -417,7 +507,8 @@ public final class ObservationScheduler {
     /// rollout bytes.
     private func refreshCodexWatcher(
         detected: [DetectedAgentProcess],
-        snapshot: inout StateSnapshot
+        snapshot: inout StateSnapshot,
+        shouldScan: Bool
     ) {
         let processesByCWD = Dictionary(grouping: detected.filter { $0.tool == .codex }, by: \.cwd)
         let currentProcesses = processesByCWD.compactMapValues {
@@ -437,6 +528,7 @@ public final class ObservationScheduler {
                 processResolver: resolver
             )
         }
+        guard shouldScan else { return }
         do {
             try codexWatcher?.scan(snapshot: &snapshot)
         } catch {
@@ -476,7 +568,9 @@ public final class ObservationScheduler {
         )
         source.setEventHandler { [weak self] in
             guard let self else { return }
+            self.convoyWatcher?.invalidateOwnershipInventory()
             self.convoyMetadataRevision &+= 1
+            guard let source = self.convoyRunsDirectorySource else { return }
             if !source.data.intersection([.rename, .delete]).isEmpty {
                 source.cancel()
                 self.convoyRunsDirectorySource = nil
@@ -503,7 +597,9 @@ public final class ObservationScheduler {
             )
             source.setEventHandler { [weak self] in
                 guard let self else { return }
+                self.convoyWatcher?.invalidateOwnershipInventory()
                 self.convoyMetadataRevision &+= 1
+                guard let source = self.convoyRunDirectorySources[url] else { return }
                 if !source.data.intersection([.rename, .delete]).isEmpty {
                     source.cancel()
                     self.convoyRunDirectorySources[url] = nil

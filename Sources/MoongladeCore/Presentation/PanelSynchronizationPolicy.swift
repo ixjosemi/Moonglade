@@ -50,6 +50,24 @@ public struct PanelSynchronizationPolicy: Sendable {
         }
     }
 
+    public static func shouldDeferSelection(
+        current: UInt32?,
+        desired: UInt32?,
+        available: Set<UInt32>,
+        menuIsVisible: Bool
+    ) -> Bool {
+        guard menuIsVisible,
+              let current,
+              let desired,
+              current != desired,
+              available.contains(current) else { return false }
+        return true
+    }
+
+    public static func needsPointerMonitors(displayCount: Int) -> Bool {
+        displayCount > 1
+    }
+
     public mutating func transition(
         to mode: ScreenSelectionMode
     ) -> PanelSynchronizationResourceTransition {

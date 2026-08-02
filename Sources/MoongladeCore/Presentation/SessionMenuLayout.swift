@@ -3,6 +3,7 @@ import Foundation
 /// Shared expanded-menu spacing. Keeping these values outside the SwiftUI
 /// tree makes the compact horizontal layout explicit and testable.
 public enum SessionMenuLayout {
+    public static let errorRowHeight: CGFloat = 25
     public static let contentHorizontalInset: CGFloat = 4
     /// Gap between the notch bar — whose wings now hold the header — and the
     /// first session row.
@@ -25,15 +26,22 @@ public enum SessionMenuLayout {
     /// that received the click out from under the pointer. Longer lists still
     /// scroll inside the card.
     public static let maximumSessionListHeight: CGFloat = 300
+    /// Four 32pt action rows, their three hairline separators, and the
+    /// area's vertical insets. The list reserves this whenever a row's
+    /// actions are open; the rename and kill sub-modes render shorter
+    /// content inside the same reservation rather than resizing the list.
     public static let expandedActionsHeight: CGFloat = 144
 
     /// The largest card the panel must accommodate: a fitting three-row
     /// expanded list and every vertical inset rendered by `SessionMenuCard`.
     /// The header lives in the bar wings, so it adds no card height.
-    public static let maximumCardHeight: CGFloat = listTopPadding
-        + maximumSessionListHeight
-        + sessionListBottomPadding
-        + cardBottomPadding
+    public static func maximumCardHeight(hasError: Bool = false) -> CGFloat {
+        listTopPadding
+            + maximumSessionListHeight
+            + sessionListBottomPadding
+            + cardBottomPadding
+            + (hasError ? errorRowHeight : 0)
+    }
 
     public static func sessionListHeight(
         sessionCount: Int,

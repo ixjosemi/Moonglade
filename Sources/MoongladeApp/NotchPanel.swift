@@ -297,6 +297,7 @@ final class NotchPanelController {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.focusedWindowProvider.invalidate()
+                self?.updatePointerEventMonitorPolicy()
                 self?.synchronizePanels()
             }
         }
@@ -414,8 +415,12 @@ final class NotchPanelController {
         if selectionMode != .allDisplays,
            let desiredID = desiredIDs.first,
            let currentID = selectedDisplayID,
-           currentID != desiredID,
-           displayPanels[currentID]?.menuIsVisible == true {
+            PanelSynchronizationPolicy.shouldDeferSelection(
+                current: currentID,
+                desired: desiredID,
+                available: Set(screensByID.keys),
+                menuIsVisible: displayPanels[currentID]?.menuIsVisible == true
+            ) {
             hasPendingSelectedDisplay = true
             return
         }
@@ -504,6 +509,9 @@ final class NotchPanelController {
     }
 
     private func installPointerEventMonitors() {
+        guard PanelSynchronizationPolicy.needsPointerMonitors(displayCount: NSScreen.screens.count) else {
+            return
+        }
         guard localPointerMonitor == nil, globalPointerMonitor == nil else { return }
         let mask: NSEvent.EventTypeMask = [
             .mouseMoved,
@@ -532,6 +540,15 @@ final class NotchPanelController {
         if let globalPointerMonitor {
             NSEvent.removeMonitor(globalPointerMonitor)
             self.globalPointerMonitor = nil
+        }
+    }
+
+    private func updatePointerEventMonitorPolicy() {
+        guard selectionMode == .pointer else { return }
+        if PanelSynchronizationPolicy.needsPointerMonitors(displayCount: NSScreen.screens.count) {
+            installPointerEventMonitors()
+        } else {
+            removePointerEventMonitors()
         }
     }
 

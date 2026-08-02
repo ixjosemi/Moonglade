@@ -11,14 +11,22 @@ import MoongladeCore
 @MainActor
 final class FocusAcknowledgmentObserver {
     private static let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
+    private static let queryQueue = DispatchQueue(
+        label: "com.moonglade.terminal-actions",
+        qos: .userInitiated
+    )
 
     private let store: StateStore
+    private let frontTerminalQueryCache: FrontTerminalQueryCache
     private var pollTimer: Timer?
     private var activationObserver: NSObjectProtocol?
     private var queryInFlight = false
 
     init(store: StateStore) {
         self.store = store
+        frontTerminalQueryCache = FrontTerminalQueryCache {
+            Self.queryFrontTerminal()
+        }
     }
 
     func start() {
@@ -28,7 +36,7 @@ final class FocusAcknowledgmentObserver {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.checkFrontTerminal() }
+            MainActor.assumeIsolated { self?.checkFrontTerminal(forceRefresh: true) }
         }
         // Tab switches inside Ghostty fire no workspace notification, so a
         // slow poll covers them; the guards below make idle ticks free.
@@ -50,7 +58,7 @@ final class FocusAcknowledgmentObserver {
         }
     }
 
-    private func checkFrontTerminal() {
+    private func checkFrontTerminal(forceRefresh: Bool = false) {
         guard !queryInFlight,
               NSWorkspace.shared.frontmostApplication?.bundleIdentifier
                   == Self.ghosttyBundleIdentifier else {
@@ -63,11 +71,12 @@ final class FocusAcknowledgmentObserver {
         }
         guard !waitingSessions.isEmpty else { return }
         queryInFlight = true
-        Task.detached(priority: .utility) {
-            let frontTerminal = Self.queryFrontTerminal()
-            await MainActor.run { [weak self] in
+        let cache = frontTerminalQueryCache
+        Self.queryQueue.async {
+            let frontTerminal = cache.frontTerminal(forceRefresh: forceRefresh)
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.queryInFlight = false
+                defer { self.queryInFlight = false }
                 guard let frontTerminal else { return }
                 for session in FrontTerminalMatcher.sessionsFocused(
                     by: frontTerminal,
@@ -86,29 +95,25 @@ final class FocusAcknowledgmentObserver {
             return (id of t as text) & linefeed & (working directory of t)
         end tell
         """
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
         do {
-            try process.run()
+            let result = try BoundedProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/usr/bin/osascript"),
+                arguments: ["-e", script],
+                timeout: 5
+            )
+            guard result.status == 0 else { return nil }
+            let lines = String(decoding: result.output, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: "\n")
+            guard let identifier = lines.first, !identifier.isEmpty else { return nil }
+            let workingDirectory = lines.dropFirst().first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return GhosttyFrontTerminal(
+                terminalID: identifier,
+                workingDirectory: (workingDirectory?.isEmpty ?? true) ? nil : workingDirectory
+            )
         } catch {
             return nil
         }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        let lines = String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: "\n")
-        guard let identifier = lines.first, !identifier.isEmpty else { return nil }
-        let workingDirectory = lines.dropFirst().first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return GhosttyFrontTerminal(
-            terminalID: identifier,
-            workingDirectory: (workingDirectory?.isEmpty ?? true) ? nil : workingDirectory
-        )
     }
 }

@@ -20,11 +20,23 @@ public struct StateObservationLayers: OptionSet, Sendable {
     ]
 }
 
+private final class StateStoreNotificationContext {
+    weak var store: StateStore?
+
+    init(store: StateStore) {
+        self.store = store
+    }
+}
+
 private let stateStoreNotificationCallback: CFNotificationCallback = {
     _, observer, _, _, _ in
     guard let observer else { return }
-    let store = Unmanaged<StateStore>.fromOpaque(observer).takeUnretainedValue()
-    DispatchQueue.main.async { store.scheduleCoalescedReload() }
+    let context = Unmanaged<StateStoreNotificationContext>
+        .fromOpaque(observer)
+        .takeUnretainedValue()
+    DispatchQueue.main.async { [weak store = context.store] in
+        store?.scheduleCoalescedReload()
+    }
 }
 
 @Observable
@@ -52,6 +64,7 @@ public final class StateStore {
     private var pollingTimer: Timer?
     private var directorySource: DispatchSourceFileSystemObject?
     private var observesDarwinNotifications = false
+    private var darwinNotificationContext: StateStoreNotificationContext?
     private var isObserving = false
     private var observationGeneration = 0
     private var reloadScheduled = false
@@ -63,11 +76,13 @@ public final class StateStore {
         self.repository = repository
         self.nameOverridesFileURL = nameOverridesFileURL
         if let nameOverridesFileURL,
-           let data = try? Data(contentsOf: nameOverridesFileURL),
+           let data = try? SecureFileReader.read(at: nameOverridesFileURL),
            let stored = try? JSONDecoder().decode(SessionNameOverrides.self, from: data) {
             nameOverrides = stored
         }
     }
+
+    deinit { stopObserving() }
 
     /// Focus resolves against the latest on-disk lifecycle and enrichment,
     /// rather than the value captured when SwiftUI rendered a row.
@@ -78,10 +93,12 @@ public final class StateStore {
     /// queue. A reload that writes would re-trigger this store's directory
     /// observation and feed back into itself.
     public func reload() throws {
-        let loaded = try repository.loadSessions()
+        let snapshot = try repository.loadSnapshot()
+        let loaded = snapshot.sessions
             .filter { $0.status != .ended }
             .sorted(by: Self.precedes)
         publish(loaded, to: \.sessions)
+        guard snapshot.skippedDocumentCount == 0 else { return }
         var prunedAcknowledgments = acknowledgments
         prunedAcknowledgments.prune(keeping: loaded)
         publish(prunedAcknowledgments, to: \.acknowledgments)
@@ -131,7 +148,8 @@ public final class StateStore {
     /// Ghostty scan each tick), then the directory name.
     private func raiseStatusTransitions() {
         let statusesBySessionID = Dictionary(
-            uniqueKeysWithValues: sessions.map { ($0.id, $0.status) }
+            sessions.map { ($0.id, $0.status) },
+            uniquingKeysWith: { $1 }
         )
         defer { previousStatusesBySessionID = statusesBySessionID }
         guard let previousStatusesBySessionID else { return }
@@ -173,7 +191,22 @@ public final class StateStore {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(nameOverrides).write(to: nameOverridesFileURL, options: .atomic)
+            let parentDirectory = nameOverridesFileURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(
+                at: parentDirectory,
+                withIntermediateDirectories: true
+            )
+            var metadata = stat()
+            if Darwin.lstat(parentDirectory.path, &metadata) == 0,
+               metadata.st_mode & 0o777 != 0o700 {
+                guard Darwin.chmod(parentDirectory.path, 0o700) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+            try SecureFileWriter.writeAtomically(
+                try encoder.encode(nameOverrides),
+                to: nameOverridesFileURL
+            )
         } catch {
             NSLog(
                 "Moonglade could not persist session names: %@",
@@ -229,21 +262,26 @@ public final class StateStore {
         directorySource?.cancel()
         directorySource = nil
         if observesDarwinNotifications {
+            guard let context = darwinNotificationContext else { return }
+            let observer = Unmanaged.passUnretained(context).toOpaque()
             CFNotificationCenterRemoveObserver(
                 CFNotificationCenterGetDarwinNotifyCenter(),
-                Unmanaged.passUnretained(self).toOpaque(),
+                observer,
                 CFNotificationName(StateChangeNotifier.notificationName as CFString),
                 nil
             )
+            darwinNotificationContext = nil
             observesDarwinNotifications = false
         }
     }
 
     private func startDarwinObservation() {
         guard !observesDarwinNotifications else { return }
+        let context = StateStoreNotificationContext(store: self)
+        darwinNotificationContext = context
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
-            Unmanaged.passUnretained(self).toOpaque(),
+            Unmanaged.passUnretained(context).toOpaque(),
             stateStoreNotificationCallback,
             StateChangeNotifier.notificationName as CFString,
             nil,
@@ -260,7 +298,7 @@ public final class StateStore {
         }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: descriptor,
-            eventMask: [.write, .extend, .attrib, .rename, .delete],
+            eventMask: [.write, .extend, .rename, .delete],
             queue: .main
         )
         source.setEventHandler { [weak self] in self?.scheduleCoalescedReload() }

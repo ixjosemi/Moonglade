@@ -22,7 +22,12 @@ private enum RippleShaderLibrary {
             mainResourceURL: Bundle.main.resourceURL
         )
         for path in searched {
-            if let bundle = Bundle(path: path) { return ShaderLibrary.bundle(bundle) }
+            guard BundledResources.containsResource(
+                named: "default",
+                withExtension: "metallib",
+                inBundleAt: path
+            ), let bundle = Bundle(path: path) else { continue }
+            return ShaderLibrary.bundle(bundle)
         }
         return nil
     }()

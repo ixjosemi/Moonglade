@@ -3,14 +3,17 @@ import Darwin
 
 public enum StateRepositoryError: Error, Equatable, Sendable {
     case insecureDirectory
+    case concurrentlyReplaced
     case enrichmentTooLarge
     case ownershipIndexTooLarge
     case invalidOwnershipIndex
     case sessionIdentifierTooLong
+    case writeLockTimeout
 }
 
 package struct StateSnapshot: Sendable {
     package fileprivate(set) var sessions: [AgentSession]
+    package fileprivate(set) var skippedDocumentCount: Int
     fileprivate var lifecycleSessions: [AgentSession]
     fileprivate let convoyOwnedOpenCodeSessionIDs: Set<String>
 
@@ -91,6 +94,36 @@ private struct TerminalEnrichmentDocument: Codable, Equatable {
 }
 
 public struct StateRepository: Sendable {
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = 0
+
+        var value: Int {
+            get {
+                lock.lock()
+                defer { lock.unlock() }
+                return storage
+            }
+            set {
+                lock.lock()
+                storage = newValue
+                lock.unlock()
+            }
+        }
+
+        func increment() {
+            lock.lock()
+            storage += 1
+            lock.unlock()
+        }
+    }
+
+    /// How long a writer polls for another process's advisory lock before
+    /// failing with `writeLockTimeout`. Far above any real critical section —
+    /// they are short local filesystem operations — while keeping a wedged
+    /// holder from parking every hook on the machine. `package` so tests can
+    /// shorten the wait; production code never mutates it.
+    package static var writeLockAcquisitionTimeout: TimeInterval = 5
     private static let maximumStateFileSize = 1_048_576
     private static let maximumEnrichmentFileSize = 16_384
     private static let maximumOwnershipIndexFileSize = 16 * 1_048_576
@@ -99,14 +132,21 @@ public struct StateRepository: Sendable {
     private static let enrichmentFilePrefix = "enrichment-"
     private static let enrichmentFileExtension = "overlay"
     private static let convoyOwnershipFileName = "convoy-opencode-ownership.index"
+    private static let decodedDocumentCounter = LockedCounter()
+    package static var documentsDecodedForTesting: Int {
+        get { decodedDocumentCounter.value }
+        set { decodedDocumentCounter.value = newValue }
+    }
     public let directoryURL: URL
     private let materializationObserver: (@Sendable () -> Void)?
     private let reloadObserver: (@Sendable () throws -> Void)?
+    package var didReadDocumentForTesting: (@Sendable () -> Void)?
 
     public init(directoryURL: URL) {
         self.directoryURL = directoryURL
         materializationObserver = nil
         reloadObserver = nil
+        didReadDocumentForTesting = nil
     }
 
     package init(
@@ -116,6 +156,7 @@ public struct StateRepository: Sendable {
         self.directoryURL = directoryURL
         self.materializationObserver = materializationObserver
         reloadObserver = nil
+        didReadDocumentForTesting = nil
     }
 
     package init(
@@ -125,6 +166,7 @@ public struct StateRepository: Sendable {
         self.directoryURL = directoryURL
         materializationObserver = nil
         self.reloadObserver = reloadObserver
+        didReadDocumentForTesting = nil
     }
 
     public func prepareDirectory() throws {
@@ -157,6 +199,7 @@ public struct StateRepository: Sendable {
         } catch CocoaError.fileReadNoSuchFile {
             return StateSnapshot(
                 sessions: [],
+                skippedDocumentCount: 0,
                 lifecycleSessions: [],
                 convoyOwnedOpenCodeSessionIDs: []
             )
@@ -164,18 +207,54 @@ public struct StateRepository: Sendable {
         let convoyOwnedOpenCodeSessionIDs = mergingEnrichments
             ? try loadConvoyOwnedOpenCodeSessionIDs()
             : []
-        var lifecycleSessions: [AgentSession] = []
-        for fileURL in fileURLs where fileURL.pathExtension == "json" {
+        var decodedSessions: [(session: AgentSession, fileName: String)] = []
+        var skippedDocumentCount = 0
+        for fileURL in fileURLs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            where fileURL.pathExtension == "json" {
+            if mergingEnrichments,
+               let encodedID = Self.encodedIdentifierComponent(from: fileURL.lastPathComponent),
+               let sessionID = Self.decodedIdentifier(encodedID),
+               convoyOwnedOpenCodeSessionIDs.contains(sessionID) {
+                continue
+            }
             do {
-                lifecycleSessions.append(try AgentSession.decode(from: secureData(at: fileURL)))
+                Self.decodedDocumentCounter.increment()
+                decodedSessions.append(
+                    (
+                        try AgentSession.decode(from: secureDataWithRetry(at: fileURL)),
+                        fileURL.lastPathComponent
+                    )
+                )
+                Self.decodeFailureLog.reportSuccess(fileURL.lastPathComponent)
             } catch {
+                skippedDocumentCount += 1
                 Self.decodeFailureLog.reportOnce(fileURL.lastPathComponent, error: error)
                 continue
             }
         }
+        var sessionsByID: [String: (session: AgentSession, fileName: String)] = [:]
+        for decoded in decodedSessions {
+            guard let existing = sessionsByID[decoded.session.id] else {
+                sessionsByID[decoded.session.id] = decoded
+                continue
+            }
+            let decodedWins = decoded.session.updatedAt > existing.session.updatedAt
+                || (decoded.session.updatedAt == existing.session.updatedAt
+                    && decoded.fileName < existing.fileName)
+            if decodedWins {
+                sessionsByID[decoded.session.id] = decoded
+            }
+            Self.decodeFailureLog.reportDuplicate(
+                decodedWins ? existing.fileName : decoded.fileName
+            )
+        }
+        let lifecycleSessions = sessionsByID.values
+            .sorted { $0.fileName > $1.fileName }
+            .map(\.session)
         guard mergingEnrichments else {
             return StateSnapshot(
                 sessions: lifecycleSessions,
+                skippedDocumentCount: skippedDocumentCount,
                 lifecycleSessions: lifecycleSessions,
                 convoyOwnedOpenCodeSessionIDs: convoyOwnedOpenCodeSessionIDs
             )
@@ -203,19 +282,54 @@ public struct StateRepository: Sendable {
             retainedEnrichmentFileNames.insert(fileURL.lastPathComponent)
             return merging(enrichment, into: lifecycle)
         }
-        for fileURL in fileURLs where isRecognizedEnrichmentFile(fileURL) {
-            if !retainedEnrichmentFileNames.contains(fileURL.lastPathComponent) {
-                pruneEnrichmentFile(at: fileURL)
-            }
-        }
         return StateSnapshot(
             sessions: sessions.filter {
                 $0.tool != .opencode
-                    || !convoyOwnedOpenCodeSessionIDs.contains($0.sessionID)
+                || !convoyOwnedOpenCodeSessionIDs.contains($0.sessionID)
             },
+            skippedDocumentCount: skippedDocumentCount,
             lifecycleSessions: lifecycleSessions,
             convoyOwnedOpenCodeSessionIDs: convoyOwnedOpenCodeSessionIDs
         )
+    }
+
+    package func pruneOrphanedEnrichments(against snapshot: StateSnapshot) throws {
+        var ownedFileNames = Set(try snapshot.lifecycleSessions.map(enrichmentFileName(for:)))
+        // A Convoy-owned OpenCode document is deliberately never decoded, so it
+        // cannot appear in the lifecycle list. Its owner is alive all the same:
+        // ownership suppresses a phase session from the UI, it does not retire
+        // the plugin's document or the overlay bound to it.
+        for sessionID in snapshot.convoyOwnedOpenCodeSessionIDs {
+            ownedFileNames.insert(
+                try enrichmentFileName(tool: .opencode, sessionID: sessionID)
+            )
+        }
+        let fileURLs: [URL]
+        do {
+            fileURLs = try FileManager.default.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: nil
+            )
+        } catch CocoaError.fileReadNoSuchFile {
+            return
+        }
+        try withWriteLock {
+            for fileURL in fileURLs
+                where isRecognizedEnrichmentFile(fileURL)
+                    && !ownedFileNames.contains(fileURL.lastPathComponent) {
+                var metadata = stat()
+                guard Darwin.lstat(fileURL.path, &metadata) == 0 else {
+                    if errno == ENOENT { continue }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                guard metadata.st_uid == getuid() else {
+                    throw StateRepositoryError.insecureDirectory
+                }
+                if Darwin.unlink(fileURL.path) != 0, errno != ENOENT {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+        }
     }
 
     package func reload(
@@ -256,32 +370,60 @@ public struct StateRepository: Sendable {
     /// the whole UI, but each is reported once per process so the failure
     /// stays diagnosable — reloads run too often to log unconditionally.
     private final class DecodeFailureLog: @unchecked Sendable {
+        private static let maximumEntries = 256
         private let lock = NSLock()
         private var reportedFileNames: Set<String> = []
+        private var reportedDuplicateFileNames: Set<String> = []
 
         func reportOnce(_ fileName: String, error: Error) {
             lock.lock()
             defer { lock.unlock() }
             guard reportedFileNames.insert(fileName).inserted else { return }
+            if reportedFileNames.count > Self.maximumEntries {
+                reportedFileNames.removeFirst()
+            }
             NSLog(
-                "Moonglade skipped unreadable state document %@: %@",
-                fileName,
-                String(describing: error)
+                "MOONGLADE_STATE_READ_FAILED: %@ (%@)",
+                Self.redactedFileName(fileName),
+                String(describing: type(of: error))
             )
+        }
+
+        /// Once per process, like `reportOnce`: duplicates persist on disk
+        /// until a writer retires one, and loads run far too often to log
+        /// the same pair on every tick.
+        func reportDuplicate(_ fileName: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard reportedDuplicateFileNames.insert(fileName).inserted else { return }
+            if reportedDuplicateFileNames.count > Self.maximumEntries {
+                reportedDuplicateFileNames.removeFirst()
+            }
+            NSLog("MOONGLADE_DUPLICATE_STATE: %@", Self.redactedFileName(fileName))
+        }
+
+        func reportSuccess(_ fileName: String) {
+            lock.lock()
+            reportedFileNames.remove(fileName)
+            lock.unlock()
+        }
+
+        private static func redactedFileName(_ fileName: String) -> String {
+            let extensionName = (fileName as NSString).pathExtension
+            let prefix = fileName.split(separator: "-", maxSplits: 1).first.map(String.init)
+                ?? "state"
+            return "\(prefix)-<redacted>.\(extensionName)"
         }
     }
 
     private static let decodeFailureLog = DecodeFailureLog()
 
     public func save(_ session: AgentSession) throws {
-        var snapshot = session.source == .reaper
-            ? StateSnapshot(
-                sessions: [],
-                lifecycleSessions: [],
-                convoyOwnedOpenCodeSessionIDs: try loadConvoyOwnedOpenCodeSessionIDs()
-            )
-            : try loadSnapshot()
-        try save(session, updating: &snapshot)
+        try prepareDirectory()
+        try withWriteLock {
+            var snapshot = try snapshotForSave(of: session)
+            try saveLocked(session, updating: &snapshot)
+        }
     }
 
     /// Convoy owns every OpenCode phase session named in its run metadata.
@@ -291,10 +433,28 @@ public struct StateRepository: Sendable {
     @discardableResult
     package func mergeConvoyOwnedOpenCodeSessionIDs(
         _ sessionIDs: Set<String>,
-        allowingInvalidIndexRepair: Bool = false
+        allowingInvalidIndexRepair: Bool = false,
+        inventoryIsComplete: Bool = false
     ) throws -> Bool {
         try validateOwnershipSessionIDs(sessionIDs)
         try prepareDirectory()
+        // Read-modify-write of a single index file: without the lock a
+        // concurrent merge reads the same baseline and the later rename wins,
+        // silently dropping the other writer's IDs.
+        return try withWriteLock {
+            try mergeConvoyOwnedOpenCodeSessionIDsLocked(
+                sessionIDs,
+                allowingInvalidIndexRepair: allowingInvalidIndexRepair,
+                inventoryIsComplete: inventoryIsComplete
+            )
+        }
+    }
+
+    private func mergeConvoyOwnedOpenCodeSessionIDsLocked(
+        _ sessionIDs: Set<String>,
+        allowingInvalidIndexRepair: Bool,
+        inventoryIsComplete: Bool
+    ) throws -> Bool {
         let existing: Set<String>
         let repairsInvalidIndex: Bool
         do {
@@ -310,7 +470,7 @@ public struct StateRepository: Sendable {
             existing = []
             repairsInvalidIndex = true
         }
-        let combined = existing.union(sessionIDs)
+        let combined = inventoryIsComplete ? sessionIDs : existing.union(sessionIDs)
         guard repairsInvalidIndex || combined != existing else { return false }
         guard combined.count <= Self.maximumOwnershipEntryCount else {
             throw StateRepositoryError.ownershipIndexTooLarge
@@ -326,16 +486,7 @@ public struct StateRepository: Sendable {
             throw StateRepositoryError.ownershipIndexTooLarge
         }
         let destinationURL = directoryURL.appendingPathComponent(Self.convoyOwnershipFileName)
-        let temporaryURL = directoryURL.appendingPathComponent(".\(UUID().uuidString).ownership.tmp")
-        try data.write(to: temporaryURL)
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: temporaryURL.path
-        )
-        guard Darwin.rename(temporaryURL.path, destinationURL.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+        try SecureFileWriter.writeAtomically(data, to: destinationURL)
         StateChangeNotifier.post()
         return true
     }
@@ -406,6 +557,24 @@ public struct StateRepository: Sendable {
 
     package func save(_ session: AgentSession, updating snapshot: inout StateSnapshot) throws {
         try prepareDirectory()
+        try withWriteLock {
+            try saveLocked(session, updating: &snapshot)
+        }
+    }
+
+    private func snapshotForSave(of session: AgentSession) throws -> StateSnapshot {
+        if session.source == .reaper {
+            return StateSnapshot(
+                sessions: [],
+                skippedDocumentCount: 0,
+                lifecycleSessions: [],
+                convoyOwnedOpenCodeSessionIDs: try loadConvoyOwnedOpenCodeSessionIDs()
+            )
+        }
+        return try loadSnapshot()
+    }
+
+    private func saveLocked(_ session: AgentSession, updating snapshot: inout StateSnapshot) throws {
         let existingSessions = session.source == .reaper ? [] : snapshot.lifecycleSessions
         let session = preservingProcessIdentity(in: session, from: existingSessions)
         if session.source != .reaper {
@@ -424,7 +593,6 @@ public struct StateRepository: Sendable {
             }
         }
         let destinationURL = directoryURL.appendingPathComponent(try fileName(for: session))
-        let temporaryURL = directoryURL.appendingPathComponent(".\(UUID().uuidString).tmp")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -433,18 +601,24 @@ public struct StateRepository: Sendable {
             snapshot.upsert(lifecycle: session, merged: mergedSession(for: session))
             return
         }
-        try data.write(to: temporaryURL)
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: temporaryURL.path
-        )
-
-        guard Darwin.rename(temporaryURL.path, destinationURL.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        if session.source != .reaper,
+           let existingData = try? secureDataWithRetry(at: destinationURL),
+           let existing = try? AgentSession.decode(from: existingData),
+           existing.updatedAt > session.updatedAt {
+            snapshot.upsert(lifecycle: existing, merged: mergedSession(for: existing))
+            return
         }
+        try SecureFileWriter.writeAtomically(data, to: destinationURL)
         snapshot.upsert(lifecycle: session, merged: mergedSession(for: session))
         StateChangeNotifier.post()
+    }
+
+    private func withWriteLock<Value>(_ body: () throws -> Value) throws -> Value {
+        try StateDirectoryWriteLock.forDirectory(directoryURL).withLock(
+            at: directoryURL.deletingLastPathComponent()
+                .appendingPathComponent(".moonglade-state-write.lock"),
+            body
+        )
     }
 
     /// Publishes app-owned process and terminal metadata without replacing the
@@ -463,6 +637,24 @@ public struct StateRepository: Sendable {
             return nil
         }
         try prepareDirectory()
+        return try withWriteLock {
+            try saveEnrichmentLocked(
+                for: session,
+                processIdentity: processIdentity,
+                process: process,
+                terminal: terminal,
+                updating: &snapshot
+            )
+        }
+    }
+
+    private func saveEnrichmentLocked(
+        for session: AgentSession,
+        processIdentity: ProcessIdentity,
+        process: DetectedAgentProcess,
+        terminal: TerminalContext?,
+        updating snapshot: inout StateSnapshot
+    ) throws -> AgentSession? {
         guard let lifecycle = try loadLifecycleDocument(matching: session) else {
             _ = try removeEnrichment(for: session)
             snapshot.remove(session)
@@ -517,16 +709,7 @@ public struct StateRepository: Sendable {
             return merged
         }
 
-        let temporaryURL = directoryURL.appendingPathComponent(".\(UUID().uuidString).overlay.tmp")
-        try data.write(to: temporaryURL)
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: temporaryURL.path
-        )
-        guard Darwin.rename(temporaryURL.path, enrichmentURL.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
+        try SecureFileWriter.writeAtomically(data, to: enrichmentURL)
         snapshot.upsert(lifecycle: lifecycle, merged: merged)
         StateChangeNotifier.post()
         return merged
@@ -549,20 +732,30 @@ public struct StateRepository: Sendable {
     }
 
     public func remove(_ session: AgentSession) throws {
+        // A directory that never existed holds neither the document nor the
+        // overlay, and its parent has no lock file to open — return before
+        // the lock acquisition can fail on the missing path.
+        var directoryMetadata = stat()
+        guard Darwin.lstat(directoryURL.path, &directoryMetadata) == 0 else {
+            if errno == ENOENT { return }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         let fileURL = directoryURL.appendingPathComponent(try fileName(for: session))
-        var removed = false
-        do {
-            try FileManager.default.removeItem(at: fileURL)
-            removed = true
-        } catch CocoaError.fileNoSuchFile {
-            // The lifecycle writer may already have removed its document; its
-            // app-owned overlay must still be retired.
-        }
-        if try removeEnrichment(for: session) {
-            removed = true
-        }
-        if removed {
-            StateChangeNotifier.post()
+        try withWriteLock {
+            var removed = false
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+                removed = true
+            } catch CocoaError.fileNoSuchFile {
+                // The lifecycle writer may already have removed its document;
+                // its app-owned overlay must still be retired.
+            }
+            if try removeEnrichment(for: session) {
+                removed = true
+            }
+            if removed {
+                StateChangeNotifier.post()
+            }
         }
     }
 
@@ -608,7 +801,6 @@ public struct StateRepository: Sendable {
             decoder.dateDecodingStrategy = .iso8601
             let enrichment = try decoder.decode(SessionEnrichmentDocument.self, from: data)
             guard enrichmentIsValid(enrichment, for: lifecycle) else {
-                pruneEnrichmentFile(at: fileURL)
                 return nil
             }
             return enrichment
@@ -616,7 +808,6 @@ public struct StateRepository: Sendable {
             return nil
         } catch {
             Self.decodeFailureLog.reportOnce(fileURL.lastPathComponent, error: error)
-            pruneEnrichmentFile(at: fileURL)
             return nil
         }
     }
@@ -750,26 +941,32 @@ public struct StateRepository: Sendable {
             && fileURL.lastPathComponent.hasPrefix(Self.enrichmentFilePrefix)
     }
 
-    private func pruneEnrichmentFile(at fileURL: URL) {
-        guard isRecognizedEnrichmentFile(fileURL) else { return }
-        var metadata = stat()
-        guard Darwin.lstat(fileURL.path, &metadata) == 0,
-              metadata.st_uid == getuid() else {
-            return
-        }
-        _ = Darwin.unlink(fileURL.path)
-    }
-
     private func fileName(for session: AgentSession) throws -> String {
         "\(session.tool.rawValue)-\(try encodedIdentifier(for: session)).json"
     }
 
     private func enrichmentFileName(for session: AgentSession) throws -> String {
-        "\(Self.enrichmentFilePrefix)\(session.tool.rawValue)-\(try encodedIdentifier(for: session)).\(Self.enrichmentFileExtension)"
+        try enrichmentFileName(tool: session.tool, sessionID: session.sessionID)
+    }
+
+    private func enrichmentFileName(tool: AgentTool, sessionID: String) throws -> String {
+        "\(Self.enrichmentFilePrefix)\(tool.rawValue)-\(try encodedIdentifier(sessionID)).\(Self.enrichmentFileExtension)"
     }
 
     private func encodedIdentifier(for session: AgentSession) throws -> String {
-        let identifierData = Data(session.sessionID.utf8)
+        try encodedIdentifier(session.sessionID)
+    }
+
+    package func encodedIdentifierForTesting(_ sessionID: String) throws -> String {
+        try encodedIdentifier(sessionID)
+    }
+
+    package func decodedIdentifierForTesting(_ encoded: String) -> String? {
+        Self.decodedIdentifier(encoded)
+    }
+
+    private func encodedIdentifier(_ sessionID: String) throws -> String {
+        let identifierData = Data(sessionID.utf8)
         guard identifierData.count <= Self.maximumSessionIdentifierBytes else {
             throw StateRepositoryError.sessionIdentifierTooLong
         }
@@ -777,6 +974,29 @@ public struct StateRepository: Sendable {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func encodedIdentifierComponent(from fileName: String) -> String? {
+        guard fileName.hasPrefix("opencode-"), fileName.hasSuffix(".json") else { return nil }
+        let start = fileName.index(fileName.startIndex, offsetBy: "opencode-".count)
+        let end = fileName.index(fileName.endIndex, offsetBy: -".json".count)
+        return String(fileName[start..<end])
+    }
+
+    private static func decodedIdentifier(_ encoded: String) -> String? {
+        guard !encoded.isEmpty,
+              encoded.allSatisfy({ $0.isNumber || $0.isLetter || $0 == "-" || $0 == "_" }) else {
+            return nil
+        }
+        let base64 = encoded
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64 + padding),
+              data.count <= maximumSessionIdentifierBytes,
+              let identifier = String(data: data, encoding: .utf8),
+              !identifier.isEmpty else { return nil }
+        return identifier
     }
 
     private func ensurePrivateDirectory() throws {
@@ -787,13 +1007,26 @@ public struct StateRepository: Sendable {
                 throw StateRepositoryError.insecureDirectory
             }
         } else if errno == ENOENT {
+            var newlyCreated: [URL] = []
+            var ancestor = directoryURL
+            while Darwin.access(ancestor.path, F_OK) != 0 {
+                newlyCreated.append(ancestor)
+                ancestor.deleteLastPathComponent()
+            }
             try FileManager.default.createDirectory(
                 at: directoryURL,
                 withIntermediateDirectories: true
             )
+            for createdURL in newlyCreated {
+                guard Darwin.chmod(createdURL.path, 0o700) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
+            return
         } else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+        guard metadata.st_mode & 0o777 != 0o700 else { return }
         guard Darwin.chmod(directoryURL.path, 0o700) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
@@ -831,18 +1064,41 @@ public struct StateRepository: Sendable {
         }
 
         var finalMetadata = stat()
+        didReadDocumentForTesting?()
         guard Darwin.fstat(descriptor, &finalMetadata) == 0,
               isSecureFile(
                   finalMetadata,
                   maximumSize: maximumSize,
                   requiredPermissions: requiredPermissions
-              ),
-              hasSameFingerprint(initialMetadata, finalMetadata),
-              data.count <= maximumSize,
-              finalMetadata.st_size == data.count else {
+              ) else {
             throw StateRepositoryError.insecureDirectory
         }
+        guard hasSameFingerprint(initialMetadata, finalMetadata),
+              data.count <= maximumSize,
+              finalMetadata.st_size == data.count else {
+            throw StateRepositoryError.concurrentlyReplaced
+        }
         return data
+    }
+
+    private func secureDataWithRetry(
+        at fileURL: URL,
+        maximumSize: Int = Self.maximumStateFileSize,
+        requiredPermissions: mode_t? = nil
+    ) throws -> Data {
+        do {
+            return try secureData(
+                at: fileURL,
+                maximumSize: maximumSize,
+                requiredPermissions: requiredPermissions
+            )
+        } catch StateRepositoryError.concurrentlyReplaced {
+            return try secureData(
+                at: fileURL,
+                maximumSize: maximumSize,
+                requiredPermissions: requiredPermissions
+            )
+        }
     }
 
     private func isSecureFile(
@@ -872,5 +1128,95 @@ public struct StateRepository: Sendable {
             && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
             && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
             && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+    }
+}
+
+/// Serialises every mutation of one state directory.
+///
+/// Two layers are needed because they solve different halves of the problem.
+/// The advisory file lock excludes *other* processes: integration hooks run as
+/// short-lived CLI invocations while the app is writing. It cannot exclude
+/// this process from itself — POSIX record locks are held per process, so
+/// every thread acquires immediately, and the first descriptor closed releases
+/// the lock for all of them. The recursive mutex covers that half, and its
+/// depth count keeps the descriptor open until the outermost caller returns,
+/// so a nested write (a save that retires superseded documents) neither
+/// deadlocks nor drops the lock its caller is standing on.
+///
+/// One instance exists per state directory for the lifetime of the process.
+/// A process writes to a single directory in production; the registry only
+/// grows across the many temporary directories a test run creates.
+private final class StateDirectoryWriteLock: @unchecked Sendable {
+    private static let registryLock = NSLock()
+    private static var locksByDirectoryPath: [String: StateDirectoryWriteLock] = [:]
+
+    static func forDirectory(_ directoryURL: URL) -> StateDirectoryWriteLock {
+        let key = directoryURL.standardizedFileURL.path
+        registryLock.lock()
+        defer { registryLock.unlock() }
+        if let existing = locksByDirectoryPath[key] { return existing }
+        let created = StateDirectoryWriteLock()
+        locksByDirectoryPath[key] = created
+        return created
+    }
+
+    private let mutex = NSRecursiveLock()
+    private var depth = 0
+    private var descriptor: Int32 = -1
+
+    func withLock<Value>(at lockURL: URL, _ body: () throws -> Value) throws -> Value {
+        mutex.lock()
+        defer { mutex.unlock() }
+        if depth == 0 {
+            try acquireFileLock(at: lockURL)
+        }
+        depth += 1
+        defer {
+            depth -= 1
+            if depth == 0 { releaseFileLock() }
+        }
+        return try body()
+    }
+
+    /// Acquires the advisory file lock without ever blocking indefinitely.
+    ///
+    /// Integration hooks call into here from inside an agent's turn. A holder
+    /// that dies releases the lock through the kernel, but a holder that is
+    /// merely wedged would park every hook on this machine — and with them
+    /// every agent — behind an unbounded `F_LOCK`. Polling `F_TLOCK` against
+    /// a deadline turns that machine-wide hang into one loud, local failure.
+    private func acquireFileLock(at lockURL: URL) throws {
+        let opened = Darwin.open(
+            lockURL.path,
+            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+            0o600
+        )
+        guard opened >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let deadline = Date().addingTimeInterval(StateRepository.writeLockAcquisitionTimeout)
+        while Darwin.lockf(opened, F_TLOCK, 0) != 0 {
+            guard errno == EAGAIN || errno == EACCES || errno == EINTR else {
+                let failure = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                _ = Darwin.close(opened)
+                throw failure
+            }
+            guard Date() < deadline else {
+                _ = Darwin.close(opened)
+                NSLog("MOONGLADE_STATE_LOCK_TIMEOUT: a writer held the state lock past the deadline")
+                throw StateRepositoryError.writeLockTimeout
+            }
+            usleep(Self.lockRetryIntervalMicroseconds)
+        }
+        descriptor = opened
+    }
+
+    private static let lockRetryIntervalMicroseconds: UInt32 = 25_000
+
+    private func releaseFileLock() {
+        guard descriptor >= 0 else { return }
+        _ = Darwin.lockf(descriptor, F_ULOCK, 0)
+        _ = Darwin.close(descriptor)
+        descriptor = -1
     }
 }

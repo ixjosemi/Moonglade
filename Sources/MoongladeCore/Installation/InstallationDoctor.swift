@@ -36,6 +36,8 @@ public struct InstallationDoctor {
             hookBinariesCheck(),
             resourceBundleCheck(),
             stateDirectoryCheck(),
+            stateWritableCheck(),
+            stateFreshnessCheck(),
             claudeHooksCheck(),
             openCodePluginCheck(),
             codexNotifyCheck(),
@@ -96,11 +98,14 @@ public struct InstallationDoctor {
 
     private func claudeHooksCheck() -> DoctorCheck {
         let settingsURL = homeDirectoryURL.appendingPathComponent(".claude/settings.json")
-        guard let settingsData = try? Data(contentsOf: settingsURL) else {
+        let settingsData: Data
+        do {
+            settingsData = try SecureFileReader.read(at: settingsURL)
+        } catch {
             return DoctorCheck(
                 title: "Claude Code hooks",
                 passed: false,
-                detail: "\(display(settingsURL)) is missing — run: moonglade install"
+                detail: unreadableFileDetail(for: settingsURL, error: error)
             )
         }
         let installed = ClaudeSettingsMerger.isInstalled(
@@ -145,14 +150,14 @@ public struct InstallationDoctor {
                 detail: "cannot read the bundled file — see the resource bundle check"
             )
         }
-        guard let installed = try? Data(contentsOf: destination) else {
+        guard let installed = try? SecureFileReader.read(at: destination) else {
             return DoctorCheck(
                 title: title,
                 passed: false,
                 detail: "\(display(destination)) is missing — run: moonglade install"
             )
         }
-        let matchesBundled = (try? Data(contentsOf: bundled)) == installed
+        let matchesBundled = (try? SecureFileReader.read(at: bundled)) == installed
         return DoctorCheck(
             title: title,
             passed: matchesBundled,
@@ -164,11 +169,22 @@ public struct InstallationDoctor {
 
     private func codexNotifyCheck() -> DoctorCheck {
         let configURL = homeDirectoryURL.appendingPathComponent(".codex/config.toml")
-        guard let config = try? String(contentsOf: configURL, encoding: .utf8) else {
+        let config: String
+        do {
+            let configData = try SecureFileReader.read(at: configURL)
+            guard let decoded = String(data: configData, encoding: .utf8) else {
+                return DoctorCheck(
+                    title: "Codex notify",
+                    passed: false,
+                    detail: "\(display(configURL)) is not valid UTF-8"
+                )
+            }
+            config = decoded
+        } catch {
             return DoctorCheck(
                 title: "Codex notify",
                 passed: false,
-                detail: "\(display(configURL)) is missing — run: moonglade install"
+                detail: unreadableFileDetail(for: configURL, error: error)
             )
         }
         guard let notify = Self.notifyValue(in: config) else {
@@ -179,6 +195,46 @@ public struct InstallationDoctor {
             )
         }
         return codexNotifyCheck(notify: notify, configURL: configURL)
+    }
+
+    private func stateWritableCheck() -> DoctorCheck {
+        let stateDirectory = homeDirectoryURL.appendingPathComponent(".moonglade/state")
+        var metadata = stat()
+        let writable = Darwin.lstat(stateDirectory.path, &metadata) == 0
+            && metadata.st_mode & S_IFMT == S_IFDIR
+            && metadata.st_uid == getuid()
+            && metadata.st_mode & 0o022 == 0
+            && Darwin.access(stateDirectory.path, W_OK) == 0
+        return DoctorCheck(
+            title: "state directory write access",
+            passed: writable,
+            detail: writable
+                ? "state directory is private and writable"
+                : "state directory is not writable by the current user"
+        )
+    }
+
+    private func stateFreshnessCheck() -> DoctorCheck {
+        let stateDirectory = homeDirectoryURL.appendingPathComponent(".moonglade/state")
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: stateDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        )) ?? []
+        let threshold = Date().addingTimeInterval(-30 * 60)
+        let hasRecentState = files.contains { url in
+            guard url.pathExtension == "json",
+                  let modified = try? url.resourceValues(
+                      forKeys: [.contentModificationDateKey]
+                  ).contentModificationDate else { return false }
+            return modified >= threshold
+        }
+        return DoctorCheck(
+            title: "state freshness",
+            passed: true,
+            detail: hasRecentState
+                ? "state documents have arrived recently"
+                : "no recent state document — hooks may be idle or not firing"
+        )
     }
 
     /// Codex's `notify` holds a single command, so tools that want it cooperate
@@ -271,5 +327,20 @@ public struct InstallationDoctor {
         let homePath = homeDirectoryURL.standardizedFileURL.path
         guard path.hasPrefix(homePath + "/") else { return path }
         return "~" + path.dropFirst(homePath.count)
+    }
+
+    /// A file the doctor cannot read is not always missing: a group- or
+    /// other-writable config fails the secure read, and "run: moonglade
+    /// install" would send the user in exactly the wrong direction.
+    private func unreadableFileDetail(for fileURL: URL, error: Error) -> String {
+        switch error {
+        case SecureFileReaderError.insecure:
+            return "\(display(fileURL)) is not a private regular file owned by you"
+                + " — run: chmod og-w \(display(fileURL))"
+        case let posixError as POSIXError where posixError.code == .ENOENT:
+            return "\(display(fileURL)) is missing — run: moonglade install"
+        default:
+            return "\(display(fileURL)) could not be read: \(error)"
+        }
     }
 }

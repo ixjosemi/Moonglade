@@ -3,6 +3,7 @@ import Foundation
 public enum ClaudeHookError: Error, Equatable, Sendable {
     case unsupportedEvent(String)
     case unsupportedNotification(String?)
+    case invalidWorkingDirectory
 }
 
 public struct ClaudeHookProcessor: Sendable {
@@ -32,6 +33,9 @@ public struct ClaudeHookProcessor: Sendable {
         now: Date = Date()
     ) throws {
         let input = try JSONDecoder().decode(Payload.self, from: payload)
+        guard let cwd = normalizedAbsolutePath(input.cwd) else {
+            throw ClaudeHookError.invalidWorkingDirectory
+        }
         let existing = try repository.loadLifecycleSessions().first {
             $0.sessionID == input.sessionID
         }
@@ -42,7 +46,7 @@ public struct ClaudeHookProcessor: Sendable {
             pid: processID,
             status: state.status,
             attentionReason: state.reason,
-            cwd: input.cwd,
+            cwd: cwd,
             startedAt: existing?.startedAt ?? now,
             updatedAt: now,
             terminal: existing?.terminal ?? terminalContext(for: input.cwd, environment: environment)

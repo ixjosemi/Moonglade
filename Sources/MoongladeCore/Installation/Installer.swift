@@ -92,55 +92,66 @@ public struct Installer {
     /// does not exist, matches this build's bundled content, or carries the
     /// ownership marker; anything else belongs to the user.
     private func mayReplaceIntegrationFile(at destination: URL, bundled: URL) throws -> Bool {
-        guard FileManager.default.fileExists(atPath: destination.path) else { return true }
-        let existing = try Data(contentsOf: destination)
-        return existing == (try Data(contentsOf: bundled)) || Self.isMoongladeOwned(existing)
+        let resolvedDestination = try writableFileURL(at: destination)
+        guard FileManager.default.fileExists(atPath: resolvedDestination.path) else { return true }
+        let existing = try SecureFileReader.read(at: resolvedDestination)
+        return existing == (try SecureFileReader.read(at: bundled))
+            || Self.isMoongladeOwned(existing)
     }
 
     private func removeOwnedIntegrationFile(at destination: URL, matching bundled: URL) throws {
-        if FileManager.default.fileExists(atPath: destination.path),
+        let resolvedDestination = try writableFileURL(at: destination)
+        if FileManager.default.fileExists(atPath: resolvedDestination.path),
            try mayReplaceIntegrationFile(at: destination, bundled: bundled) {
-            try removeIfPresent(destination)
+            try removeIfPresent(resolvedDestination)
         }
     }
 
     private func uninstallClaudeSettings(hookDirectory: URL) throws {
-        let settingsURL = homeDirectoryURL.appendingPathComponent(".claude/settings.json")
+        let settingsURL = try writableFileURL(
+            at: homeDirectoryURL.appendingPathComponent(".claude/settings.json")
+        )
         guard FileManager.default.fileExists(atPath: settingsURL.path) else { return }
         let updated = try ClaudeSettingsMerger.remove(
-            settingsData: Data(contentsOf: settingsURL),
+            settingsData: try SecureFileReader.read(at: settingsURL),
             hookCommand: hookDirectory.appendingPathComponent("claude-hook.sh").path
         )
-        try updated.write(to: settingsURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
+        try SecureFileWriter.writeAtomically(updated, to: settingsURL)
     }
 
     private func uninstallCodexNotify(hookDirectory: URL) throws {
-        let configURL = homeDirectoryURL.appendingPathComponent(".codex/config.toml")
+        let configURL = try writableFileURL(
+            at: homeDirectoryURL.appendingPathComponent(".codex/config.toml")
+        )
         guard FileManager.default.fileExists(atPath: configURL.path) else { return }
-        var config = try String(contentsOf: configURL, encoding: .utf8)
-        let path = hookDirectory.appendingPathComponent("codex-notify.sh").path
+        guard var config = String(
+            data: try SecureFileReader.read(at: configURL),
+            encoding: .utf8
+        ) else { throw InstallationError.invalidClaudeSettings }
+        let path = escapedTomlString(hookDirectory.appendingPathComponent("codex-notify.sh").path)
         config = config.replacingOccurrences(
             of: "notify = [\"\(path)\"]\n",
             with: ""
         )
-        try Data(config.utf8).write(to: configURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+        try SecureFileWriter.writeAtomically(Data(config.utf8), to: configURL)
     }
 
     private func installClaudeSettings(hookDirectory: URL) throws {
         let directory = homeDirectoryURL.appendingPathComponent(".claude")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let settingsURL = directory.appendingPathComponent("settings.json")
+        let settingsDestination = directory.appendingPathComponent("settings.json")
+        let settingsURL = try writableFileURL(at: settingsDestination)
         let existing = FileManager.default.fileExists(atPath: settingsURL.path)
-            ? try Data(contentsOf: settingsURL)
+            ? try SecureFileReader.read(at: settingsURL)
             : Data("{}".utf8)
+        if FileManager.default.fileExists(atPath: settingsURL.path) {
+            try createSettingsBackup(for: settingsDestination, original: existing)
+        }
         let merged = try ClaudeSettingsMerger.merge(
             settingsData: existing,
             hookCommand: hookDirectory.appendingPathComponent("claude-hook.sh").path
         )
-        try merged.write(to: settingsURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
+        try SecureFileWriter.writeAtomically(merged, to: settingsURL)
     }
 
     private func installOpenCodePlugin() throws {
@@ -169,31 +180,56 @@ public struct Installer {
         let directory = homeDirectoryURL.appendingPathComponent(relativeDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent(fileName)
+        let writableDestination = try writableFileURL(at: destination)
         guard try mayReplaceIntegrationFile(at: destination, bundled: bundled) else {
             throw InstallationError.existingIntegrationFile(destination.path)
         }
-        try copy(bundled, to: destination, executable: false)
+        try copy(bundled, to: writableDestination, executable: false)
     }
 
     private func installCodexNotify(hookDirectory: URL) throws {
         let directory = homeDirectoryURL.appendingPathComponent(".codex")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let configURL = directory.appendingPathComponent("config.toml")
-        var config = FileManager.default.fileExists(atPath: configURL.path)
-            ? try String(contentsOf: configURL, encoding: .utf8)
-            : ""
+        let configDestination = directory.appendingPathComponent("config.toml")
+        let configURL = try writableFileURL(at: configDestination)
+        var config = ""
+        if FileManager.default.fileExists(atPath: configURL.path) {
+            guard let decoded = String(
+                data: try SecureFileReader.read(at: configURL),
+                encoding: .utf8
+            ) else { throw InstallationError.invalidClaudeSettings }
+            config = decoded
+        }
         if config.range(of: #"(?m)^\s*notify\s*="#, options: .regularExpression) == nil {
-            let script = hookDirectory.appendingPathComponent("codex-notify.sh").path
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
+            let script = escapedTomlString(hookDirectory.appendingPathComponent("codex-notify.sh").path)
             // `notify` must live in the root table, which ends at the first
             // table header. A multi-line value may continue on a line that
             // begins with "[", so the top of the file is the only insertion
             // point that is safe regardless of the existing content.
             config = "notify = [\"\(script)\"]\n\n" + config
-            try Data(config.utf8).write(to: configURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+            try SecureFileWriter.writeAtomically(Data(config.utf8), to: configURL)
         }
+    }
+
+    private func escapedTomlString(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private func createSettingsBackup(for destination: URL, original: Data) throws {
+        let backupURL = destination.appendingPathExtension("moonglade-backup")
+        var metadata = stat()
+        if Darwin.lstat(backupURL.path, &metadata) == 0 {
+            guard metadata.st_mode & S_IFMT == S_IFREG, metadata.st_uid == getuid() else {
+                throw InstallationError.unsafeInstallationPath(backupURL.path)
+            }
+            return
+        }
+        guard errno == ENOENT else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        try SecureFileWriter.writeIfAbsent(original, to: backupURL)
     }
 
     private func copy(_ source: URL, to destination: URL, executable: Bool) throws {
@@ -259,6 +295,34 @@ public struct Installer {
         }
     }
 
+    private func writableFileURL(at destination: URL) throws -> URL {
+        var metadata = stat()
+        guard Darwin.lstat(destination.path, &metadata) == 0 else {
+            guard errno == ENOENT else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            return destination
+        }
+        guard metadata.st_mode & S_IFMT == S_IFLNK else {
+            guard metadata.st_mode & S_IFMT == S_IFREG, metadata.st_uid == getuid() else {
+                throw InstallationError.unsafeInstallationPath(destination.path)
+            }
+            return destination
+        }
+        guard let resolvedPath = realpathString(destination.path),
+              let resolvedHome = realpathString(homeDirectoryURL.path),
+              resolvedPath == resolvedHome || resolvedPath.hasPrefix(resolvedHome + "/") else {
+            throw InstallationError.unsafeInstallationPath(destination.path)
+        }
+        var resolvedMetadata = stat()
+        guard Darwin.lstat(resolvedPath, &resolvedMetadata) == 0,
+              resolvedMetadata.st_mode & S_IFMT == S_IFREG,
+              resolvedMetadata.st_uid == getuid() else {
+            throw InstallationError.unsafeInstallationPath(destination.path)
+        }
+        return URL(fileURLWithPath: resolvedPath)
+    }
+
     private func walkComponents(
         of directory: URL,
         validateExisting: (URL, stat) throws -> Void
@@ -298,14 +362,14 @@ public struct Installer {
         let claudeSettings = homeDirectoryURL.appendingPathComponent(".claude/settings.json")
         if FileManager.default.fileExists(atPath: claudeSettings.path) {
             _ = try ClaudeSettingsMerger.merge(
-                settingsData: Data(contentsOf: claudeSettings),
+                settingsData: try SecureFileReader.read(at: writableFileURL(at: claudeSettings)),
                 hookCommand: homeDirectoryURL.appendingPathComponent(".moonglade/bin/claude-hook.sh").path
             )
         }
 
         let codexConfig = homeDirectoryURL.appendingPathComponent(".codex/config.toml")
         if FileManager.default.fileExists(atPath: codexConfig.path) {
-            _ = try String(contentsOf: codexConfig, encoding: .utf8)
+            _ = try SecureFileReader.read(at: writableFileURL(at: codexConfig))
         }
 
         let integrationFiles: [(destination: String, bundled: URL)] = [
@@ -314,6 +378,7 @@ public struct Installer {
         ]
         for file in integrationFiles {
             let destination = homeDirectoryURL.appendingPathComponent(file.destination)
+            _ = try writableFileURL(at: destination)
             guard try mayReplaceIntegrationFile(at: destination, bundled: file.bundled) else {
                 throw InstallationError.existingIntegrationFile(destination.path)
             }

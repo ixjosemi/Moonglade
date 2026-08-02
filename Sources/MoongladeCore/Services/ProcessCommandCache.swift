@@ -26,22 +26,48 @@ public struct ProcessCommand: Equatable, Sendable {
 ///
 /// Entries are keyed by `ProcessIdentity`, so a recycled pid misses the cache
 /// instead of inheriting the dead process's command line.
+/// Every lookup belongs to a scan. `beginScan` opens the bookkeeping, each
+/// `command(for:scanToken:read:)` records that the scan still cares about an
+/// identity, and exactly one of `sweep(scanToken:)` or `discardScan` closes it.
+/// A scan that ends by neither route keeps its request set alive for the
+/// lifetime of the process, so callers must always close what they open.
 public final class ProcessCommandCache: @unchecked Sendable {
     private let lock = NSLock()
     private var commandsByIdentity: [ProcessIdentity: ProcessCommand] = [:]
-    private var requestedIdentities: Set<ProcessIdentity> = []
+    private var requestedIdentitiesByScan: [UUID: Set<ProcessIdentity>] = [:]
+    private var generationByScan: [UUID: UInt64] = [:]
+    private var latestScanGeneration: UInt64 = 0
 
     public init() {}
+
+    /// Scans open for testing and diagnostics: this is zero whenever no scan
+    /// is in flight, which is the invariant that bounds the bookkeeping.
+    package var trackedScanCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return requestedIdentitiesByScan.count
+    }
+
+    public func beginScan() -> UUID {
+        let token = UUID()
+        lock.lock()
+        latestScanGeneration &+= 1
+        requestedIdentitiesByScan[token] = []
+        generationByScan[token] = latestScanGeneration
+        lock.unlock()
+        return token
+    }
 
     /// Returns the remembered command line for `identity`, reading it once on
     /// first sight. `read` runs outside the lock: it performs syscalls, and a
     /// duplicated read is cheaper than serializing every caller behind one.
     public func command(
         for identity: ProcessIdentity,
+        scanToken: UUID,
         read: () -> ProcessCommand
     ) -> ProcessCommand {
         lock.lock()
-        requestedIdentities.insert(identity)
+        requestedIdentitiesByScan[scanToken, default: []].insert(identity)
         let cached = commandsByIdentity[identity]
         lock.unlock()
         if let cached { return cached }
@@ -52,15 +78,29 @@ public final class ProcessCommandCache: @unchecked Sendable {
         return command
     }
 
-    /// Drops every entry not requested since the previous sweep, bounding the
-    /// table by the size of the live process table. Callers sweep once per
-    /// completed scan, so an entry survives exactly as long as scans keep
-    /// asking about it. A scan that fails partway defers eviction to the next
-    /// successful one rather than discarding still-live entries.
-    public func sweep() {
+    /// Drops every entry the scan did not ask about, bounding the table by the
+    /// size of the live process table. An entry survives exactly as long as
+    /// scans keep asking about it. Only the newest scan carries a complete
+    /// view, so a superseded token releases its bookkeeping without evicting.
+    public func sweep(scanToken: UUID) {
         lock.lock()
+        defer { lock.unlock() }
+        let isLatestScan = generationByScan[scanToken] == latestScanGeneration
+        generationByScan.removeValue(forKey: scanToken)
+        guard let requestedIdentities = requestedIdentitiesByScan.removeValue(forKey: scanToken),
+              isLatestScan else {
+            return
+        }
         commandsByIdentity = commandsByIdentity.filter { requestedIdentities.contains($0.key) }
-        requestedIdentities.removeAll(keepingCapacity: true)
+    }
+
+    /// Releases a scan's bookkeeping without evicting anything. A scan that
+    /// failed partway never gathered the evidence eviction needs, so it defers
+    /// to the last scan that completed rather than discarding live entries.
+    public func discardScan(_ scanToken: UUID) {
+        lock.lock()
+        requestedIdentitiesByScan.removeValue(forKey: scanToken)
+        generationByScan.removeValue(forKey: scanToken)
         lock.unlock()
     }
 }

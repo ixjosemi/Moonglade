@@ -13,6 +13,42 @@ enum TestFailure: Error, CustomStringConvertible {
     }
 }
 
+final class TestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    func decrement() {
+        lock.lock()
+        value -= 1
+        lock.unlock()
+    }
+
+    func read() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
+final class TestOnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = true
+
+    func consume() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard isOpen else { return false }
+        isOpen = false
+        return true
+    }
+}
+
 func expect<T: Equatable>(_ actual: T, equals expected: T, _ message: String) throws {
     guard actual == expected else {
         throw TestFailure.expectation("\(message): expected \(expected), got \(actual)")
@@ -278,6 +314,503 @@ func testStateRepositoryDoesNotPreserveIdentityFromOversizedDocument() throws {
         equals: true,
         "replacement state remains within the secure-read limit"
     )
+}
+
+func testStateReadToleratesAConcurrentAtomicReplacement() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let stateURL = directory.appendingPathComponent("claude-replaced.json")
+    try validStateJSON(sessionID: "replaced", status: "working").write(to: stateURL)
+    let replacementGate = TestOnceGate()
+    var repository = StateRepository(directoryURL: directory)
+    repository.didReadDocumentForTesting = {
+        guard replacementGate.consume() else { return }
+        let temporaryURL = directory.appendingPathComponent("replacement.tmp")
+        try? validStateJSON(sessionID: "replaced", status: "idle").write(to: temporaryURL)
+        _ = Darwin.rename(temporaryURL.path, stateURL.path)
+    }
+
+    let sessions = try repository.loadSessions()
+
+    try expect(sessions.map(\.sessionID), equals: ["replaced"], "concurrent replacement keeps session")
+}
+
+func testAnUnreadableDocumentDoesNotDeleteACustomSessionName() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let stateDirectory = root.appendingPathComponent("state")
+    let namesURL = root.appendingPathComponent("session-names.json")
+    try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let repository = StateRepository(directoryURL: stateDirectory)
+    let session = try AgentSession.decode(from: validStateJSON(sessionID: "named", status: "idle"))
+    try repository.save(session)
+    let store = StateStore(repository: repository, nameOverridesFileURL: namesURL)
+    try store.reload()
+    store.rename(session, to: "Keep this name")
+    let namesBefore = try Data(contentsOf: namesURL)
+    let stateURL = try FileManager.default.contentsOfDirectory(
+        at: stateDirectory,
+        includingPropertiesForKeys: nil
+    ).first { $0.pathExtension == "json" }.unwrap(or: "state file missing")
+    try Data("not-json".utf8).write(to: stateURL)
+
+    try store.reload()
+
+    try expect(
+        store.nameOverrides.displayName(for: session),
+        equals: "Keep this name",
+        "custom name survives incomplete load"
+    )
+    try expect(try Data(contentsOf: namesURL), equals: namesBefore, "name file is not rewritten")
+}
+
+func testAnUnreadableDocumentDoesNotRearmAnAcknowledgedSession() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let repository = StateRepository(directoryURL: directory)
+    let session = try AgentSession.decode(
+        from: validStateJSON(sessionID: "acknowledged", status: "needs_attention")
+    )
+    try repository.save(session)
+    let store = StateStore(repository: repository)
+    try store.reload()
+    store.acknowledge(session)
+    var attentionRaised = 0
+    store.onAttentionRaised = { _ in attentionRaised += 1 }
+    let stateURL = try FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil
+    ).first { $0.pathExtension == "json" }.unwrap(or: "state file missing")
+    try Data("not-json".utf8).write(to: stateURL)
+
+    try store.reload()
+
+    try expect(
+        store.acknowledgments.isAcknowledged(session),
+        equals: true,
+        "acknowledgment survives incomplete load"
+    )
+    try expect(attentionRaised, equals: 0, "incomplete load does not rearm attention")
+}
+
+func testTwoDocumentsNamingTheSameSessionProduceOneRow() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let older = validStateJSON(sessionID: "duplicate", status: "working")
+    var newer = validStateJSON(sessionID: "duplicate", status: "idle")
+    newer = Data(String(decoding: newer, as: UTF8.self)
+        .replacingOccurrences(of: "2026-07-18T10:00:00Z", with: "2026-07-18T10:01:00Z")
+        .utf8)
+    try older.write(to: directory.appendingPathComponent("claude-Z.json"))
+    try newer.write(to: directory.appendingPathComponent("claude-A.json"))
+
+    let sessions = try StateRepository(directoryURL: directory).loadSessions()
+
+    try expect(sessions.count, equals: 1, "duplicate identity is deduplicated")
+    try expect(sessions[0].status, equals: .idle, "newer duplicate wins")
+}
+
+func testClaudeSettingsMergeRefusesHooksValueThatIsNotAnObject() throws {
+    do {
+        _ = try ClaudeSettingsMerger.merge(
+            settingsData: Data(#"{"hooks":[]}"#.utf8),
+            hookCommand: "/tmp/moonglade-hook.sh"
+        )
+        throw TestFailure.expectation("malformed hooks value was accepted")
+    } catch let error as InstallationError {
+        try expect(error, equals: .invalidClaudeSettings, "malformed hooks value")
+    }
+}
+
+func testClaudeSettingsMergeRefusesEventArrayContainingNonObject() throws {
+    let original = Data(#"{"hooks":{"Stop":[{"hooks":[]},null]}}"#.utf8)
+    do {
+        _ = try ClaudeSettingsMerger.merge(
+            settingsData: original,
+            hookCommand: "/tmp/moonglade-hook.sh"
+        )
+        throw TestFailure.expectation("malformed event array was accepted")
+    } catch let error as InstallationError {
+        try expect(error, equals: .invalidClaudeSettings, "malformed event array")
+    }
+    try expect(original, equals: original, "malformed settings remain unchanged")
+}
+
+func testClaudeSettingsMergePreservesUnrelatedEventHooks() throws {
+    let eventNames = ["SessionStart", "Notification", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
+    let hooks = Dictionary(uniqueKeysWithValues: eventNames.map { event in
+        (event, [["hooks": [["type": "command", "command": "user-\(event)" ]]]])
+    })
+    let original = try JSONSerialization.data(withJSONObject: ["hooks": hooks])
+
+    let merged = try ClaudeSettingsMerger.merge(
+        settingsData: original,
+        hookCommand: "/tmp/moonglade-hook.sh"
+    )
+    let root = try JSONSerialization.jsonObject(with: merged) as? [String: Any]
+    let mergedHooks = root?["hooks"] as? [String: Any]
+    for event in eventNames {
+        let groups = mergedHooks?[event] as? [[String: Any]]
+        let commands = groups?.flatMap { $0["hooks"] as? [[String: Any]] ?? [] }
+            .compactMap { $0["command"] as? String }
+        try expect(commands?.contains("user-\(event)"), equals: true, "user hook survives \(event)")
+    }
+}
+
+func testClaudeSettingsRemoveRefusesMalformedShapesAndLeavesNoEmptyHusks() throws {
+    for malformed in [
+        Data(#"{"hooks":[]}"#.utf8),
+        Data(#"{"hooks":{"Stop":[null]}}"#.utf8),
+    ] {
+        do {
+            _ = try ClaudeSettingsMerger.remove(
+                settingsData: malformed,
+                hookCommand: "/tmp/moonglade-hook.sh"
+            )
+            throw TestFailure.expectation("malformed settings were accepted")
+        } catch let error as InstallationError {
+            try expect(error, equals: .invalidClaudeSettings, "malformed remove shape")
+        }
+    }
+
+    let removed = try ClaudeSettingsMerger.remove(
+        settingsData: Data("{}".utf8),
+        hookCommand: "/tmp/moonglade-hook.sh"
+    )
+    let root = try JSONSerialization.jsonObject(with: removed) as? [String: Any]
+    try expect(root?["hooks"] == nil, equals: true, "remove leaves no empty hooks object")
+}
+
+func testFirstInstallWritesOneTimeSettingsBackup() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDirectory = home.appendingPathComponent(".claude")
+    try FileManager.default.createDirectory(at: claudeDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    let settingsURL = claudeDirectory.appendingPathComponent("settings.json")
+    let original = Data(#"{"custom":true}"#.utf8)
+    try original.write(to: settingsURL)
+    let installer = Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!)
+
+    try installer.install()
+    let backupURL = claudeDirectory.appendingPathComponent("settings.json.moonglade-backup")
+    try expect(try Data(contentsOf: backupURL), equals: original, "first settings backup bytes")
+    let mode = try FileManager.default.attributesOfItem(atPath: backupURL.path)[.posixPermissions] as? NSNumber
+    try expect(mode?.intValue, equals: 0o600, "settings backup permissions")
+    try installer.install()
+    try expect(try Data(contentsOf: backupURL), equals: original, "backup is one-time")
+}
+
+func testInstallingThroughASymlinkedSettingsFileWritesTheTarget() throws {
+    let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let claudeDirectory = home.appendingPathComponent(".claude")
+    let targetURL = home.appendingPathComponent("dotfiles/settings.json")
+    let linkURL = claudeDirectory.appendingPathComponent("settings.json")
+    try FileManager.default.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: claudeDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+    try Data("{}".utf8).write(to: targetURL)
+    try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: targetURL)
+
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+
+    var metadata = stat()
+    try expect(Darwin.lstat(linkURL.path, &metadata), equals: 0, "settings link remains")
+    try expect(metadata.st_mode & S_IFMT, equals: S_IFLNK, "settings remains a symlink")
+    let installed = String(decoding: try Data(contentsOf: targetURL), as: UTF8.self)
+    try expect(installed.contains("claude-hook.sh"), equals: true, "target is updated")
+}
+
+func testPreparingAnAlreadyPrivateDirectoryDoesNotTouchItsMode() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    try repository.prepareDirectory()
+    var firstStat = stat()
+    guard Darwin.lstat(directory.path, &firstStat) == 0 else { throw POSIXError(.EIO) }
+    try repository.prepareDirectory()
+    var secondStat = stat()
+    guard Darwin.lstat(directory.path, &secondStat) == 0 else { throw POSIXError(.EIO) }
+
+    try expect(firstStat.st_ctimespec.tv_sec, equals: secondStat.st_ctimespec.tv_sec, "directory ctime seconds")
+    try expect(firstStat.st_ctimespec.tv_nsec, equals: secondStat.st_ctimespec.tv_nsec, "directory ctime nanoseconds")
+}
+
+func testConvoyOwnedOpenCodeDocumentsAreNotDecoded() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    try repository.mergeConvoyOwnedOpenCodeSessionIDs(["owned"])
+    try repository.save(AgentSession(
+        tool: .opencode,
+        sessionID: "owned",
+        pid: 1,
+        status: .working,
+        cwd: "/tmp/owned",
+        startedAt: Date(timeIntervalSince1970: 1),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    ))
+    try repository.save(AgentSession(
+        tool: .claude,
+        sessionID: "native",
+        pid: 2,
+        status: .working,
+        cwd: "/tmp/native",
+        startedAt: Date(timeIntervalSince1970: 1),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    ))
+    StateRepository.documentsDecodedForTesting = 0
+
+    let snapshot = try repository.loadSnapshot()
+
+    try expect(snapshot.sessions.map(\.sessionID), equals: ["native"], "owned OpenCode is filtered")
+    try expect(StateRepository.documentsDecodedForTesting, equals: 1, "owned OpenCode is not decoded")
+}
+
+func testPruningKeepsOverlaysForConvoyOwnedOpenCodeSessions() throws {
+    // Skipping the decode of a Convoy-owned document keeps it out of the
+    // lifecycle list, but the document and its overlay are still owned and
+    // still on disk. Orphan pruning reads that list, so it must not mistake a
+    // suppressed session for one whose owner is gone.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let owned = AgentSession(
+        tool: .opencode,
+        sessionID: "owned-phase",
+        pid: Int32(getpid()),
+        status: .working,
+        cwd: "/tmp/owned-phase",
+        startedAt: Date(timeIntervalSince1970: 1),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    )
+    try repository.save(owned)
+    var snapshot = try repository.loadSnapshot()
+    _ = try repository.saveEnrichment(
+        for: owned,
+        process: DetectedAgentProcess(
+            tool: .opencode,
+            processID: Int32(getpid()),
+            processIdentity: SystemProcessScanner.processIdentity(of: Int32(getpid())),
+            cwd: "/tmp/owned-phase",
+            terminal: TerminalContext(termProgram: "ghostty", tty: "/dev/ttys001")
+        ),
+        terminal: TerminalContext(termProgram: "ghostty", tty: "/dev/ttys001"),
+        updating: &snapshot
+    )
+    let overlayURL = try FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil
+    ).first { $0.pathExtension == "overlay" }.unwrap(or: "overlay was not written")
+    try repository.mergeConvoyOwnedOpenCodeSessionIDs(["owned-phase"])
+
+    try repository.pruneOrphanedEnrichments(against: try repository.loadSnapshot())
+
+    try expect(
+        FileManager.default.fileExists(atPath: overlayURL.path),
+        equals: true,
+        "a suppressed session's overlay is not an orphan"
+    )
+}
+
+func testPruningRemovesOverlaysWithNoLifecycleOwner() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let orphanURL = directory.appendingPathComponent("enrichment-claude-b3JwaGFu.overlay")
+    try Data("{}".utf8).write(to: orphanURL)
+
+    try repository.pruneOrphanedEnrichments(against: try repository.loadSnapshot())
+
+    try expect(
+        FileManager.default.fileExists(atPath: orphanURL.path),
+        equals: false,
+        "an overlay with no lifecycle owner is still pruned"
+    )
+}
+
+func testStateFilenameIdentifierRoundTripsSpecialCharacters() throws {
+    let repository = StateRepository(directoryURL: FileManager.default.temporaryDirectory)
+    let identifier = "session/+with/slash"
+    let encoded = try repository.encodedIdentifierForTesting(identifier)
+    try expect(
+        repository.decodedIdentifierForTesting(encoded),
+        equals: identifier,
+        "state filename identifier round trip"
+    )
+}
+
+func testASubprocessThatNeverExitsIsTerminatedAtItsDeadline() throws {
+    let startedAt = Date()
+    do {
+        _ = try BoundedProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/bin/sleep"),
+            arguments: ["30"],
+            timeout: 0.2
+        )
+        throw TestFailure.expectation("non-terminating process was accepted")
+    } catch let error as POSIXError {
+        try expect(error.code, equals: .ETIMEDOUT, "process timeout error")
+    }
+    try expect(Date().timeIntervalSince(startedAt) < 1, equals: true, "timeout is bounded")
+}
+
+func testASubprocessThatOverfillsItsPipeStillCompletes() throws {
+    let result = try BoundedProcessRunner.run(
+        executableURL: URL(fileURLWithPath: "/bin/dd"),
+        arguments: ["if=/dev/zero", "bs=1048576", "count=1"],
+        timeout: 2,
+        maximumOutputBytes: 2 * 1_048_576
+    )
+
+    try expect(result.status, equals: 0, "large-output process status")
+    try expect(result.output.count, equals: 1_048_576, "large output is drained")
+}
+
+func testAnOrphanHoldingThePipeDoesNotTurnSuccessIntoATimeout() throws {
+    // A child may leave behind a grandchild that inherited its stdout — a
+    // shell backgrounding a helper is enough. The command itself exited
+    // successfully and wrote everything it ever will, so the runner must
+    // return that output after its drain grace instead of throwing ETIMEDOUT.
+    // The shell here is a test fixture creating the orphan, not a production
+    // codepath; product code never executes strings through a shell.
+    let result = try BoundedProcessRunner.run(
+        executableURL: URL(fileURLWithPath: "/bin/sh"),
+        arguments: ["-c", "echo ready; sleep 5 &"],
+        timeout: 3
+    )
+
+    try expect(result.status, equals: 0, "the command itself exited cleanly")
+    try expect(
+        String(decoding: result.output, as: UTF8.self),
+        equals: "ready\n",
+        "output written before exit is returned despite the held pipe"
+    )
+}
+
+func testTheFrontTerminalQueryIsNotRepeatedWithinItsTTL() throws {
+    let queryCount = TestCounter()
+    let cache = FrontTerminalQueryCache(
+        successTimeToLive: 30,
+        failureTimeToLive: 60
+    ) {
+        queryCount.increment()
+        return GhosttyFrontTerminal(terminalID: "front", workingDirectory: "/tmp/project")
+    }
+    let first = Date(timeIntervalSince1970: 1_000)
+    _ = cache.frontTerminal(now: first)
+    _ = cache.frontTerminal(now: first.addingTimeInterval(2))
+
+    try expect(queryCount.read(), equals: 1, "front terminal query TTL")
+}
+
+func testTheHeartbeatBacksOffAfterAScanFindsNoAgents() throws {
+    try expect(ObservationCadence.interval(afterAgentCount: 0), equals: 30, "idle heartbeat interval")
+    try expect(ObservationCadence.interval(afterAgentCount: 1), equals: 5, "active heartbeat interval")
+}
+
+func testTheHeartbeatReturnsToFiveSecondsAsSoonAsAnAgentAppears() throws {
+    try expect(ObservationCadence.interval(afterAgentCount: 0), equals: 30, "empty cadence")
+    try expect(ObservationCadence.interval(afterAgentCount: 2), equals: 5, "active cadence")
+    try expect(
+        ObservationCadence.staleSessionInterval(afterAgentCount: 0),
+        equals: 30,
+        "stale session interval follows idle cadence"
+    )
+}
+
+func testPointerMonitorsAreUnnecessaryWithOneDisplay() throws {
+    try expect(PanelSynchronizationPolicy.needsPointerMonitors(displayCount: 1), equals: false, "single display monitors")
+    try expect(PanelSynchronizationPolicy.needsPointerMonitors(displayCount: 2), equals: true, "multi-display monitors")
+    try expect(
+        PanelSynchronizationPolicy.shouldDeferSelection(
+            current: 1,
+            desired: 2,
+            available: [2],
+            menuIsVisible: true
+        ),
+        equals: false,
+        "disconnected display is not deferred"
+    )
+}
+
+func testTheCardHeightBudgetIncludesTheErrorRow() throws {
+    try expect(SessionMenuLayout.maximumCardHeight(), equals: 316, "card height without error")
+    try expect(SessionMenuLayout.maximumCardHeight(hasError: true), equals: 341, "card height with error")
+    try expect(NotchLayout.menuMaxHeight, equals: 341, "the panel budget always reserves the error row")
+}
+
+func testAHardwareNotchWithNoMenuBarStillUsesNotchGeometry() throws {
+    let layout = NotchLayout(
+        screenMinX: 0,
+        screenWidth: 1_512,
+        screenMaxY: 982,
+        safeAreaTop: 0,
+        leftNotchEdgeX: 666,
+        rightNotchEdgeX: 846
+    )
+    try expect(layout.presentation, equals: .notch, "hardware notch presentation")
+    // A zero-height bar would be invisible and unhoverable; the standard
+    // menu-bar height stands in until the safe area returns.
+    try expect(layout.height, equals: 24, "the bar keeps a usable height without a safe area")
+}
+
+func testNotchLayoutSupportsASecondaryDisplayOrigin() throws {
+    let layout = NotchLayout(
+        screenMinX: 1_920,
+        screenWidth: 1_512,
+        screenMaxY: 982,
+        safeAreaTop: 38,
+        leftNotchEdgeX: 2_586,
+        rightNotchEdgeX: 2_766
+    )
+    try expect(layout.originX >= 1_920, equals: true, "secondary display origin")
+}
+
+func testNotchLayoutGuardsNonFiniteGeometry() throws {
+    let layout = NotchLayout(
+        screenMinX: .nan,
+        screenWidth: .infinity,
+        screenMaxY: .nan,
+        safeAreaTop: .infinity,
+        leftNotchEdgeX: .nan,
+        rightNotchEdgeX: .infinity,
+        menuBarHeight: .nan
+    )
+    try expect(layout.originX.isFinite, equals: true, "finite origin")
+    try expect(layout.originY.isFinite, equals: true, "finite vertical origin")
+    try expect(layout.width.isFinite, equals: true, "finite width")
+}
+
+func testAppleScriptStringEscapesEverySpecialCharacter() throws {
+    let values = [
+        "quote\"value": "quote\\\"value",
+        "slash\\value": "slash\\\\value",
+        "trailing\\": "trailing\\\\",
+        "line\nvalue": "line value",
+        "return\rvalue": "return value",
+        #"curly“quote”"#: #"curly“quote”"#,
+        "emoji 🧪": "emoji 🧪",
+    ]
+    for (input, expected) in values {
+        try expect(FocusPlanner.appleScriptString(input), equals: expected, "AppleScript escaping")
+    }
 }
 
 /// A freshly launched Claude sits at the prompt waiting for input, so its
@@ -1530,7 +2063,7 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     )
     staleJSON?["process_identity"] = staleIdentity
     try JSONSerialization.data(withJSONObject: staleJSON ?? [:], options: [.sortedKeys])
-        .write(to: enrichmentURL)
+        .write(to: enrichmentURL, options: .atomic)
     try FileManager.default.setAttributes(
         [.posixPermissions: 0o600],
         ofItemAtPath: enrichmentURL.path
@@ -1545,8 +2078,8 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     )
     try expect(
         FileManager.default.fileExists(atPath: enrichmentURL.path),
-        equals: false,
-        "stale generation overlay is pruned"
+        equals: true,
+        "stale generation overlay stays on the read path"
     )
 
     var unknownSchemaJSON = try JSONSerialization.jsonObject(
@@ -1556,7 +2089,7 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     try JSONSerialization.data(
         withJSONObject: unknownSchemaJSON ?? [:],
         options: [.sortedKeys]
-    ).write(to: enrichmentURL)
+    ).write(to: enrichmentURL, options: .atomic)
     try FileManager.default.setAttributes(
         [.posixPermissions: 0o600],
         ofItemAtPath: enrichmentURL.path
@@ -1564,11 +2097,11 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     _ = try repository.loadSessions()
     try expect(
         FileManager.default.fileExists(atPath: enrichmentURL.path),
-        equals: false,
-        "unknown overlay schema is pruned"
+        equals: true,
+        "unknown overlay schema stays on the read path"
     )
 
-    try Data("not-json".utf8).write(to: enrichmentURL)
+    try Data("not-json".utf8).write(to: enrichmentURL, options: .atomic)
     try FileManager.default.setAttributes(
         [.posixPermissions: 0o600],
         ofItemAtPath: enrichmentURL.path
@@ -1576,11 +2109,11 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     _ = try repository.loadSessions()
     try expect(
         FileManager.default.fileExists(atPath: enrichmentURL.path),
-        equals: false,
-        "malformed overlay is pruned"
+        equals: true,
+        "malformed overlay stays on the read path"
     )
 
-    try validEnrichment.write(to: enrichmentURL)
+    try validEnrichment.write(to: enrichmentURL, options: .atomic)
     try FileManager.default.setAttributes(
         [.posixPermissions: 0o644],
         ofItemAtPath: enrichmentURL.path
@@ -1588,8 +2121,8 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     _ = try repository.loadSessions()
     try expect(
         FileManager.default.fileExists(atPath: enrichmentURL.path),
-        equals: false,
-        "non-private overlay is pruned"
+        equals: true,
+        "non-private overlay stays on the read path"
     )
 
     let externalURL = root.appendingPathComponent("external-overlay")
@@ -1598,15 +2131,18 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
         [.posixPermissions: 0o600],
         ofItemAtPath: externalURL.path
     )
+    try FileManager.default.removeItem(at: enrichmentURL)
     try FileManager.default.createSymbolicLink(
         at: enrichmentURL,
         withDestinationURL: externalURL
     )
     _ = try repository.loadSessions()
+    var symlinkMetadata = stat()
+    try expect(Darwin.lstat(enrichmentURL.path, &symlinkMetadata), equals: 0, "overlay symlink remains")
     try expect(
-        FileManager.default.fileExists(atPath: enrichmentURL.path),
-        equals: false,
-        "symlinked overlay is pruned without following it"
+        symlinkMetadata.st_mode & S_IFMT,
+        equals: S_IFLNK,
+        "symlinked overlay stays on the read path"
     )
     try expect(
         FileManager.default.fileExists(atPath: externalURL.path),
@@ -1619,7 +2155,7 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
         repeating: 0x20,
         count: max(0, 16_385 - validEnrichment.count)
     ))
-    try oversized.write(to: enrichmentURL)
+    try oversized.write(to: enrichmentURL, options: .atomic)
     try FileManager.default.setAttributes(
         [.posixPermissions: 0o600],
         ofItemAtPath: enrichmentURL.path
@@ -1627,8 +2163,8 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     _ = try repository.loadSessions()
     try expect(
         FileManager.default.fileExists(atPath: enrichmentURL.path),
-        equals: false,
-        "oversized overlay is pruned"
+        equals: true,
+        "oversized overlay stays on the read path"
     )
 
     _ = try ReaperService(repository: repository).reap(detected: [process])
@@ -1650,6 +2186,8 @@ func testStateRepositoryValidatesAndPrunesEnrichmentOverlays() throws {
     _ = try ReaperService(repository: repository).reap(detected: [process])
     try FileManager.default.removeItem(at: lifecycleURL)
     try expect(try repository.loadSessions(), equals: [], "orphan overlay creates no session")
+    let snapshot = try repository.loadSnapshot()
+    try repository.pruneOrphanedEnrichments(against: snapshot)
     try expect(
         FileManager.default.fileExists(atPath: enrichmentURL.path),
         equals: false,
@@ -3408,7 +3946,10 @@ func testGitWorkspaceInspectorResolvesBranchNames() throws {
         "branch found walking up from a subdirectory"
     )
 
-    let worktreeMetadata = repo.appendingPathComponent(".git/worktrees/glance", isDirectory: true)
+    let homeWorktreeRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".moonglade-test-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: homeWorktreeRoot) }
+    let worktreeMetadata = homeWorktreeRoot.appendingPathComponent("worktrees/glance", isDirectory: true)
     try filesystem.createDirectory(at: worktreeMetadata, withIntermediateDirectories: true)
     try Data("ref: refs/heads/fix/menu\n".utf8)
         .write(to: worktreeMetadata.appendingPathComponent("HEAD"))
@@ -3629,7 +4170,7 @@ func testNotchLayoutExtendsFromLeftSideOfHardwareNotch() throws {
     try expect(layout.presentation, equals: .notch, "a screen with a camera housing keeps the notch")
     try expect(layout.width, equals: 800, "wide expanded panel leaves room for smooth side curves")
     try expect(layout.height, equals: 38, "collapsed panel height")
-    try expect(layout.expandedHeight, equals: 362, "expanded panel height includes the shared bottom padding")
+    try expect(layout.expandedHeight, equals: 387, "expanded panel reserves the error row")
     try expect(layout.originX, equals: 356, "expanded panel x")
     try expect(layout.originY, equals: 944, "panel y")
     try expect(layout.notchWidth, equals: 180, "hardware notch width")
@@ -3728,7 +4269,7 @@ func testNotchLayoutExpandedHeaderWingsFlankTheCamera() throws {
     try expect(pill.notchWidth, equals: 0, "no phantom camera gap between pill wings")
 
     try expect(
-        SessionMenuLayout.maximumCardHeight,
+        SessionMenuLayout.maximumCardHeight(),
         equals: 316,
         "headerless card holds only the list and its vertical insets"
     )
@@ -3892,7 +4433,7 @@ func testNotchLayoutUsesPillStyleOnNotchlessScreen() throws {
     try expect(layout.expandedContentSideInset, equals: 0, "bubble sides are the panel edges, no extra content inset")
     try expect(layout.expandedHeaderTopPadding, equals: 14, "expanded bubble grows breathing room above its header")
     try expect(layout.expandedBottomPadding, equals: 8, "last row clears the bubble's rounded bottom corners")
-    try expect(layout.expandedHeight, equals: 362, "expanded gap plus both paddings grow the shell to fit the tallest card")
+    try expect(layout.expandedHeight, equals: 387, "expanded shell reserves the error row")
 }
 
 func testNotchLayoutPillFallsBackToStandardMenuBarHeight() throws {
@@ -3929,7 +4470,7 @@ func testNotchLayoutNotchKeepsScreenEdgeAttachment() throws {
     )
     try expect(layout.expandedHeaderTopPadding, equals: 0, "notch header sits beside the camera and needs no extra room")
     try expect(layout.expandedBottomPadding, equals: 8, "notch card matches its lateral margins below the list")
-    try expect(layout.expandedHeight, equals: 362, "the shared bottom padding grows the notch shell too")
+    try expect(layout.expandedHeight, equals: 387, "the notch shell reserves the error row")
 }
 
 func testHangingNotchGeometryCreatesConcaveShouldersAndRoundedBase() throws {
@@ -5121,6 +5662,7 @@ func testConvoyWatcherMapsTerminalPipelineStates() throws {
     try expect(failed.currentStep, equals: "tests failed", "failed step")
 
     try repository.remove(failed)
+    try expect(try repository.loadSessions(), equals: [], "failed run is removed before next run")
     try writeConvoyRunFixture(
         at: runsDirectoryURL,
         runID: "20260719-131313-done",
@@ -5799,6 +6341,44 @@ func testCorruptOwnershipIndexWaitsForCompleteMetadataInventory() throws {
         try Data(contentsOf: ownershipURL),
         equals: corruptData,
         "incomplete inventory leaves the previous policy file untouched"
+    )
+}
+
+func testIncompleteConvoyOwnershipInventoryRetriesWithoutDirectoryChange() throws {
+    let (stateDirectoryURL, runsDirectoryURL) = try makeConvoyTestDirectories()
+    defer { try? FileManager.default.removeItem(at: stateDirectoryURL.deletingLastPathComponent()) }
+    let repository = StateRepository(directoryURL: stateDirectoryURL)
+    let runDirectory = runsDirectoryURL.appendingPathComponent("pending", isDirectory: true)
+    try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
+    let metadataURL = runDirectory.appendingPathComponent("metadata.json")
+    guard Darwin.mkfifo(metadataURL.path, 0o600) == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    let watcher = ConvoyRunsWatcher(runsDirectoryURL: runsDirectoryURL, repository: repository)
+
+    try watcher.refreshOpenCodeOwnershipIndex()
+    try FileManager.default.removeItem(at: metadataURL)
+    let metadata = """
+    {
+      "schemaVersion": 2,
+      "runID": "pending",
+      "targetDir": "/tmp/convoy-target",
+      "createdAt": 1784700000000,
+      "updatedAt": 1784700001000,
+      "phases": {
+        "implement": { "status": "completed", "sessionID": "ses_retry" }
+      }
+    }
+    """
+    try Data(metadata.utf8).write(to: metadataURL)
+
+    try watcher.refreshOpenCodeOwnershipIndex()
+    try expect(
+        String(data: try Data(contentsOf: stateDirectoryURL.appendingPathComponent(
+            "convoy-opencode-ownership.index"
+        )), encoding: .utf8)?.contains("ses_retry"),
+        equals: true,
+        "incomplete ownership inventories retry after metadata becomes readable"
     )
 }
 
@@ -7131,7 +7711,7 @@ func testInstallationDoctorReportsHealthyInstall() throws {
 
     let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
 
-    try expect(checks.count, equals: 7, "doctor check count")
+    try expect(checks.count, equals: 9, "doctor check count")
     for check in checks {
         try expect(check.passed, equals: true, "check '\(check.title)': \(check.detail)")
     }
@@ -7141,6 +7721,32 @@ func testInstallationDoctorReportsHealthyInstall() throws {
         ),
         equals: true,
         "pi extension installed"
+    )
+}
+
+func testInstallationDoctorDiagnosesLooseSettingsPermissionsInsteadOfMissingInstall() throws {
+    // A group-writable settings file fails the secure read. Reporting that as
+    // "missing — run: moonglade install" sends the user to a command that
+    // cannot fix it; the check must name the permissions instead.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let home = root.appendingPathComponent("home")
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o666],
+        ofItemAtPath: home.appendingPathComponent(".claude/settings.json").path
+    )
+
+    let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+    let byTitle = Dictionary(uniqueKeysWithValues: checks.map { ($0.title, $0) })
+    let claude = try byTitle["Claude Code hooks"].unwrap(or: "missing Claude check")
+
+    try expect(claude.passed, equals: false, "loose permissions must not pass")
+    try expect(
+        claude.detail.contains("chmod og-w"),
+        equals: true,
+        "detail prescribes the permission fix, not a reinstall"
     )
 }
 
@@ -7515,7 +8121,7 @@ func testCodexNotifyMarksTurnComplete() throws {
     try CodexNotifyProcessor(repository: repository).process(
         payload: payload,
         processID: Int32(getpid()),
-        now: Date(timeIntervalSince1970: 300)
+        now: Date(timeIntervalSince1970: 1_800_000_000)
     )
 
     let session = try repository.loadSessions().first.unwrap(or: "Codex state was not saved")
@@ -8229,8 +8835,9 @@ func testProcessCommandCacheReadsEachProcessGenerationOnce() throws {
         reads += 1
         return ProcessCommand(executablePath: "/usr/local/bin/claude", leadingArguments: ["claude"])
     }
-    let first = cache.command(for: identity, read: read)
-    let second = cache.command(for: identity, read: read)
+    let scan = cache.beginScan()
+    let first = cache.command(for: identity, scanToken: scan, read: read)
+    let second = cache.command(for: identity, scanToken: scan, read: read)
     try expect(reads, equals: 1, "an immutable command line is read once per process generation")
     try expect(first, equals: second, "the cached snapshot is returned verbatim")
 }
@@ -8242,11 +8849,16 @@ func testProcessCommandCacheRereadsRecycledProcessIdentifier() throws {
         reads += 1
         return ProcessCommand(executablePath: path, leadingArguments: [])
     }
-    _ = cache.command(for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)) {
+    let scan = cache.beginScan()
+    _ = cache.command(
+        for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1),
+        scanToken: scan
+    ) {
         read(path: "/bin/zsh")
     }
     let recycled = cache.command(
-        for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 2)
+        for: ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 2),
+        scanToken: scan
     ) {
         read(path: "/usr/local/bin/claude")
     }
@@ -8266,11 +8878,309 @@ func testProcessCommandCacheForgetsProcessesMissingFromLatestScan() throws {
         reads += 1
         return ProcessCommand(executablePath: "/bin/zsh", leadingArguments: [])
     }
-    _ = cache.command(for: identity, read: read)
-    cache.sweep() // the scan that saw the process keeps its entry
-    cache.sweep() // the next scan does not, so the entry goes
-    _ = cache.command(for: identity, read: read)
+    let seen = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: seen, read: read)
+    cache.sweep(scanToken: seen) // the scan that saw the process keeps its entry
+    cache.sweep(scanToken: cache.beginScan()) // the next scan does not, so the entry goes
+    let later = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: later, read: read)
     try expect(reads, equals: 2, "entries for vanished processes are dropped instead of accumulating")
+}
+
+func testConcurrentStateWritersDoNotInterleave() throws {
+    // The write lock exists so a hook process and the app cannot tear each
+    // other's directory mutations apart. POSIX record locks are owned per
+    // process, so threads inside one process need their own exclusion, and
+    // the first descriptor closed drops the file lock for every holder.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let overlap = TestCounter()
+    let inFlight = TestCounter()
+    // A save materialises its snapshot while holding the lock, so overlapping
+    // observer calls are overlapping critical sections.
+    let repository = StateRepository(directoryURL: directory) {
+        if inFlight.read() != 0 { overlap.increment() }
+        inFlight.increment()
+        usleep(2_000)
+        inFlight.decrement()
+    }
+
+    let group = DispatchGroup()
+    for index in 0..<8 {
+        DispatchQueue.global(qos: .userInitiated).async(group: group) {
+            try? repository.save(AgentSession(
+                tool: .claude,
+                sessionID: "writer-\(index)",
+                pid: Int32(2_000 + index),
+                status: .working,
+                cwd: "/tmp/writer-\(index)",
+                startedAt: Date(timeIntervalSince1970: 0),
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            ))
+        }
+    }
+    group.wait()
+
+    try expect(overlap.read(), equals: 0, "state writes never overlap inside one process")
+    try expect(
+        try repository.loadSessions().count,
+        equals: 8,
+        "every concurrent write landed"
+    )
+}
+
+func testRemovingASessionTakesTheSameWriteLockAsSaving() throws {
+    // save() removes superseded documents while already holding the lock. If
+    // remove() re-acquired non-reentrantly it would deadlock; if it closed its
+    // own descriptor on the way out it would drop the caller's lock.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let fallback = AgentSession(
+        tool: .claude,
+        sessionID: "reaper-3100",
+        pid: 3_100,
+        status: .idle,
+        cwd: "/tmp/superseded",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 1),
+        source: .reaper
+    )
+    try repository.save(fallback)
+
+    let native = AgentSession(
+        tool: .claude,
+        sessionID: "native-session",
+        pid: 3_100,
+        status: .working,
+        cwd: "/tmp/superseded",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 2)
+    )
+    try repository.save(native)
+
+    try expect(
+        try repository.loadSessions().map(\.sessionID),
+        equals: ["native-session"],
+        "the nested removal ran to completion under one held lock"
+    )
+}
+
+func testAWedgedForeignLockHolderFailsWritersAtTheDeadline() throws {
+    // A holder that is wedged rather than dead would otherwise park every
+    // hook process — and with them every agent's turn — behind a blocking
+    // lockf. The writer must fail loudly at the deadline instead.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let stateDirectory = root.appendingPathComponent("state", isDirectory: true)
+    try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let holder = Process()
+    holder.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    holder.arguments = [
+        "--hold-state-lock",
+        root.appendingPathComponent(".moonglade-state-write.lock").path,
+        "1200",
+    ]
+    let holderOutput = Pipe()
+    holder.standardOutput = holderOutput
+    try holder.run()
+    defer {
+        holder.terminate()
+        holder.waitUntilExit()
+    }
+    let marker = holderOutput.fileHandleForReading.readData(ofLength: 7)
+    try expect(
+        String(decoding: marker, as: UTF8.self),
+        equals: "locked\n",
+        "the foreign process reports the lock as held"
+    )
+
+    let defaultTimeout = StateRepository.writeLockAcquisitionTimeout
+    StateRepository.writeLockAcquisitionTimeout = 0.3
+    defer { StateRepository.writeLockAcquisitionTimeout = defaultTimeout }
+    let repository = StateRepository(directoryURL: stateDirectory)
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "lock-timeout",
+        pid: 4_500,
+        status: .working,
+        cwd: "/tmp/lock-timeout",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    )
+
+    let attemptStartedAt = Date()
+    var failure: Error?
+    do {
+        try repository.save(session)
+    } catch {
+        failure = error
+    }
+
+    try expect(
+        failure as? StateRepositoryError,
+        equals: .writeLockTimeout,
+        "a wedged foreign holder surfaces as a timeout, not a hang"
+    )
+    try expect(
+        Date().timeIntervalSince(attemptStartedAt) < 1.0,
+        equals: true,
+        "the writer gave up at its deadline"
+    )
+
+    holder.waitUntilExit()
+    try repository.save(session)
+    try expect(
+        try repository.loadSessions().map(\.sessionID),
+        equals: ["lock-timeout"],
+        "the same writer succeeds once the holder releases the lock"
+    )
+}
+
+func testRemovingFromAMissingStateDirectoryIsANoOp() throws {
+    // ~/.moonglade may never have existed on this machine. Removal has no
+    // documents or overlays to retire, so it must return quietly instead of
+    // failing on the lock file's missing parent — or creating anything.
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let repository = StateRepository(
+        directoryURL: root.appendingPathComponent("state", isDirectory: true)
+    )
+
+    try repository.remove(AgentSession(
+        tool: .claude,
+        sessionID: "never-existed",
+        pid: 4_501,
+        status: .idle,
+        cwd: "/tmp/never-existed",
+        startedAt: Date(timeIntervalSince1970: 0),
+        updatedAt: Date(timeIntervalSince1970: 1)
+    ))
+
+    try expect(
+        FileManager.default.fileExists(atPath: root.path),
+        equals: false,
+        "removal creates nothing on the way out"
+    )
+}
+
+/// Counts descriptors this process currently holds. The directory watchers
+/// close theirs from a dispatch source cancel handler, so a watcher that is
+/// never cancelled shows up here and nowhere else.
+private func openFileDescriptorCount() -> Int {
+    var count = 0
+    for descriptor in 0..<Int32(getdtablesize()) where Darwin.fcntl(descriptor, F_GETFD) != -1 {
+        count += 1
+    }
+    return count
+}
+
+func testReleasingTheSchedulerClosesItsDirectoryWatchers() throws {
+    // The scheduler owns O_EVTONLY descriptors on the Codex and Convoy
+    // directories. Dropping the last reference has to cancel those sources:
+    // a teardown that only schedules work onto the internal queue can never
+    // run, because nothing is left to run it for.
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let stateDirectory = root.appendingPathComponent("state")
+    let codexSessions = root.appendingPathComponent("codex-sessions")
+    let convoyRuns = root.appendingPathComponent("convoy-runs")
+    for directory in [stateDirectory, codexSessions, convoyRuns] {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    func runOneSchedulerLifetime() {
+        let scheduler = ObservationScheduler(
+            repository: StateRepository(directoryURL: stateDirectory),
+            processScanner: TestProcessScanner([]),
+            codexSessionsDirectoryURL: codexSessions,
+            convoyRunsDirectoryURL: convoyRuns,
+            heartbeatInterval: 3_600,
+            debounceInterval: 0.01
+        )
+        scheduler.start()
+        scheduler.waitUntilIdle()
+    }
+
+    // The first lifetime warms every lazily created singleton the scheduler
+    // touches, so the baseline measures descriptors and nothing else.
+    runOneSchedulerLifetime()
+    let baseline = try settledFileDescriptorCount(notExceeding: .max)
+    for _ in 0..<5 {
+        runOneSchedulerLifetime()
+    }
+
+    // A dispatch source closes its descriptor from a cancel handler that runs
+    // on the source's own queue, so teardown lands shortly after the release
+    // rather than during it. Leaked descriptors never come back.
+    try expect(
+        try settledFileDescriptorCount(notExceeding: baseline) <= baseline,
+        equals: true,
+        "a released scheduler leaves no directory watcher descriptor open"
+    )
+}
+
+/// Samples the descriptor count until it drops to `limit` or a deadline
+/// passes, so an asynchronous close is waited for rather than raced.
+private func settledFileDescriptorCount(notExceeding limit: Int) throws -> Int {
+    let deadline = Date().addingTimeInterval(2)
+    var count = openFileDescriptorCount()
+    while count > limit, Date() < deadline {
+        usleep(20_000)
+        count = openFileDescriptorCount()
+    }
+    return count
+}
+
+func testEveryCommandCacheScanEndsWithoutBookkeeping() throws {
+    // Per-scan request sets are the cache's only unbounded structure. A scan
+    // that ends — swept, superseded, or abandoned — must leave nothing behind,
+    // or the bookkeeping outgrows the table it exists to bound.
+    let cache = ProcessCommandCache()
+    let identity = ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)
+    func read() -> ProcessCommand {
+        ProcessCommand(executablePath: "/bin/zsh", leadingArguments: [])
+    }
+    for _ in 0..<4 {
+        let token = cache.beginScan()
+        _ = cache.command(for: identity, scanToken: token, read: read)
+        cache.sweep(scanToken: token)
+    }
+    let superseded = cache.beginScan()
+    let latest = cache.beginScan()
+    cache.sweep(scanToken: superseded)
+    cache.sweep(scanToken: latest)
+    cache.discardScan(cache.beginScan())
+
+    try expect(cache.trackedScanCount, equals: 0, "no scan bookkeeping outlives its scan")
+}
+
+func testAnAbandonedScanDoesNotEvictLiveCommandCacheEntries() throws {
+    // A scan that fails before it lists the process table gathered no
+    // eviction evidence, so it must defer to the last complete scan rather
+    // than dropping entries that scan proved live.
+    let cache = ProcessCommandCache()
+    let identity = ProcessIdentity(processID: 4242, kernelStartTimeMicroseconds: 1)
+    var reads = 0
+    func read() -> ProcessCommand {
+        reads += 1
+        return ProcessCommand(executablePath: "/bin/zsh", leadingArguments: [])
+    }
+    let complete = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: complete, read: read)
+    cache.sweep(scanToken: complete)
+
+    cache.discardScan(cache.beginScan())
+
+    let next = cache.beginScan()
+    _ = cache.command(for: identity, scanToken: next, read: read)
+    try expect(reads, equals: 1, "an abandoned scan evicts nothing")
 }
 
 private func orderedTestSession(
@@ -8462,6 +9372,37 @@ let tests: [(String, () throws -> Void)] = [
     ("state repository ignores symbolic links", testStateRepositoryIgnoresSymbolicLinks),
     ("state repository rejects FIFO without blocking", testStateRepositoryRejectsFIFOWithoutBlocking),
     ("state repository rejects oversized identity document", testStateRepositoryDoesNotPreserveIdentityFromOversizedDocument),
+    ("state read tolerates a concurrent atomic replacement", testStateReadToleratesAConcurrentAtomicReplacement),
+    ("an unreadable document does not delete a custom session name", testAnUnreadableDocumentDoesNotDeleteACustomSessionName),
+    ("an unreadable document does not rearm an acknowledged session", testAnUnreadableDocumentDoesNotRearmAnAcknowledgedSession),
+    ("two documents naming the same session produce one row", testTwoDocumentsNamingTheSameSessionProduceOneRow),
+    ("merge refuses a hooks value that is not an object", testClaudeSettingsMergeRefusesHooksValueThatIsNotAnObject),
+    ("merge refuses an event array containing a non-object", testClaudeSettingsMergeRefusesEventArrayContainingNonObject),
+    ("merge preserves unrelated event hooks", testClaudeSettingsMergePreservesUnrelatedEventHooks),
+    ("remove refuses malformed shapes and leaves no empty husks", testClaudeSettingsRemoveRefusesMalformedShapesAndLeavesNoEmptyHusks),
+    ("first install writes a one-time settings backup", testFirstInstallWritesOneTimeSettingsBackup),
+    ("installing through a symlinked settings file writes the target", testInstallingThroughASymlinkedSettingsFileWritesTheTarget),
+    ("preparing an already-private directory does not touch its mode", testPreparingAnAlreadyPrivateDirectoryDoesNotTouchItsMode),
+    ("Convoy-owned OpenCode documents are not decoded", testConvoyOwnedOpenCodeDocumentsAreNotDecoded),
+    ("pruning keeps overlays for Convoy-owned OpenCode sessions", testPruningKeepsOverlaysForConvoyOwnedOpenCodeSessions),
+    ("pruning removes overlays with no lifecycle owner", testPruningRemovesOverlaysWithNoLifecycleOwner),
+    ("concurrent state writers do not interleave", testConcurrentStateWritersDoNotInterleave),
+    ("removing a session takes the same write lock as saving", testRemovingASessionTakesTheSameWriteLockAsSaving),
+    ("a wedged foreign lock holder fails writers at the deadline", testAWedgedForeignLockHolderFailsWritersAtTheDeadline),
+    ("removing from a missing state directory is a no-op", testRemovingFromAMissingStateDirectoryIsANoOp),
+    ("state filename identifier round trips special characters", testStateFilenameIdentifierRoundTripsSpecialCharacters),
+    ("a subprocess that never exits is terminated at its deadline", testASubprocessThatNeverExitsIsTerminatedAtItsDeadline),
+    ("a subprocess that overfills its pipe still completes", testASubprocessThatOverfillsItsPipeStillCompletes),
+    ("an orphan holding the pipe does not turn success into a timeout", testAnOrphanHoldingThePipeDoesNotTurnSuccessIntoATimeout),
+    ("the front-terminal query is not repeated within its TTL", testTheFrontTerminalQueryIsNotRepeatedWithinItsTTL),
+    ("the heartbeat backs off after a scan finds no agents", testTheHeartbeatBacksOffAfterAScanFindsNoAgents),
+    ("the heartbeat returns to five seconds as soon as an agent appears", testTheHeartbeatReturnsToFiveSecondsAsSoonAsAnAgentAppears),
+    ("pointer monitors are unnecessary with one display", testPointerMonitorsAreUnnecessaryWithOneDisplay),
+    ("the card height budget includes the error row", testTheCardHeightBudgetIncludesTheErrorRow),
+    ("a hardware notch with no menu bar still uses notch geometry", testAHardwareNotchWithNoMenuBarStillUsesNotchGeometry),
+    ("notch layout supports a secondary display origin", testNotchLayoutSupportsASecondaryDisplayOrigin),
+    ("notch layout guards non-finite geometry", testNotchLayoutGuardsNonFiniteGeometry),
+    ("AppleScript string escapes every special character", testAppleScriptStringEscapesEverySpecialCharacter),
     ("Claude session start creates idle state", testClaudeSessionStartCreatesIdleState),
     ("Claude session start preserves existing status", testClaudeSessionStartPreservesExistingStatus),
     ("Claude lifecycle update preserves only matching process identity", testClaudeLifecycleUpdatePreservesOnlyMatchingProcessIdentity),
@@ -8499,6 +9440,9 @@ let tests: [(String, () throws -> Void)] = [
     ("process command cache reads each process generation once", testProcessCommandCacheReadsEachProcessGenerationOnce),
     ("process command cache rereads recycled process identifier", testProcessCommandCacheRereadsRecycledProcessIdentifier),
     ("process command cache forgets processes missing from latest scan", testProcessCommandCacheForgetsProcessesMissingFromLatestScan),
+    ("every command cache scan ends without bookkeeping", testEveryCommandCacheScanEndsWithoutBookkeeping),
+    ("an abandoned scan does not evict live command cache entries", testAnAbandonedScanDoesNotEvictLiveCommandCacheEntries),
+    ("releasing the scheduler closes its directory watchers", testReleasingTheSchedulerClosesItsDirectoryWatchers),
     ("reaper prunes superseded sessions for same process", testReaperPrunesSupersededSessionsForSameProcess),
     ("reaper prefers native session over newer fallback", testReaperPrefersNativeSessionOverNewerFallback),
     ("observation scheduler tick persists fallback state", testObservationSchedulerTickPersistsFallbackState),
@@ -8599,6 +9543,7 @@ let tests: [(String, () throws -> Void)] = [
     ("state repository keeps Convoy-owned OpenCode hidden after producer rewrite", testStateRepositoryKeepsConvoyOwnedOpenCodeHiddenAfterProducerRewrite),
     ("Convoy ownership index rejects links and FIFOs without blocking", testConvoyOwnershipIndexRejectsLinksAndFIFOsWithoutBlocking),
     ("corrupt ownership index waits for complete metadata inventory", testCorruptOwnershipIndexWaitsForCompleteMetadataInventory),
+    ("incomplete ownership inventory retries without directory change", testIncompleteConvoyOwnershipInventoryRetriesWithoutDirectoryChange),
     ("Convoy ownership watchers are bounded", testConvoyOwnershipWatchersAreBounded),
     ("initial reconciliation indexes serverless Convoy ownership", testInitialReconciliationIndexesServerlessConvoyOwnership),
     ("initial reconciliation watches live Convoy ownership before baseline", testInitialReconciliationWatchesLiveConvoyOwnershipBeforeBaseline),
@@ -8631,6 +9576,7 @@ let tests: [(String, () throws -> Void)] = [
     ("installer replaces marked integration files on reinstall", testInstallerReplacesMarkedIntegrationFilesOnReinstall),
     ("installer prepends codex notify before existing content", testInstallerPrependsCodexNotifyBeforeExistingContent),
     ("installation doctor reports healthy install", testInstallationDoctorReportsHealthyInstall),
+    ("installation doctor diagnoses loose settings permissions", testInstallationDoctorDiagnosesLooseSettingsPermissionsInsteadOfMissingInstall),
     ("installation doctor rejects a foreign codex notify hook", testInstallationDoctorRejectsAForeignCodexNotifyHook),
     ("installation doctor accepts a chained codex notify hook", testInstallationDoctorAcceptsAChainedCodexNotifyHook),
     ("installation doctor reads a codex notify array spanning lines", testInstallationDoctorReadsACodexNotifyArraySpanningLines),
@@ -8680,6 +9626,24 @@ if CommandLine.arguments.count == 3,
     } catch {
         exit(1)
     }
+} else if CommandLine.arguments.count == 4,
+          CommandLine.arguments[1] == "--hold-state-lock" {
+    // Child mode for the lock-timeout test: POSIX record locks are held per
+    // process, so a wedged foreign holder can only be simulated from outside
+    // the test process.
+    let descriptor = Darwin.open(
+        CommandLine.arguments[2],
+        O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+        0o600
+    )
+    guard descriptor >= 0,
+          Darwin.lockf(descriptor, F_LOCK, 0) == 0,
+          let holdMilliseconds = UInt32(CommandLine.arguments[3]) else {
+        exit(1)
+    }
+    FileHandle.standardOutput.write(Data("locked\n".utf8))
+    usleep(holdMilliseconds * 1_000)
+    exit(0)
 } else {
     do {
         for (name, test) in tests {

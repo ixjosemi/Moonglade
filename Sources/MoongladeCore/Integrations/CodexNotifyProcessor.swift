@@ -2,6 +2,7 @@ import Foundation
 
 public enum CodexNotifyError: Error, Equatable, Sendable {
     case unsupportedEvent(String)
+    case invalidWorkingDirectory
 }
 
 public struct CodexNotifyProcessor: Sendable {
@@ -31,13 +32,24 @@ public struct CodexNotifyProcessor: Sendable {
         let existing = try repository.loadLifecycleSessions().first {
             $0.tool == .codex && $0.sessionID == event.threadID
         }
+        let cwd: String
+        if let suppliedCWD = event.cwd {
+            guard let normalized = normalizedAbsolutePath(suppliedCWD) else {
+                throw CodexNotifyError.invalidWorkingDirectory
+            }
+            cwd = normalized
+        } else if let existingCWD = existing?.cwd {
+            cwd = existingCWD
+        } else {
+            throw CodexNotifyError.invalidWorkingDirectory
+        }
         let session = AgentSession(
             tool: .codex,
             sessionID: event.threadID,
             pid: existing?.pid ?? processID,
             status: .idle,
             attentionReason: .turnComplete,
-            cwd: existing?.cwd ?? event.cwd ?? FileManager.default.currentDirectoryPath,
+            cwd: cwd,
             startedAt: existing?.startedAt ?? now,
             updatedAt: now,
             terminal: existing?.terminal ?? TerminalContext()
