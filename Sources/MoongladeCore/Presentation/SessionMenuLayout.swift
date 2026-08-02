@@ -43,6 +43,34 @@ public enum SessionMenuLayout {
             + (hasError ? errorRowHeight : 0)
     }
 
+    /// Metrics for the inline action list (Rename, Copy, Reveal, Kill).
+    /// The hover resolver below depends on them, so they live here rather
+    /// than as literals inside the SwiftUI tree.
+    public static let actionRowHeight: CGFloat = 32
+    public static let actionRowSpacing: CGFloat = 1
+
+    /// Which action entry sits under a pointer at a list-local position.
+    ///
+    /// Per-row `.onHover` enter/exit pairs come from AppKit tracking areas
+    /// that are replaced while the row's expansion spring animates, so the
+    /// highlight could trail the pointer or skip an entry. Deriving the index
+    /// from the pointer position on every continuous-hover sample makes the
+    /// highlight exactly as current as the last mouse event. The hairline gap
+    /// between entries counts toward the row above it, so the pointer never
+    /// crosses a dead zone inside the list.
+    public static func actionRowIndex(
+        x: CGFloat,
+        y: CGFloat,
+        listWidth: CGFloat,
+        rowCount: Int
+    ) -> Int? {
+        guard rowCount > 0, x >= 0, x < listWidth, y >= 0 else { return nil }
+        let rowStride = actionRowHeight + actionRowSpacing
+        let listHeight = CGFloat(rowCount) * rowStride - actionRowSpacing
+        guard y < listHeight else { return nil }
+        return min(Int(y / rowStride), rowCount - 1)
+    }
+
     public static func sessionListHeight(
         sessionCount: Int,
         hasExpandedActions: Bool
