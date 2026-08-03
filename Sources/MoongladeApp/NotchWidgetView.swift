@@ -1267,13 +1267,28 @@ private struct SessionRow: View {
                     Image(systemName: "pencil")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.5))
-                    TextField(session.projectName, text: $renameDraft)
+                    ZStack(alignment: .leading) {
+                        // macOS does not honour styling on a TextField
+                        // prompt, and the system placeholder colour sinks
+                        // into the glass, so the prompt is drawn by hand
+                        // and the field's own prompt is suppressed.
+                        if renameDraft.isEmpty {
+                            Text(session.projectName)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .allowsHitTesting(false)
+                        }
+                        TextField(
+                            "Session name",
+                            text: $renameDraft,
+                            prompt: Text(verbatim: "")
+                        )
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(.white.opacity(0.94))
                         .focused($renameFieldIsFocused)
                         .onSubmit(commitRename)
                         .onExitCommand(perform: cancelRename)
+                    }
+                    .font(.system(size: 12.5, weight: .medium))
                 }
                 .padding(.horizontal, 10)
                 .frame(height: SessionMenuLayout.actionRowHeight)

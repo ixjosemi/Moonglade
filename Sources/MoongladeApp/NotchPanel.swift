@@ -169,6 +169,10 @@ private final class NotchDisplayPanel {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
+        // The notch surface is always dark glass, so appearance-derived
+        // colors (placeholder text, text selection) must resolve for dark
+        // even when the system is in light mode.
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.hidesOnDeactivate = false
