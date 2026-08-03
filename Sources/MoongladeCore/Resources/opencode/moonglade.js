@@ -17,6 +17,15 @@ const terminalSessions = new Map();
 const terminalSessionLimit = 1_024;
 const sessionLookupDeadlineMilliseconds = 1_000;
 const maximumStateFileSize = 1_048_576;
+// Events that pause a turn on the user (red alert) and the events that
+// resolve that pause. Permissions and AskUserQuestion prompts share the
+// same blocked-until-answered lifecycle.
+const attentionAsks = new Set(["permission.asked", "question.asked"]);
+const attentionResolutions = new Set([
+  "permission.replied",
+  "question.replied",
+  "question.rejected",
+]);
 
 function timestamp() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -202,7 +211,7 @@ async function isRootSession(client, sessionID) {
   }
 }
 
-async function updateState(client, event, directory, clearsPermission = false) {
+async function updateState(client, event, directory, clearsAttention = false) {
   const sessionID = eventSessionID(event);
   if (!sessionID) return;
   const terminalPhase = terminalSessions.get(sessionID);
@@ -256,6 +265,12 @@ async function updateState(client, event, directory, clearsPermission = false) {
   const transitions = {
     "permission.asked": ["needs_attention", "permission"],
     "permission.replied": ["working", null],
+    // AskUserQuestion blocks the turn exactly like a permission prompt, and
+    // Claude Code already reports it as one — reuse the "permission" reason
+    // so the state schema keeps a single "agent waits on an answer" value.
+    "question.asked": ["needs_attention", "permission"],
+    "question.replied": ["working", null],
+    "question.rejected": ["working", null],
     "session.idle": ["idle", null],
     "session.deleted": ["ended", null],
   };
@@ -274,13 +289,14 @@ async function updateState(client, event, directory, clearsPermission = false) {
     : null;
   const transition = statusTransition ?? transitions[event.type];
   if (!transition) return;
-  // While a permission is pending, only its reply or session deletion may
-  // end the wait. OpenCode can emit both busy and idle noise for the paused
-  // turn, and neither may hide the alert.
+  // While a permission or question is pending, only its resolution or
+  // session deletion may end the wait. OpenCode can emit both busy and idle
+  // noise for the paused turn, and neither may hide the alert.
   if (
     state.status === "needs_attention"
-    && !["permission.replied", "session.deleted"].includes(event.type)
-    && !clearsPermission
+    && !attentionResolutions.has(event.type)
+    && event.type !== "session.deleted"
+    && !clearsAttention
   ) {
     return;
   }
@@ -300,8 +316,8 @@ function changesState(event) {
     "session.created",
     "session.deleted",
     "session.idle",
-    "permission.asked",
-    "permission.replied",
+    ...attentionAsks,
+    ...attentionResolutions,
   ].includes(event.type) || (
     event.type === "session.status"
     && ["busy", "retry", "idle"].includes(event.properties.status?.type)
@@ -312,7 +328,7 @@ function coalesceWork(work, event) {
   if (!work) {
     return {
       event,
-      clearsPermission: event.type === "permission.replied",
+      clearsAttention: attentionResolutions.has(event.type),
       createdEvent: undefined,
       resetSession: false,
     };
@@ -323,7 +339,7 @@ function coalesceWork(work, event) {
   if (event.type === "session.deleted") {
     return {
       event,
-      clearsPermission: false,
+      clearsAttention: false,
       createdEvent: undefined,
       resetSession: work.resetSession,
     };
@@ -331,7 +347,7 @@ function coalesceWork(work, event) {
   if (event.type === "session.created") {
     return {
       event,
-      clearsPermission: false,
+      clearsAttention: false,
       createdEvent: undefined,
       resetSession: work.resetSession || work.event.type === "session.deleted",
     };
@@ -339,16 +355,13 @@ function coalesceWork(work, event) {
   if (!changesState(event)) {
     return changesState(work.event) ? work : { ...work, event };
   }
-  if (
-    work.event.type === "permission.asked"
-    && event.type !== "permission.replied"
-  ) {
+  if (attentionAsks.has(work.event.type) && !attentionResolutions.has(event.type)) {
     return work;
   }
   return {
     event,
-    clearsPermission: event.type === "permission.replied"
-      || (work.clearsPermission && event.type !== "permission.asked"),
+    clearsAttention: attentionResolutions.has(event.type)
+      || (work.clearsAttention && !attentionAsks.has(event.type)),
     createdEvent: work.createdEvent
       || (work.event.type === "session.created" ? work.event : undefined),
     resetSession: work.resetSession,
@@ -378,7 +391,7 @@ async function processWork(client, work, directory) {
   if (work.createdEvent) {
     await updateState(client, work.createdEvent, directory);
   }
-  await updateState(client, work.event, directory, work.clearsPermission);
+  await updateState(client, work.event, directory, work.clearsAttention);
 }
 
 async function drainQueue(client, queue, directory) {

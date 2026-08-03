@@ -188,6 +188,42 @@ try {
     assert.equal(idleState.status, "idle", `${idleType} must apply after the permission reply`);
   }
 
+  // OpenCode's AskUserQuestion flow mirrors permissions: question.asked
+  // blocks the turn until the user answers (question.replied) or dismisses
+  // the prompt (question.rejected), and idle noise for the paused turn must
+  // not hide the alert.
+  for (const [sessionID, resolutionType] of [
+    ["question-replied", "question.replied"],
+    ["question-rejected", "question.rejected"],
+  ]) {
+    await event("session.created", {
+      info: { id: sessionID, directory: "/tmp/project" },
+    });
+    await event("question.asked", { sessionID });
+    await event("session.status", { sessionID, status: { type: "idle" } });
+
+    const pendingState = await readState(sessionID);
+    assert.equal(
+      pendingState.status,
+      "needs_attention",
+      "idle noise must not clear a pending question",
+    );
+    assert.equal(pendingState.attention_reason, "permission");
+
+    await event(resolutionType, { sessionID });
+    const resolvedState = await readState(sessionID);
+    assert.equal(resolvedState.status, "working", `${resolutionType} must clear the alert`);
+    assert.equal(resolvedState.attention_reason, null);
+
+    await event("session.status", { sessionID, status: { type: "idle" } });
+    const idleState = await readState(sessionID);
+    assert.equal(
+      idleState.status,
+      "idle",
+      `session.status idle must apply after ${resolutionType}`,
+    );
+  }
+
   await event("session.created", {
     info: { id: "permission-deleted", directory: "/tmp/project" },
   });
@@ -392,6 +428,32 @@ try {
     repliedPermissionState.status,
     "idle",
     "a coalesced permission reply must allow the later idle transition",
+  );
+
+  const unansweredQuestion = await runStalledBurst("stalled-question-asked", [
+    { type: "message.updated", properties: {} },
+    { type: "question.asked", properties: {} },
+    { type: "session.status", properties: { status: { type: "idle" } } },
+  ]);
+  assert.equal(unansweredQuestion.handlersCompleted, true);
+  const unansweredQuestionState = await readState("stalled-question-asked");
+  assert.equal(
+    unansweredQuestionState.status,
+    "needs_attention",
+    "coalescing must not replace an unanswered question with idle noise",
+  );
+
+  const repliedQuestion = await runStalledBurst("stalled-question-replied", [
+    { type: "question.asked", properties: {} },
+    { type: "question.replied", properties: {} },
+    { type: "session.status", properties: { status: { type: "idle" } } },
+  ]);
+  assert.equal(repliedQuestion.handlersCompleted, true);
+  const repliedQuestionState = await readState("stalled-question-replied");
+  assert.equal(
+    repliedQuestionState.status,
+    "idle",
+    "a coalesced question reply must allow the later idle transition",
   );
 
   const failedWriteSessionID = "failed-write-cleanup";
