@@ -18,16 +18,6 @@ public struct SessionStatusSummary: Equatable, Sendable {
         blockedCount = sessions.count { $0.status == .needsAttention }
     }
 
-    /// The menu keeps the repository's real status, while the compact bar
-    /// downgrades a visited blocked session to the quiet waiting state until
-    /// fresh activity changes its acknowledgment fingerprint.
-    public init(
-        sessions: [AgentSession],
-        acknowledgments: AttentionAcknowledgments
-    ) {
-        self.init(sessions: acknowledgments.silenced(sessions))
-    }
-
     public struct StatusEntry: Equatable, Sendable, Identifiable {
         public enum Kind: String, Sendable, CaseIterable {
             case running

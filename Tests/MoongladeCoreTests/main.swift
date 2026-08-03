@@ -368,7 +368,7 @@ func testAnUnreadableDocumentDoesNotDeleteACustomSessionName() throws {
     try expect(try Data(contentsOf: namesURL), equals: namesBefore, "name file is not rewritten")
 }
 
-func testAnUnreadableDocumentDoesNotRearmAnAcknowledgedSession() throws {
+func testAnUnreadableDocumentDoesNotRearmAttention() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -376,12 +376,11 @@ func testAnUnreadableDocumentDoesNotRearmAnAcknowledgedSession() throws {
 
     let repository = StateRepository(directoryURL: directory)
     let session = try AgentSession.decode(
-        from: validStateJSON(sessionID: "acknowledged", status: "needs_attention")
+        from: validStateJSON(sessionID: "blocked", status: "needs_attention")
     )
     try repository.save(session)
     let store = StateStore(repository: repository)
     try store.reload()
-    store.acknowledge(session)
     var attentionRaised = 0
     store.onAttentionRaised = { _ in attentionRaised += 1 }
     let stateURL = try FileManager.default.contentsOfDirectory(
@@ -392,11 +391,6 @@ func testAnUnreadableDocumentDoesNotRearmAnAcknowledgedSession() throws {
 
     try store.reload()
 
-    try expect(
-        store.acknowledgments.isAcknowledged(session),
-        equals: true,
-        "acknowledgment survives incomplete load"
-    )
     try expect(attentionRaised, equals: 0, "incomplete load does not rearm attention")
 }
 
@@ -702,22 +696,6 @@ func testAnOrphanHoldingThePipeDoesNotTurnSuccessIntoATimeout() throws {
         equals: "ready\n",
         "output written before exit is returned despite the held pipe"
     )
-}
-
-func testTheFrontTerminalQueryIsNotRepeatedWithinItsTTL() throws {
-    let queryCount = TestCounter()
-    let cache = FrontTerminalQueryCache(
-        successTimeToLive: 30,
-        failureTimeToLive: 60
-    ) {
-        queryCount.increment()
-        return GhosttyFrontTerminal(terminalID: "front", workingDirectory: "/tmp/project")
-    }
-    let first = Date(timeIntervalSince1970: 1_000)
-    _ = cache.frontTerminal(now: first)
-    _ = cache.frontTerminal(now: first.addingTimeInterval(2))
-
-    try expect(queryCount.read(), equals: 1, "front terminal query TTL")
 }
 
 func testTheHeartbeatBacksOffAfterAScanFindsNoAgents() throws {
@@ -3300,20 +3278,15 @@ func testSessionStatusSummaryVisibleEntriesOmitsZeroCounts() throws {
     )
 }
 
-func testSessionStatusSummarySilencesAcknowledgedBlockedSessions() throws {
+func testABlockedSessionKeepsTheBarRedUntilItsStatusChanges() throws {
     let blocked = try AgentSession.decode(
-        from: validStateJSON(sessionID: "acknowledged", status: "needs_attention")
-    )
-    var acknowledgments = AttentionAcknowledgments()
-    acknowledgments.acknowledge(blocked)
-
-    let summary = SessionStatusSummary(
-        sessions: [blocked],
-        acknowledgments: acknowledgments
+        from: validStateJSON(sessionID: "blocked", status: "needs_attention")
     )
 
-    try expect(summary.blockedCount, equals: 0, "visited session no longer keeps the bar red")
-    try expect(summary.waitingCount, equals: 1, "visited session remains visible as a quiet wait")
+    let summary = SessionStatusSummary(sessions: [blocked])
+
+    try expect(summary.blockedCount, equals: 1, "a pending permission or question stays red")
+    try expect(summary.waitingCount, equals: 0, "a blocked session is never a quiet wait")
 }
 
 func testIdleStatusIndicatorsUseTheGreenDotStyle() throws {
@@ -3877,47 +3850,6 @@ func testPanelSynchronizationModeTransitionsChangeResourcesExactlyOnce() throws 
     let repeatedAllDisplays = policy.transition(to: .allDisplays)
     try expect(repeatedAllDisplays.installed, equals: [], "repeated all-displays install")
     try expect(repeatedAllDisplays.removed, equals: [], "repeated all-displays removal")
-}
-
-func testAttentionAcknowledgmentsSilenceVisitedSessionsUntilNewActivity() throws {
-    let waiting = try AgentSession.decode(
-        from: validStateJSON(sessionID: "ack", status: "needs_attention")
-    )
-    var acknowledgments = AttentionAcknowledgments()
-
-    try expect(
-        SessionStatusSummary(sessions: [waiting], acknowledgments: acknowledgments).blockedCount,
-        equals: 1,
-        "unvisited session keeps its red light"
-    )
-
-    acknowledgments.acknowledge(waiting)
-    try expect(
-        SessionStatusSummary(sessions: [waiting], acknowledgments: acknowledgments).blockedCount,
-        equals: 0,
-        "visited session goes quiet in the bar"
-    )
-    try expect(
-        acknowledgments.silenced([waiting]).first?.sessionID,
-        equals: "ack",
-        "silencing keeps the session listed"
-    )
-
-    let reraised = AgentSession(
-        tool: waiting.tool,
-        sessionID: waiting.sessionID,
-        pid: waiting.pid,
-        status: .needsAttention,
-        cwd: waiting.cwd,
-        startedAt: waiting.startedAt,
-        updatedAt: waiting.updatedAt.addingTimeInterval(60),
-        terminal: waiting.terminal
-    )
-    try expect(
-        SessionStatusSummary(sessions: [reraised], acknowledgments: acknowledgments).blockedCount,
-        equals: 1,
-        "new activity re-arms the light"
-    )
 }
 
 func testGitWorkspaceInspectorResolvesBranchNames() throws {
@@ -8050,37 +7982,6 @@ func testInstallationDoctorFailsWhenTheResourceBundleIsMissing() throws {
     )
 }
 
-func testFrontTerminalMatcherMatchesByIDAndFallsBackToWorkingDirectory() throws {
-    func session(_ sessionID: String, terminalID: String?, cwd: String) -> AgentSession {
-        AgentSession(
-            tool: .claude,
-            sessionID: sessionID,
-            pid: 1,
-            status: .idle,
-            cwd: cwd,
-            startedAt: Date(timeIntervalSince1970: 0),
-            updatedAt: Date(timeIntervalSince1970: 0),
-            terminal: TerminalContext(termProgram: "ghostty", ghosttyTerminalID: terminalID)
-        )
-    }
-    let front = GhosttyFrontTerminal(terminalID: "77", workingDirectory: "/Users/me/project/")
-    let exactMatch = session("exact", terminalID: "77", cwd: "/somewhere/else")
-    let cwdFallback = session("fallback", terminalID: nil, cwd: "/Users/me/project")
-    let otherTab = session("other-tab", terminalID: "12", cwd: "/Users/me/project")
-    let otherDirectory = session("other-dir", terminalID: nil, cwd: "/Users/me/elsewhere")
-
-    let focused = FrontTerminalMatcher.sessionsFocused(
-        by: front,
-        among: [exactMatch, cwdFallback, otherTab, otherDirectory]
-    )
-
-    try expect(
-        focused.map(\.sessionID),
-        equals: ["exact", "fallback"],
-        "exact ID wins; missing ID falls back to cwd; a known different tab never matches"
-    )
-}
-
 func testCLIParsesDoctorCommand() throws {
     try expect(try CLICommand.parse(arguments: ["doctor"]), equals: .doctor, "CLI command")
 }
@@ -8291,7 +8192,6 @@ func testStateStoreDoesNotRepublishUnchangedState() throws {
     let unchangedReload = ObservationProbe()
     withObservationTracking {
         _ = store.sessions
-        _ = store.acknowledgments
     } onChange: {
         unchangedReload.recordChange()
     }
@@ -9436,7 +9336,7 @@ let tests: [(String, () throws -> Void)] = [
     ("state repository rejects oversized identity document", testStateRepositoryDoesNotPreserveIdentityFromOversizedDocument),
     ("state read tolerates a concurrent atomic replacement", testStateReadToleratesAConcurrentAtomicReplacement),
     ("an unreadable document does not delete a custom session name", testAnUnreadableDocumentDoesNotDeleteACustomSessionName),
-    ("an unreadable document does not rearm an acknowledged session", testAnUnreadableDocumentDoesNotRearmAnAcknowledgedSession),
+    ("an unreadable document does not rearm attention", testAnUnreadableDocumentDoesNotRearmAttention),
     ("two documents naming the same session produce one row", testTwoDocumentsNamingTheSameSessionProduceOneRow),
     ("merge refuses a hooks value that is not an object", testClaudeSettingsMergeRefusesHooksValueThatIsNotAnObject),
     ("merge refuses an event array containing a non-object", testClaudeSettingsMergeRefusesEventArrayContainingNonObject),
@@ -9456,7 +9356,6 @@ let tests: [(String, () throws -> Void)] = [
     ("a subprocess that never exits is terminated at its deadline", testASubprocessThatNeverExitsIsTerminatedAtItsDeadline),
     ("a subprocess that overfills its pipe still completes", testASubprocessThatOverfillsItsPipeStillCompletes),
     ("an orphan holding the pipe does not turn success into a timeout", testAnOrphanHoldingThePipeDoesNotTurnSuccessIntoATimeout),
-    ("the front-terminal query is not repeated within its TTL", testTheFrontTerminalQueryIsNotRepeatedWithinItsTTL),
     ("the heartbeat backs off after a scan finds no agents", testTheHeartbeatBacksOffAfterAScanFindsNoAgents),
     ("the heartbeat returns to five seconds as soon as an agent appears", testTheHeartbeatReturnsToFiveSecondsAsSoonAsAnAgentAppears),
     ("pointer monitors are unnecessary with one display", testPointerMonitorsAreUnnecessaryWithOneDisplay),
@@ -9533,7 +9432,7 @@ let tests: [(String, () throws -> Void)] = [
     ("state store Darwin notification observes removed state files", testStateStoreDarwinNotificationObservesRemovedStateFiles),
     ("session status summary counts global running waiting and blocked sessions", testSessionStatusSummaryCountsGlobalRunningWaitingAndBlockedSessions),
     ("session status summary visible entries omit zero counts", testSessionStatusSummaryVisibleEntriesOmitsZeroCounts),
-    ("session status summary silences acknowledged blocked sessions", testSessionStatusSummarySilencesAcknowledgedBlockedSessions),
+    ("a blocked session keeps the bar red until its status changes", testABlockedSessionKeepsTheBarRedUntilItsStatusChanges),
     ("idle status indicators use the green dot style", testIdleStatusIndicatorsUseTheGreenDotStyle),
     ("pointer movement gate stays locked until pointer moves", testPointerMovementGateStaysLockedUntilPointerMoves),
     ("pointer samples publish only containment transitions", testPointerSamplesPublishOnlyContainmentTransitions),
@@ -9553,7 +9452,6 @@ let tests: [(String, () throws -> Void)] = [
     ("panel synchronization avoids idle polling outside focused mode", testPanelSynchronizationSchedulesNoIdlePollingOutsideFocusedWindowMode),
     ("focused window synchronization uses documented slow fallback", testFocusedWindowSynchronizationUsesOnlyDocumentedSlowFallback),
     ("panel synchronization mode transitions change resources once", testPanelSynchronizationModeTransitionsChangeResourcesExactlyOnce),
-    ("attention acknowledgments silence visited sessions", testAttentionAcknowledgmentsSilenceVisitedSessionsUntilNewActivity),
     ("git workspace inspector resolves branch names", testGitWorkspaceInspectorResolvesBranchNames),
     ("Git branch coordinator coalesces and caches working directory", testGitBranchResolutionCoordinatorCoalescesAndCachesWorkingDirectory),
     ("Git branch coordinator bounds concurrent probes", testGitBranchResolutionCoordinatorBoundsConcurrentProbes),
@@ -9649,7 +9547,6 @@ let tests: [(String, () throws -> Void)] = [
     ("installer ships the resource bundle beside the installed binary", testInstallerShipsTheResourceBundleBesideTheInstalledBinary),
     ("installation doctor fails when the resource bundle is missing", testInstallationDoctorFailsWhenTheResourceBundleIsMissing),
     ("CLI parses doctor command", testCLIParsesDoctorCommand),
-    ("front terminal matcher matches by ID and falls back to cwd", testFrontTerminalMatcherMatchesByIDAndFallsBackToWorkingDirectory),
     ("hook input rejects oversized payloads", testHookInputRejectsOversizedPayloads),
     ("Codex notify marks turn complete", testCodexNotifyMarksTurnComplete),
     ("session name overrides rename and prune", testSessionNameOverridesRenameAndPrune),

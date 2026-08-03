@@ -43,7 +43,6 @@ private let stateStoreNotificationCallback: CFNotificationCallback = {
 public final class StateStore {
     public private(set) var sessions: [AgentSession] = []
     public private(set) var lastErrorDescription: String?
-    public private(set) var acknowledgments = AttentionAcknowledgments()
     public private(set) var nameOverrides = SessionNameOverrides()
 
     /// Invoked from `reload()` with the sessions that just transitioned into
@@ -99,9 +98,6 @@ public final class StateStore {
             .sorted(by: Self.precedes)
         publish(loaded, to: \.sessions)
         guard snapshot.skippedDocumentCount == 0 else { return }
-        var prunedAcknowledgments = acknowledgments
-        prunedAcknowledgments.prune(keeping: loaded)
-        publish(prunedAcknowledgments, to: \.acknowledgments)
         raiseStatusTransitions()
         var prunedOverrides = nameOverrides
         prunedOverrides.prune(keeping: loaded)
@@ -129,12 +125,6 @@ public final class StateStore {
 
     public func sessions(for tool: AgentTool) -> [AgentSession] {
         sessions.filter { $0.tool == tool }
-    }
-
-    /// Marks a waiting session as visited so the bar semaphore goes quiet
-    /// until the session shows new activity.
-    public func acknowledge(_ session: AgentSession) {
-        acknowledgments.acknowledge(session)
     }
 
     /// Renames a session for display; a blank name restores the project name.

@@ -19,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: NotchPanelController?
     private(set) var store: StateStore?
     private var observationScheduler: ObservationScheduler?
-    private var focusAcknowledgmentObserver: FocusAcknowledgmentObserver?
     private var instanceLock: SingleInstanceLock?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -92,14 +91,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.panelController = NotchPanelController(store: store)
             self.panelController?.show()
-            let focusObserver = FocusAcknowledgmentObserver(store: store)
-            self.focusAcknowledgmentObserver = focusObserver
-            focusObserver.start()
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        focusAcknowledgmentObserver?.stop()
         observationScheduler?.stop()
         store?.stopObserving()
     }

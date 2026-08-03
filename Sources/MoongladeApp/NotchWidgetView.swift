@@ -65,10 +65,7 @@ struct NotchWidgetView: View {
     @State private var latestMeasuredContentHeight: CGFloat = 0
 
     var body: some View {
-        let summary = SessionStatusSummary(
-            sessions: store.sessions,
-            acknowledgments: store.acknowledgments
-        )
+        let summary = SessionStatusSummary(sessions: store.sessions)
         let shouldHide = summary.activeSessionCount == 0 && hideWhenEmpty
         let leftEntries = summary.visibleEntries.filter { $0.kind != .blocked }
         let rightEntries = summary.visibleEntries.filter { $0.kind == .blocked }
@@ -155,7 +152,6 @@ struct NotchWidgetView: View {
                             sessions: store.sessions,
                             stateDirectoryURL: store.stateDirectoryURL,
                             dismiss: collapseMenu,
-                            acknowledge: { store.acknowledge($0) },
                             sessionTitle: { store.displayName(for: $0) },
                             overrideName: { store.nameOverrides.displayName(for: $0) },
                             rename: { store.rename($0, to: $1) },
@@ -902,7 +898,6 @@ private struct SessionMenuCard: View {
     let sessions: [AgentSession]
     let stateDirectoryURL: URL
     let dismiss: () -> Void
-    let acknowledge: (AgentSession) -> Void
     let sessionTitle: (AgentSession) -> String
     let overrideName: (AgentSession) -> String?
     let rename: (AgentSession, String) -> Void
@@ -1028,7 +1023,6 @@ private struct SessionMenuCard: View {
                 guard let latest else { throw FocusError.sessionUnavailable }
                 try FocusService.focus(latest)
                 DispatchQueue.main.async {
-                    acknowledge(latest)
                     dismiss()
                 }
             } catch {
