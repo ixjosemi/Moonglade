@@ -11,7 +11,10 @@ const stateDirectory = join(
   "state",
 );
 const sessions = new Map();
-const childSessionIDs = new Set();
+// Child sessions (subagents, title generation) mapped to the root session
+// whose terminal they run in. Their prompts alert the root; every other
+// child event is dropped so phantom sessions never get state documents.
+const childRootSessionIDs = new Map();
 const updateQueues = new Map();
 const terminalSessions = new Map();
 const terminalSessionLimit = 1_024;
@@ -26,6 +29,76 @@ const attentionResolutions = new Set([
   "question.replied",
   "question.rejected",
 ]);
+// Outstanding prompts per root session, keyed by the asking session so a
+// dying subagent releases exactly its own prompts. Several subagents can
+// prompt concurrently; answering one must not silence the others, so the
+// root stays needs_attention until this ledger drains.
+const pendingAsksByRoot = new Map();
+const pendingAskLimit = 64;
+
+function rootSessionID(sessionID) {
+  return childRootSessionIDs.get(sessionID) ?? sessionID;
+}
+
+function isAttentionEvent(event) {
+  return attentionAsks.has(event.type) || attentionResolutions.has(event.type);
+}
+
+function askRequestKey(event) {
+  const requestID = attentionAsks.has(event.type)
+    ? event.properties.id
+    : event.properties.requestID;
+  return typeof requestID === "string" && requestID !== "" ? requestID : "unkeyed";
+}
+
+function recordPendingAsk(root, asker, key) {
+  let asksBySession = pendingAsksByRoot.get(root);
+  if (!asksBySession) {
+    asksBySession = new Map();
+    pendingAsksByRoot.set(root, asksBySession);
+  }
+  let keys = asksBySession.get(asker);
+  if (!keys) {
+    if (asksBySession.size >= pendingAskLimit) {
+      asksBySession.delete(asksBySession.keys().next().value);
+    }
+    keys = new Set();
+    asksBySession.set(asker, keys);
+  }
+  keys.add(key);
+  if (keys.size > pendingAskLimit) keys.delete(keys.values().next().value);
+}
+
+function resolvePendingAsk(root, asker, key) {
+  const asksBySession = pendingAsksByRoot.get(root);
+  const keys = asksBySession?.get(asker);
+  if (!keys) return;
+  // A reply that no longer matches its recorded ask (schema drift, daemon
+  // restart) still means the user answered something: retire the oldest.
+  if (!keys.delete(key)) keys.delete(keys.values().next().value);
+  if (keys.size === 0) asksBySession.delete(asker);
+  if (asksBySession.size === 0) pendingAsksByRoot.delete(root);
+}
+
+function hasPendingAsks(root) {
+  return pendingAsksByRoot.has(root);
+}
+
+function releasePendingAsks(asker) {
+  const asksBySession = pendingAsksByRoot.get(rootSessionID(asker));
+  if (!asksBySession) return;
+  asksBySession.delete(asker);
+  if (asksBySession.size === 0) pendingAsksByRoot.delete(rootSessionID(asker));
+}
+
+function migratePendingAsks(fromRoot, toRoot) {
+  const stranded = pendingAsksByRoot.get(fromRoot);
+  if (!stranded) return;
+  pendingAsksByRoot.delete(fromRoot);
+  for (const [asker, keys] of stranded) {
+    for (const key of keys) recordPendingAsk(toRoot, asker, key);
+  }
+}
 
 function timestamp() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -187,7 +260,7 @@ function rememberTerminalSession(sessionID, phase) {
   }
 }
 
-async function isRootSession(client, sessionID) {
+async function lookupParentSessionID(client, sessionID) {
   const controller = new AbortController();
   let timeout;
   try {
@@ -201,19 +274,24 @@ async function isRootSession(client, sessionID) {
       client.session.get({ path: { id: sessionID }, signal: controller.signal }),
       deadline,
     ]);
-    return !response?.data?.parentID;
+    return response?.data?.parentID;
   } catch {
     // Fail open: a lookup hiccup must not blind the app to a real root
     // session, and the app's reaper prunes any duplicate that slips through.
-    return true;
+    return undefined;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function updateState(client, event, directory, clearsAttention = false) {
-  const sessionID = eventSessionID(event);
-  if (!sessionID) return;
+async function updateState(client, event, directory) {
+  const eventSession = eventSessionID(event);
+  if (!eventSession) return;
+  // A prompt raised inside a subagent blocks the user in the root session's
+  // terminal, so its lifecycle is applied to the root's document.
+  const sessionID = isAttentionEvent(event)
+    ? rootSessionID(eventSession)
+    : eventSession;
   const terminalPhase = terminalSessions.get(sessionID);
   if (event.type === "session.created") {
     terminalSessions.delete(sessionID);
@@ -223,18 +301,20 @@ async function updateState(client, event, directory, clearsAttention = false) {
   ) {
     return;
   }
-  if (childSessionIDs.has(sessionID)) {
+  if (childRootSessionIDs.has(sessionID)) {
     if (event.type === "session.deleted") {
-      childSessionIDs.delete(sessionID);
+      releasePendingAsks(sessionID);
+      childRootSessionIDs.delete(sessionID);
       rememberTerminalSession(sessionID, "ended");
     }
     return;
   }
   if (event.type === "session.created") {
-    // Child sessions (subagents, title generation) run inside a root
-    // session's terminal; tracking them would list phantom sessions.
     if (event.properties.info?.parentID) {
-      childSessionIDs.add(sessionID);
+      childRootSessionIDs.set(
+        sessionID,
+        rootSessionID(event.properties.info.parentID),
+      );
       return;
     }
     const state = createState(event.properties.info, directory);
@@ -252,11 +332,22 @@ async function updateState(client, event, directory, clearsAttention = false) {
     // Unknown mid-stream session: the plugin instance is younger than the
     // session (daemon restart). Ask the server whether it is a root
     // session before fabricating a document for it.
-    if (!(await isRootSession(client, sessionID))) {
+    const parentID = await lookupParentSessionID(client, sessionID);
+    const root = parentID && parentID !== sessionID
+      ? rootSessionID(parentID)
+      : sessionID;
+    if (root !== sessionID) {
       if (event.type === "session.deleted") {
         rememberTerminalSession(sessionID, "ended");
-      } else {
-        childSessionIDs.add(sessionID);
+        return;
+      }
+      childRootSessionIDs.set(sessionID, root);
+      migratePendingAsks(sessionID, root);
+      if (isAttentionEvent(event)) {
+        // Replay the prompt against the root, serialized on the root's own
+        // queue. A root queue never awaits a child queue and self-mapping is
+        // excluded above, so this await cannot deadlock.
+        await enqueueEvent(client, root, event, directory);
       }
       return;
     }
@@ -289,24 +380,31 @@ async function updateState(client, event, directory, clearsAttention = false) {
     : null;
   const transition = statusTransition ?? transitions[event.type];
   if (!transition) return;
-  // While a permission or question is pending, only its resolution or
+  // While any permission or question is outstanding, only a resolution or
   // session deletion may end the wait. OpenCode can emit both busy and idle
   // noise for the paused turn, and neither may hide the alert.
   if (
     state.status === "needs_attention"
+    && hasPendingAsks(sessionID)
     && !attentionResolutions.has(event.type)
     && event.type !== "session.deleted"
-    && !clearsAttention
   ) {
     return;
   }
-  state.status = transition[0];
-  state.attention_reason = transition[1];
+  let [status, attentionReason] = transition;
+  if (attentionResolutions.has(event.type) && hasPendingAsks(sessionID)) {
+    // The answered prompt was not the last outstanding one; the session is
+    // still blocked on the user.
+    [status, attentionReason] = ["needs_attention", "permission"];
+  }
+  state.status = status;
+  state.attention_reason = attentionReason;
   state.updated_at = timestamp();
   sessions.set(sessionID, state);
   await writeState(state);
   if (event.type === "session.deleted") {
     sessions.delete(sessionID);
+    pendingAsksByRoot.delete(sessionID);
     rememberTerminalSession(sessionID, "ended");
   }
 }
@@ -326,28 +424,17 @@ function changesState(event) {
 
 function coalesceWork(work, event) {
   if (!work) {
-    return {
-      event,
-      clearsAttention: attentionResolutions.has(event.type),
-      createdEvent: undefined,
-      resetSession: false,
-    };
+    return { event, createdEvent: undefined, resetSession: false };
   }
   if (work.event.type === "session.deleted" && event.type !== "session.created") {
     return work;
   }
   if (event.type === "session.deleted") {
-    return {
-      event,
-      clearsAttention: false,
-      createdEvent: undefined,
-      resetSession: work.resetSession,
-    };
+    return { event, createdEvent: undefined, resetSession: work.resetSession };
   }
   if (event.type === "session.created") {
     return {
       event,
-      clearsAttention: false,
       createdEvent: undefined,
       resetSession: work.resetSession || work.event.type === "session.deleted",
     };
@@ -355,13 +442,14 @@ function coalesceWork(work, event) {
   if (!changesState(event)) {
     return changesState(work.event) ? work : { ...work, event };
   }
+  // An unanswered ask must survive coalescing so its needs_attention write
+  // lands; the pending-ask ledger (mutated at intake, never here) already
+  // reflects every ask and resolution the burst carried.
   if (attentionAsks.has(work.event.type) && !attentionResolutions.has(event.type)) {
     return work;
   }
   return {
     event,
-    clearsAttention: attentionResolutions.has(event.type)
-      || (work.clearsAttention && !attentionAsks.has(event.type)),
     createdEvent: work.createdEvent
       || (work.event.type === "session.created" ? work.event : undefined),
     resetSession: work.resetSession,
@@ -386,12 +474,12 @@ async function processWork(client, work, directory) {
   const sessionID = eventSessionID(work.createdEvent || work.event);
   if (work.resetSession && sessionID) {
     sessions.delete(sessionID);
-    childSessionIDs.delete(sessionID);
+    childRootSessionIDs.delete(sessionID);
   }
   if (work.createdEvent) {
     await updateState(client, work.createdEvent, directory);
   }
-  await updateState(client, work.event, directory, work.clearsAttention);
+  await updateState(client, work.event, directory);
 }
 
 async function drainQueue(client, queue, directory) {
@@ -406,6 +494,27 @@ async function drainQueue(client, queue, directory) {
   }
 }
 
+function enqueueEvent(client, queueSessionID, event, directory) {
+  let queue = updateQueues.get(queueSessionID);
+  if (queue) {
+    // A burst shares this drain promise and only mutates one pending work
+    // item, so neither promises nor event closures form an unbounded chain.
+    queue.pending = coalesceWork(queue.pending, event);
+  } else {
+    queue = {
+      pending: coalesceWork(undefined, event),
+      promise: undefined,
+    };
+    updateQueues.set(queueSessionID, queue);
+    queue.promise = drainQueue(client, queue, directory).finally(() => {
+      if (updateQueues.get(queueSessionID) === queue) {
+        updateQueues.delete(queueSessionID);
+      }
+    });
+  }
+  return queue.promise;
+}
+
 export const MoongladePlugin = async ({ client, directory }) => ({
   event: ({ event }) => {
     const sessionID = eventSessionID(event);
@@ -415,21 +524,21 @@ export const MoongladePlugin = async ({ client, directory }) => ({
       });
     }
 
-    let queue = updateQueues.get(sessionID);
-    if (queue) {
-      // A burst shares this drain promise and only mutates one pending work
-      // item, so neither promises nor event closures form an unbounded chain.
-      queue.pending = coalesceWork(queue.pending, event);
-    } else {
-      queue = {
-        pending: coalesceWork(undefined, event),
-        promise: undefined,
-      };
-      updateQueues.set(sessionID, queue);
-      queue.promise = drainQueue(client, queue, directory).finally(() => {
-        if (updateQueues.get(sessionID) === queue) updateQueues.delete(sessionID);
-      });
+    let queueSessionID = sessionID;
+    if (isAttentionEvent(event)) {
+      // Record every ask and resolution before coalescing can collapse the
+      // burst: three concurrent subagent prompts must keep the root red
+      // until the third answer, even when their events share one queue drain.
+      const root = rootSessionID(sessionID);
+      if (!terminalSessions.has(root)) {
+        if (attentionAsks.has(event.type)) {
+          recordPendingAsk(root, sessionID, askRequestKey(event));
+        } else {
+          resolvePendingAsk(root, sessionID, askRequestKey(event));
+        }
+      }
+      queueSessionID = root;
     }
-    return queue.promise;
+    return enqueueEvent(client, queueSessionID, event, directory);
   },
 });

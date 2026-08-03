@@ -224,6 +224,87 @@ try {
     );
   }
 
+  // Subagents run as child sessions, but their permission and question
+  // prompts surface in the root session's terminal: the root must turn red
+  // and stay red until every outstanding prompt is answered.
+  await event("session.created", {
+    info: { id: "orchestrator", directory: "/tmp/project" },
+  });
+  await event("session.created", {
+    info: { id: "worker-a", parentID: "orchestrator", directory: "/tmp/project" },
+  });
+  await event("session.created", {
+    info: { id: "worker-b", parentID: "orchestrator", directory: "/tmp/project" },
+  });
+  await event("permission.asked", { sessionID: "worker-a", id: "ask-a" });
+  const childAskState = await readState("orchestrator");
+  assert.equal(
+    childAskState.status,
+    "needs_attention",
+    "a child session's permission prompt must alert the root session",
+  );
+  assert.equal(childAskState.attention_reason, "permission");
+
+  await event("question.asked", { sessionID: "worker-b", id: "ask-b" });
+  await event("session.status", { sessionID: "orchestrator", status: { type: "busy" } });
+  await event("permission.replied", { sessionID: "worker-a", requestID: "ask-a" });
+  const outstandingAskState = await readState("orchestrator");
+  assert.equal(
+    outstandingAskState.status,
+    "needs_attention",
+    "answering one prompt must not clear another child's pending prompt",
+  );
+
+  await event("question.replied", { sessionID: "worker-b", requestID: "ask-b" });
+  const answeredAsksState = await readState("orchestrator");
+  assert.equal(
+    answeredAsksState.status,
+    "working",
+    "answering the last outstanding prompt must clear the alert",
+  );
+  assert.equal(answeredAsksState.attention_reason, null);
+
+  const childDocuments = (await readdir(join(home, "state"))).filter((name) => (
+    name.includes(Buffer.from("worker-a").toString("base64url"))
+      || name.includes(Buffer.from("worker-b").toString("base64url"))
+  ));
+  assert.deepEqual(
+    childDocuments,
+    [],
+    "child sessions must never receive their own state documents",
+  );
+
+  await event("permission.asked", { sessionID: "worker-a", id: "ask-c" });
+  await event("session.deleted", { sessionID: "worker-a" });
+  await event("session.status", { sessionID: "orchestrator", status: { type: "idle" } });
+  const abortedChildState = await readState("orchestrator");
+  assert.equal(
+    abortedChildState.status,
+    "idle",
+    "a deleted child must release its pending prompts",
+  );
+
+  // Daemon restart recovery: a prompt from a child session the plugin has
+  // never seen must be re-targeted at its root after the parent lookup.
+  await event("session.created", {
+    info: { id: "root", directory: "/tmp/project" },
+  });
+  childSessionIDs.add("restart-child");
+  await event("permission.asked", { sessionID: "restart-child", id: "ask-r" });
+  const recoveredAskState = await readState("root");
+  assert.equal(
+    recoveredAskState.status,
+    "needs_attention",
+    "a prompt from an unknown child must alert its root after the parent lookup",
+  );
+  await event("permission.replied", { sessionID: "restart-child", requestID: "ask-r" });
+  const recoveredReplyState = await readState("root");
+  assert.equal(
+    recoveredReplyState.status,
+    "working",
+    "the recovered child's reply must clear the root alert",
+  );
+
   await event("session.created", {
     info: { id: "permission-deleted", directory: "/tmp/project" },
   });
