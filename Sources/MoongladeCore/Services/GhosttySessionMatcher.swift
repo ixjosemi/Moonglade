@@ -61,18 +61,24 @@ public enum GhosttySessionMatcher {
 
         // Remembered processes claim first so a newcomer can never steal a
         // surface that already belongs to someone via a weaker heuristic.
+        // The rest claim oldest first, because Ghostty enumerates surfaces in
+        // creation order and an agent is started in its pane shortly after
+        // the pane appears — so when nothing else distinguishes them, the
+        // k-th oldest agent belongs to the k-th oldest pane. Process IDs say
+        // nothing about age once the kernel has wrapped them around.
         let orderedProcesses = processes.sorted { lhs, rhs in
             let lhsRemembered = previousAssignments[assignmentKey(for: lhs)] != nil
             let rhsRemembered = previousAssignments[assignmentKey(for: rhs)] != nil
             if lhsRemembered != rhsRemembered {
                 return lhsRemembered
             }
-            return lhs.processID < rhs.processID
+            return lhs.elapsedSeconds > rhs.elapsedSeconds
         }
         for process in orderedProcesses {
             guard let choice = bestTerminal(
                 for: process,
                 in: availableTerminals,
+                among: terminals,
                 sessionTitle: sessionTitles[process.processID],
                 rememberedTerminalID: previousAssignments[assignmentKey(for: process)]
             ) else {
@@ -121,9 +127,14 @@ public enum GhosttySessionMatcher {
         let isIdentified: Bool
     }
 
+    /// `terminals` are the surfaces still unclaimed; `allTerminals` is every
+    /// surface this scan saw. Evidence is judged against the whole set: a
+    /// signal that singles out a pane only because its rivals were claimed
+    /// first is enumeration order wearing identity's clothes.
     private static func bestTerminal(
         for process: DetectedAgentProcess,
         in terminals: [GhosttyTerminal],
+        among allTerminals: [GhosttyTerminal],
         sessionTitle: String?,
         rememberedTerminalID: String?
     ) -> TerminalChoice? {
@@ -142,62 +153,66 @@ public enum GhosttySessionMatcher {
         // The agent named the session and its TUI wrote that name into the
         // pane, so an exact match is identity — strong enough to correct a
         // remembered assignment that was made before the name existed.
-        if let titledIndex = onlyIndex(in: terminals, titled: sessionTitle) {
-            return TerminalChoice(index: titledIndex, isIdentified: true)
+        if let titled = onlyTerminal(in: allTerminals, titled: sessionTitle),
+           let index = terminals.firstIndex(where: { $0.id == titled.id }) {
+            return TerminalChoice(index: index, isIdentified: true)
         }
         if let rememberedTerminalID,
            let rememberedIndex = terminals.firstIndex(where: { $0.id == rememberedTerminalID }) {
             return TerminalChoice(index: rememberedIndex, isIdentified: true)
         }
-        let sameDirectory = terminals.indices.filter {
-            !terminals[$0].cwd.isEmpty && terminals[$0].cwd == process.cwd
+        let directoryPeers = allTerminals.filter {
+            !$0.cwd.isEmpty && $0.cwd == process.cwd
         }
-        if !sameDirectory.isEmpty {
-            // Several tabs share one project directory. A title that names the
-            // tool, or carries its known decoration signature, identifies the
-            // pane only when it singles one out; picking the first of several
-            // equally plausible tabs is ordering, not evidence.
-            if let named = onlyElement(in: sameDirectory, where: {
-                terminals[$0].name.lowercased().contains(process.tool.rawValue)
-            }) ?? onlyElement(in: sameDirectory, where: {
-                titleSignatureMatches(process.tool, terminals[$0].name)
-            }) {
-                return TerminalChoice(index: named, isIdentified: true)
-            }
-            // Nothing distinguishes the tabs. Enumeration order is the only
-            // remaining option and it is a guess, so it may never claim a tab
-            // visibly running something else.
-            return sameDirectory.first {
-                !titleLooksLikeForeignCommand(terminals[$0].name, for: process.tool)
-            }.map { TerminalChoice(index: $0, isIdentified: false) }
+        guard !directoryPeers.isEmpty else {
+            let projectName = URL(fileURLWithPath: process.cwd).lastPathComponent.lowercased()
+            guard projectName.count >= 8, projectName != "development" else { return nil }
+            return terminals.firstIndex { $0.name.lowercased().contains(projectName) }
+                .map { TerminalChoice(index: $0, isIdentified: false) }
         }
-        let projectName = URL(fileURLWithPath: process.cwd).lastPathComponent.lowercased()
-        guard projectName.count >= 8, projectName != "development" else { return nil }
-        return terminals.firstIndex { $0.name.lowercased().contains(projectName) }
-            .map { TerminalChoice(index: $0, isIdentified: false) }
+        // Several tabs share one project directory. A title that names the
+        // tool, or carries its known decoration signature, identifies the pane
+        // only when it singles one out among all of them — three panes wearing
+        // the same TUI decoration tell three sessions apart not at all.
+        if let named = onlyTerminal(in: directoryPeers, where: {
+                $0.name.lowercased().contains(process.tool.rawValue)
+            }) ?? onlyTerminal(in: directoryPeers, where: {
+                titleSignatureMatches(process.tool, $0.name)
+            }),
+           let index = terminals.firstIndex(where: { $0.id == named.id }) {
+            return TerminalChoice(index: index, isIdentified: true)
+        }
+        // Nothing distinguishes the tabs. Enumeration order is all that is
+        // left, it is a guess, and it may never claim a tab visibly running
+        // something else.
+        return terminals.indices.first {
+            !terminals[$0].cwd.isEmpty
+                && terminals[$0].cwd == process.cwd
+                && !titleLooksLikeForeignCommand(terminals[$0].name, for: process.tool)
+        }.map { TerminalChoice(index: $0, isIdentified: false) }
     }
 
     /// The one surface whose display-cleaned title equals the session name.
     /// Both sides go through the row formatter so the TUI's status decoration
     /// ("🟡 | ") is stripped exactly the way the notch strips it. Ambiguity is
     /// answered with nil: two sessions sharing a name identify neither.
-    private static func onlyIndex(
+    private static func onlyTerminal(
         in terminals: [GhosttyTerminal],
         titled sessionTitle: String?
-    ) -> Int? {
+    ) -> GhosttyTerminal? {
         guard let sessionTitle else { return nil }
         let wanted = SessionTitleFormatter.rowTitle(tabTitle: sessionTitle, fallback: "")
         guard !wanted.isEmpty else { return nil }
-        return onlyElement(in: Array(terminals.indices), where: {
-            SessionTitleFormatter.rowTitle(tabTitle: terminals[$0].name, fallback: "") == wanted
-        })
+        return onlyTerminal(in: terminals) {
+            SessionTitleFormatter.rowTitle(tabTitle: $0.name, fallback: "") == wanted
+        }
     }
 
-    private static func onlyElement(
-        in indices: [Int],
-        where predicate: (Int) -> Bool
-    ) -> Int? {
-        let matches = indices.filter(predicate)
+    private static func onlyTerminal(
+        in terminals: [GhosttyTerminal],
+        where predicate: (GhosttyTerminal) -> Bool
+    ) -> GhosttyTerminal? {
+        let matches = terminals.filter(predicate)
         return matches.count == 1 ? matches[0] : nil
     }
 

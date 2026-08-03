@@ -7123,6 +7123,57 @@ func testGhosttyMatcherRefusesForeignPanesAndForgetsGuesses() throws {
     )
 }
 
+func testGhosttyMatcherPairsUnidentifiedPanesOldestFirst() throws {
+    // Nothing distinguishes three opencode panes decorated by the same TUI in
+    // one directory, so the pass falls back to order. Ghostty enumerates
+    // surfaces in creation order and each agent was started in its pane right
+    // after that pane appeared, so pairing by age is the guess most likely to
+    // be right. Process IDs cannot stand in for age: the oldest session here
+    // holds the highest PID, because the kernel wrapped its numbering around.
+    let processes = [
+        DetectedAgentProcess(
+            tool: .opencode,
+            processID: 21_446,
+            cwd: "/tmp/allfunds",
+            terminal: TerminalContext(termProgram: "ghostty"),
+            elapsedSeconds: 60
+        ),
+        DetectedAgentProcess(
+            tool: .opencode,
+            processID: 47_580,
+            cwd: "/tmp/allfunds",
+            terminal: TerminalContext(termProgram: "ghostty"),
+            elapsedSeconds: 30_000
+        ),
+        DetectedAgentProcess(
+            tool: .opencode,
+            processID: 21_229,
+            cwd: "/tmp/allfunds",
+            terminal: TerminalContext(termProgram: "ghostty"),
+            elapsedSeconds: 600
+        ),
+    ]
+    let terminals = [
+        GhosttyTerminal(id: "oldest-pane", name: "🟢 | Uno", cwd: "/tmp/allfunds"),
+        GhosttyTerminal(id: "middle-pane", name: "🟡 | Dos", cwd: "/tmp/allfunds"),
+        GhosttyTerminal(id: "newest-pane", name: "🟡 | Tres", cwd: "/tmp/allfunds"),
+    ]
+
+    let matched = GhosttySessionMatcher.match(processes: processes, terminals: terminals)
+
+    let paneByProcess = Dictionary(uniqueKeysWithValues: matched.processes.map {
+        ($0.processID, $0.terminal.ghosttyTerminalID)
+    })
+    try expect(paneByProcess[47_580], equals: "oldest-pane", "the oldest agent takes the oldest pane")
+    try expect(paneByProcess[21_229], equals: "middle-pane", "ages line up with enumeration order")
+    try expect(paneByProcess[21_446], equals: "newest-pane", "the newest agent takes the newest pane")
+    try expect(
+        matched.identifiedTerminalIDs.isEmpty,
+        equals: true,
+        "pairing by age stays a guess and is never remembered"
+    )
+}
+
 func testGhosttyMatcherPrefersConvoyOverItsEmbeddedOpenCodeServerForLastTerminal() throws {
     // Live incident 2026-07-20: a convoy pipeline's embedded `opencode serve`
     // child shares the pipeline's exact cwd, and Ghostty's own scripting
@@ -9701,6 +9752,7 @@ let tests: [(String, () throws -> Void)] = [
     ("Ghostty matcher keeps previous assignments across retitles", testGhosttyMatcherKeepsPreviousAssignmentsAcrossRetitles),
     ("Ghostty matcher identifies panes by reported session title", testGhosttyMatcherIdentifiesPanesByReportedSessionTitle),
     ("Ghostty matcher refuses foreign panes and forgets guesses", testGhosttyMatcherRefusesForeignPanesAndForgetsGuesses),
+    ("Ghostty matcher pairs unidentified panes oldest first", testGhosttyMatcherPairsUnidentifiedPanesOldestFirst),
     ("Ghostty matcher prefers convoy over its embedded opencode server for last terminal", testGhosttyMatcherPrefersConvoyOverItsEmbeddedOpenCodeServerForLastTerminal),
     ("Ghostty terminal query cache avoids redundant queries", testGhosttyTerminalQueryCacheAvoidsRedundantQueries),
     ("process scanner detects spawned agent process within budget", testProcessScannerDetectsSpawnedAgentProcessWithinBudget),
