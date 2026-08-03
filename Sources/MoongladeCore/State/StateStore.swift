@@ -133,9 +133,6 @@ public final class StateStore {
         persistNameOverrides()
     }
 
-    /// Row title precedence: a manual rename always wins, then the cleaned
-    /// live tab title (the reaper refreshes `windowTitleHint` from the
-    /// Ghostty scan each tick), then the directory name.
     private func raiseStatusTransitions() {
         let statusesBySessionID = Dictionary(
             sessions.map { ($0.id, $0.status) },
@@ -165,8 +162,17 @@ public final class StateStore {
         persistNameOverrides()
     }
 
+    /// Row title precedence: a manual rename always wins, then the name the
+    /// agent reported for the session, then the cleaned live tab title (the
+    /// reaper refreshes `windowTitleHint` from the Ghostty scan each tick),
+    /// then the directory name. The reported name outranks the tab title
+    /// because a tab title is only ever as right as the pane it was scraped
+    /// from, and panes in one directory are not reliably distinguishable.
     public func displayName(for session: AgentSession) -> String {
         nameOverrides.displayName(for: session)
+            ?? session.sessionTitle.map {
+                SessionTitleFormatter.truncate($0, to: SessionTitleFormatter.maximumTitleLength)
+            }
             ?? SessionTitleFormatter.rowTitle(
                 tabTitle: session.terminal.windowTitleHint,
                 fallback: session.projectName

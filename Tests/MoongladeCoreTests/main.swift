@@ -6860,7 +6860,7 @@ func testGhosttyMatcherPrefersProcessAndTTYOverRememberedHeuristics() throws {
         terminals: terminals,
         previousAssignments: staleAssignments
     )
-    let terminalByPID = Dictionary(uniqueKeysWithValues: matched.map {
+    let terminalByPID = Dictionary(uniqueKeysWithValues: matched.processes.map {
         ($0.processID, $0.terminal.ghosttyTerminalID)
     })
     try expect(terminalByPID[101]!, equals: "surface-first", "PID corrects stale first assignment")
@@ -6883,9 +6883,9 @@ func testGhosttyMatcherExcludesOrphanedProcessesAndAssignsExactTerminals() throw
 
     let matched = GhosttySessionMatcher.match(processes: processes, terminals: terminals)
 
-    try expect(matched.map(\.processID).sorted(), equals: [2, 3, 5], "visible process IDs")
+    try expect(matched.processes.map(\.processID).sorted(), equals: [2, 3, 5], "visible process IDs")
     try expect(
-        matched.first(where: { $0.processID == 5 })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.processID == 5 })?.terminal.ghosttyTerminalID,
         equals: "current",
         "exact terminal ID"
     )
@@ -6919,12 +6919,12 @@ func testGhosttyMatcherPrefersSameDirectoryTerminalNamingTheTool() throws {
     let matched = GhosttySessionMatcher.match(processes: processes, terminals: terminals)
 
     try expect(
-        matched.first(where: { $0.tool == .opencode })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.tool == .opencode })?.terminal.ghosttyTerminalID,
         equals: "opencode-tab",
         "opencode terminal"
     )
     try expect(
-        matched.first(where: { $0.tool == .claude })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.tool == .claude })?.terminal.ghosttyTerminalID,
         equals: "claude-tab",
         "claude terminal"
     )
@@ -6961,12 +6961,12 @@ func testGhosttyMatcherResolvesRetitledTabsBySignatureAndForeignCommands() throw
     let matched = GhosttySessionMatcher.match(processes: processes, terminals: terminals)
 
     try expect(
-        matched.first(where: { $0.tool == .claude })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.tool == .claude })?.terminal.ghosttyTerminalID,
         equals: "claude-tab",
         "spinner signature resolves the claude tab"
     )
     try expect(
-        matched.first(where: { $0.tool == .opencode })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.tool == .opencode })?.terminal.ghosttyTerminalID,
         equals: "opencode-tab",
         "emoji-pipe signature resolves the opencode tab"
     )
@@ -7001,14 +7001,125 @@ func testGhosttyMatcherKeepsPreviousAssignmentsAcrossRetitles() throws {
     )
 
     try expect(
-        matched.first(where: { $0.processID == 21 })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.processID == 21 })?.terminal.ghosttyTerminalID,
         equals: "tab-two",
         "opencode keeps its tab"
     )
     try expect(
-        matched.first(where: { $0.processID == 22 })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.processID == 22 })?.terminal.ghosttyTerminalID,
         equals: "tab-one",
         "claude keeps its tab"
+    )
+}
+
+func testGhosttyMatcherIdentifiesPanesByReportedSessionTitle() throws {
+    // Live incident 2026-08-03: four opencode sessions shared one directory,
+    // Ghostty 1.3 reports neither PID nor TTY per surface, and one pane ran
+    // `caffeinate -di`. With no per-process signal left, enumeration order
+    // handed that pane to a session and the assignment memory froze the
+    // mistake for the life of the app. OpenCode names each session and its
+    // TUI writes that name into the pane title, so the equality is the only
+    // real identity available — and it must outrank a remembered guess.
+    let validation = DetectedAgentProcess(
+        tool: .opencode,
+        processID: 47_580,
+        cwd: "/tmp/allfunds",
+        terminal: TerminalContext(termProgram: "ghostty"),
+        elapsedSeconds: 30_000
+    )
+    let task769 = DetectedAgentProcess(
+        tool: .opencode,
+        processID: 21_229,
+        cwd: "/tmp/allfunds",
+        terminal: TerminalContext(termProgram: "ghostty"),
+        elapsedSeconds: 400
+    )
+    let terminals = [
+        GhosttyTerminal(
+            id: "validation-pane",
+            name: "🟢 | Validación local de matriz",
+            cwd: "/tmp/allfunds"
+        ),
+        GhosttyTerminal(id: "caffeinate-pane", name: "caffeinate -di", cwd: "/tmp/allfunds"),
+        GhosttyTerminal(
+            id: "task-769-pane",
+            name: "🟡 | Implementar tarea 769",
+            cwd: "/tmp/allfunds"
+        ),
+    ]
+
+    let matched = GhosttySessionMatcher.match(
+        processes: [validation, task769],
+        terminals: terminals,
+        sessionTitles: [
+            47_580: "Validación local de matriz",
+            21_229: "Implementar tarea 769",
+        ],
+        previousAssignments: [
+            GhosttySessionMatcher.assignmentKey(for: task769): "caffeinate-pane",
+        ]
+    )
+
+    let paneByProcess = Dictionary(uniqueKeysWithValues: matched.processes.map {
+        ($0.processID, $0.terminal.ghosttyTerminalID)
+    })
+    try expect(
+        paneByProcess[21_229],
+        equals: "task-769-pane",
+        "the reported session title corrects a frozen assignment"
+    )
+    try expect(
+        paneByProcess[47_580],
+        equals: "validation-pane",
+        "each reported title claims its own pane"
+    )
+    try expect(
+        matched.identifiedTerminalIDs[GhosttySessionMatcher.assignmentKey(for: task769)],
+        equals: "task-769-pane",
+        "a title match is identity, so it may be remembered"
+    )
+}
+
+func testGhosttyMatcherRefusesForeignPanesAndForgetsGuesses() throws {
+    // Two halves of the same rule: a pane visibly running another command is
+    // never claimed, and a pane chosen by enumeration order alone is a guess
+    // that must stay out of the assignment memory. Freezing a guess is what
+    // turned one bad tick into a permanently mislabelled session.
+    let unidentified = DetectedAgentProcess(
+        tool: .opencode,
+        processID: 31_000,
+        cwd: "/tmp/allfunds",
+        terminal: TerminalContext(termProgram: "ghostty"),
+        elapsedSeconds: 5
+    )
+
+    let foreignOnly = GhosttySessionMatcher.match(
+        processes: [unidentified],
+        terminals: [
+            GhosttyTerminal(id: "caffeinate-pane", name: "caffeinate -di", cwd: "/tmp/allfunds"),
+        ]
+    )
+    try expect(
+        foreignOnly.processes.isEmpty,
+        equals: true,
+        "a pane running another command is left unclaimed"
+    )
+
+    let renamed = GhosttySessionMatcher.match(
+        processes: [unidentified],
+        terminals: [
+            GhosttyTerminal(id: "renamed-pane", name: "Allfunds", cwd: "/tmp/allfunds"),
+        ]
+    )
+    try expect(
+        renamed.processes.first?.terminal.ghosttyTerminalID,
+        equals: "renamed-pane",
+        "a hand-renamed pane still hosts the row"
+    )
+    try expect(
+        renamed.identifiedTerminalIDs.isEmpty,
+        equals: true,
+        "an order-based pick is a guess and is never remembered"
     )
 }
 
@@ -7042,12 +7153,12 @@ func testGhosttyMatcherPrefersConvoyOverItsEmbeddedOpenCodeServerForLastTerminal
     let matched = GhosttySessionMatcher.match(processes: processes, terminals: terminals)
 
     try expect(
-        matched.first(where: { $0.tool == .convoy })?.terminal.ghosttyTerminalID,
+        matched.processes.first(where: { $0.tool == .convoy })?.terminal.ghosttyTerminalID,
         equals: "ghost",
         "convoy claims the last blank terminal"
     )
     try expect(
-        matched.contains(where: { $0.tool == .opencode }),
+        matched.processes.contains(where: { $0.tool == .opencode }),
         equals: false,
         "embedded opencode server yields the slot to convoy"
     )
@@ -8458,6 +8569,73 @@ func testStateStoreDisplayNamePrefersOverrideThenTabTitle() throws {
     try expect(store.displayName(for: untitled), equals: "project", "no hint falls back to directory")
 }
 
+func testStateStoreDisplayNamePrefersReportedSessionTitle() throws {
+    // The agent names its own session; the tab title is a scrape of whichever
+    // pane Moonglade believes hosts it. When both exist, the reported name is
+    // the one that cannot be aimed at the wrong pane.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = StateStore(repository: StateRepository(directoryURL: directory))
+    let reported = try AgentSession.decode(from: Data(
+        #"{"schema_version":1,"tool":"opencode","session_id":"t3","session_title":"Implementar tarea 769","pid":1,"status":"working","attention_reason":null,"cwd":"/tmp/project","started_at":"2026-08-03T10:00:00Z","updated_at":"2026-08-03T10:00:00Z","terminal":{"window_title_hint":"caffeinate -di"}}"#.utf8
+    ))
+
+    try expect(
+        reported.sessionTitle,
+        equals: "Implementar tarea 769",
+        "the state document carries the reported title"
+    )
+    try expect(
+        store.displayName(for: reported),
+        equals: "Implementar tarea 769",
+        "the reported title beats a scraped tab title"
+    )
+
+    store.rename(reported, to: "Mi tarea")
+    try expect(
+        store.displayName(for: reported),
+        equals: "Mi tarea",
+        "a manual rename still wins"
+    )
+}
+
+func testFocusPlannerAimsAtThePaneNamingTheSession() throws {
+    // Without a surface ID the script can only search by name, and the
+    // synthesized "<project> — opencode" hint matches no pane at all. The
+    // reported session title is what the TUI actually wrote into the pane.
+    let session = AgentSession(
+        tool: .opencode,
+        sessionID: "ghostty-untethered",
+        pid: 21_229,
+        status: .working,
+        cwd: "/tmp/allfunds",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext(
+            termProgram: "ghostty",
+            windowTitleHint: "allfunds — opencode"
+        ),
+        sessionTitle: "Implementar tarea 769"
+    )
+
+    let actions = try FocusPlanner.actions(for: session)
+    guard case let .appleScript(script)? = actions.last else {
+        throw TestFailure.expectation("Ghostty focus did not produce AppleScript")
+    }
+    try expect(
+        script.contains("Implementar tarea 769"),
+        equals: true,
+        "the fallback search uses the reported session title"
+    )
+    try expect(
+        script.contains("allfunds — opencode"),
+        equals: false,
+        "the synthesized hint never outranks the reported title"
+    )
+}
+
 func testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded() throws {
     // Collapsed bar (32pt) sits entirely inside the 38pt solid band: every
     // stop stays fully opaque, so the compact notch renders flat black.
@@ -9511,6 +9689,7 @@ let tests: [(String, () throws -> Void)] = [
     ("convoy watcher suppresses embedded server reaper fallback by directory", testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory),
     ("focus planner prioritizes tmux then terminal", testFocusPlannerPrioritizesTmuxThenTerminal),
     ("focus planner requires one exact Ghostty target", testFocusPlannerRequiresOneExactGhosttyTarget),
+    ("focus planner aims at the pane naming the session", testFocusPlannerAimsAtThePaneNamingTheSession),
     ("focus planner targets cmux by surface identity", testFocusPlannerTargetsCmuxBySurfaceIdentity),
     ("focus planner normalizes iTerm identity and selects its window", testFocusPlannerNormalizesITermIdentityAndSelectsItsWindow),
     ("focus planner rejects empty iTerm identity without TTY", testFocusPlannerRejectsEmptyITermIdentityWithoutTTY),
@@ -9520,6 +9699,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Ghostty matcher prefers same-directory terminal naming the tool", testGhosttyMatcherPrefersSameDirectoryTerminalNamingTheTool),
     ("Ghostty matcher resolves retitled tabs by signature and foreign commands", testGhosttyMatcherResolvesRetitledTabsBySignatureAndForeignCommands),
     ("Ghostty matcher keeps previous assignments across retitles", testGhosttyMatcherKeepsPreviousAssignmentsAcrossRetitles),
+    ("Ghostty matcher identifies panes by reported session title", testGhosttyMatcherIdentifiesPanesByReportedSessionTitle),
+    ("Ghostty matcher refuses foreign panes and forgets guesses", testGhosttyMatcherRefusesForeignPanesAndForgetsGuesses),
     ("Ghostty matcher prefers convoy over its embedded opencode server for last terminal", testGhosttyMatcherPrefersConvoyOverItsEmbeddedOpenCodeServerForLastTerminal),
     ("Ghostty terminal query cache avoids redundant queries", testGhosttyTerminalQueryCacheAvoidsRedundantQueries),
     ("process scanner detects spawned agent process within budget", testProcessScannerDetectsSpawnedAgentProcessWithinBudget),
@@ -9558,6 +9739,7 @@ let tests: [(String, () throws -> Void)] = [
     ("braille spinner frames are single braille pattern glyphs", testBrailleSpinnerFramesAreSingleBraillePatternGlyphs),
     ("session title formatter cleans tab titles", testSessionTitleFormatterCleansTabTitles),
     ("state store display name prefers override then tab title", testStateStoreDisplayNamePrefersOverrideThenTabTitle),
+    ("state store display name prefers the reported session title", testStateStoreDisplayNamePrefersReportedSessionTitle),
     ("state store clears all session names", testStateStoreClearsAllSessionNames),
     ("state store does not republish unchanged state", testStateStoreDoesNotRepublishUnchangedState),
     ("state store raises attention only on transitions into red", testStateStoreRaisesAttentionOnlyOnTransitionsIntoRed),

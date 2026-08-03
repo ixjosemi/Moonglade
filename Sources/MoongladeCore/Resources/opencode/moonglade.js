@@ -104,12 +104,21 @@ function timestamp() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+/// The name OpenCode gives a session once its first turn is summarized. It is
+/// the only value that tells the app which terminal pane hosts this session,
+/// so it is normalized here rather than anywhere downstream.
+function sessionTitle(info) {
+  const title = info?.title;
+  return typeof title === "string" && title.trim() !== "" ? title.trim() : null;
+}
+
 function createState(session, directory) {
   const now = timestamp();
   return {
     schema_version: 1,
     tool: "opencode",
     session_id: session.id,
+    session_title: sessionTitle(session),
     pid: process.pid,
     status: "working",
     attention_reason: null,
@@ -329,6 +338,10 @@ async function updateState(client, event, directory) {
   }
   let state = sessions.get(sessionID);
   if (!state) {
+    // A retitle is metadata about a session, not evidence that anyone is
+    // running it: OpenCode emits it for archived sessions too. Fabricating a
+    // document from one would put a row in the notch for nothing.
+    if (event.type === "session.updated") return;
     // Unknown mid-stream session: the plugin instance is younger than the
     // session (daemon restart). Ask the server whether it is a root
     // session before fabricating a document for it.
@@ -379,16 +392,24 @@ async function updateState(client, event, directory) {
         : null
     : null;
   const transition = statusTransition ?? transitions[event.type];
-  if (!transition) return;
+  const title = sessionTitle(event.properties.info);
+  const retitled = title !== null && title !== state.session_title;
+  if (retitled) state.session_title = title;
   // While any permission or question is outstanding, only a resolution or
   // session deletion may end the wait. OpenCode can emit both busy and idle
   // noise for the paused turn, and neither may hide the alert.
-  if (
-    state.status === "needs_attention"
+  const blockedByPendingAsks = state.status === "needs_attention"
     && hasPendingAsks(sessionID)
     && !attentionResolutions.has(event.type)
-    && event.type !== "session.deleted"
-  ) {
+    && event.type !== "session.deleted";
+  if (!transition || blockedByPendingAsks) {
+    // A retitle carries no status of its own, so it still has to be persisted
+    // when the event that delivered it moves nothing else.
+    if (retitled) {
+      state.updated_at = timestamp();
+      sessions.set(sessionID, state);
+      await writeState(state);
+    }
     return;
   }
   let [status, attentionReason] = transition;
@@ -414,6 +435,9 @@ function changesState(event) {
     "session.created",
     "session.deleted",
     "session.idle",
+    // Carries the session title; it moves no status but must not be coalesced
+    // away behind unrelated noise.
+    "session.updated",
     ...attentionAsks,
     ...attentionResolutions,
   ].includes(event.type) || (

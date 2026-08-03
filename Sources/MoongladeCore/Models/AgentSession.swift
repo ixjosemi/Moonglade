@@ -105,6 +105,11 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
     /// The pipeline step a convoy run is currently executing; nil for
     /// conversational tools, which have no notion of a step.
     public let currentStep: String?
+    /// The name the agent gave this session, reported by its own integration.
+    /// Unlike `terminal.windowTitleHint` it cannot point at the wrong pane, so
+    /// it outranks the scraped tab title for display and for surface matching.
+    /// Nil until the agent names the session, and for tools that never do.
+    public let sessionTitle: String?
 
     public var id: String { "\(tool.rawValue)-\(sessionID)" }
     public var projectName: String { URL(fileURLWithPath: cwd).lastPathComponent }
@@ -123,7 +128,8 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
             updatedAt: updatedAt,
             terminal: terminal,
             source: source,
-            currentStep: currentStep
+            currentStep: currentStep,
+            sessionTitle: sessionTitle
         )
     }
 
@@ -141,7 +147,8 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
             updatedAt: updatedAt,
             terminal: process.terminal,
             source: source,
-            currentStep: currentStep
+            currentStep: currentStep,
+            sessionTitle: sessionTitle
         )
     }
 
@@ -159,7 +166,8 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
             updatedAt: updatedAt,
             terminal: terminal,
             source: source,
-            currentStep: currentStep
+            currentStep: currentStep,
+            sessionTitle: sessionTitle
         )
     }
 
@@ -176,7 +184,8 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
         updatedAt: Date,
         terminal: TerminalContext = TerminalContext(),
         source: SessionSource? = nil,
-        currentStep: String? = nil
+        currentStep: String? = nil,
+        sessionTitle: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.tool = tool
@@ -191,6 +200,7 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
         self.terminal = terminal
         self.source = source
         self.currentStep = currentStep
+        self.sessionTitle = sessionTitle
     }
 
     enum CodingKeys: String, CodingKey {
@@ -207,6 +217,7 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
         case terminal
         case source
         case currentStep = "current_step"
+        case sessionTitle = "session_title"
     }
 
     public static func decode(from data: Data) throws -> AgentSession {

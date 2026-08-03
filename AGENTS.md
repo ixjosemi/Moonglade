@@ -36,3 +36,11 @@ It needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). T
 ## Public interfaces
 
 `MoongladeCore` is an internal module shared by the app and CLI, not a supported library product. Changes to the state schema or installed integration format require explicit documentation and tests.
+
+### `session_title`
+
+State documents carry an optional `session_title`: the name the agent gave the session, written by its own integration. It stays absent for tools that never name a session, and until the agent picks a name. The OpenCode plugin fills it from `session.created` and `session.updated`; a retitle never moves the session status, and never creates a document for a session the plugin is not already tracking.
+
+It exists because a terminal pane cannot be tied to a process. Ghostty's scripting bridge reports only a surface id, name, and working directory — no PID, no TTY — so several agents running in one project directory offer nothing to tell their panes apart. `session_title` outranks the scraped `terminal.window_title_hint` for the row name, identifies the hosting pane in `GhosttySessionMatcher`, and targets `FocusService` when no surface id was resolved.
+
+The matcher separates identity from inference: only assignments founded on evidence (PID, TTY, session title, a title that singles the tool out) enter `GhosttyAssignmentMemory`. A pane picked by enumeration order is a guess, is never remembered, and is re-evaluated on the next scan; a pane whose title reads as another command is never claimed at all.

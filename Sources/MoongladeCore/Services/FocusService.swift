@@ -79,7 +79,12 @@ public enum FocusPlanner {
 
     private static func ghosttyScript(for session: AgentSession) -> String {
         let cwd = appleScriptString(session.cwd)
-        let hint = appleScriptString(session.terminal.windowTitleHint ?? session.projectName)
+        // The reported session name is what the agent's TUI wrote into its own
+        // pane title; the window title hint is a synthesized "<project> —
+        // <tool>" that matches no pane at all when enrichment never ran.
+        let hint = appleScriptString(
+            session.sessionTitle ?? session.terminal.windowTitleHint ?? session.projectName
+        )
         let identifier = session.terminal.ghosttyTerminalID.map(appleScriptString)
         if let identifier {
             // A surface ID is strong identity. If it disappeared, choosing a

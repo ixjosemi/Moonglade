@@ -305,6 +305,73 @@ try {
     "the recovered child's reply must clear the root alert",
   );
 
+  // OpenCode names a session once its first turn is summarized. That title is
+  // the only signal that identifies which terminal pane hosts the session, so
+  // it has to reach the state document — the app must never have to guess it
+  // back from a tab title it shares with unrelated panes.
+  await event("session.created", {
+    info: { id: "titled", directory: "/tmp/project", title: "Implementar tarea 769" },
+  });
+  const createdTitleState = await readState("titled");
+  assert.equal(
+    createdTitleState.session_title,
+    "Implementar tarea 769",
+    "session.created must persist the session title",
+  );
+
+  await event("session.updated", {
+    sessionID: "titled",
+    info: { id: "titled", directory: "/tmp/project", title: "Revisar matriz de pruebas" },
+  });
+  const retitledState = await readState("titled");
+  assert.equal(
+    retitledState.session_title,
+    "Revisar matriz de pruebas",
+    "session.updated must persist a retitle",
+  );
+  assert.equal(
+    retitledState.status,
+    "working",
+    "a retitle must not move the session status",
+  );
+
+  // A retitle arriving while the turn is blocked must reach the document
+  // without answering the prompt on the user's behalf.
+  await event("permission.asked", { sessionID: "titled", id: "ask-titled" });
+  await event("session.updated", {
+    sessionID: "titled",
+    info: { id: "titled", directory: "/tmp/project", title: "Título durante el permiso" },
+  });
+  const blockedRetitleState = await readState("titled");
+  assert.equal(
+    blockedRetitleState.session_title,
+    "Título durante el permiso",
+    "a retitle must land while a permission is outstanding",
+  );
+  assert.equal(
+    blockedRetitleState.status,
+    "needs_attention",
+    "a retitle must not clear a pending permission",
+  );
+  await event("permission.replied", { sessionID: "titled", requestID: "ask-titled" });
+
+  // Subagents are titled too. Their titles belong to no terminal pane, so a
+  // child retitle must not fabricate a state document.
+  await event("session.created", {
+    info: { id: "titled-child", parentID: "titled", directory: "/tmp/project" },
+  });
+  await event("session.updated", {
+    sessionID: "titled-child",
+    info: { id: "titled-child", directory: "/tmp/project", title: "Subagente" },
+  });
+  assert.equal(
+    (await readdir(join(home, "state"))).includes(
+      `opencode-${Buffer.from("titled-child").toString("base64url")}.json`,
+    ),
+    false,
+    "a child session retitle must not create a state document",
+  );
+
   await event("session.created", {
     info: { id: "permission-deleted", directory: "/tmp/project" },
   });

@@ -871,7 +871,8 @@ public struct StateRepository: Sendable {
             updatedAt: lifecycle.updatedAt,
             terminal: terminal,
             source: lifecycle.source,
-            currentStep: lifecycle.currentStep
+            currentStep: lifecycle.currentStep,
+            sessionTitle: lifecycle.sessionTitle
         )
     }
 

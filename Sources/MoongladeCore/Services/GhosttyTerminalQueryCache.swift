@@ -1,9 +1,12 @@
 import Foundation
 
-/// Remembers which Ghostty surface each agent process was matched to, so
-/// later scans keep the match even after every title signal has drifted
-/// away. Entries for processes no longer visible are dropped on each
-/// remember pass — pid recycling cannot resurrect a stale assignment.
+/// Remembers which Ghostty surface each agent process was *identified* with,
+/// so later scans keep the match even after every title signal has drifted
+/// away. Only identified assignments are offered here: a surface picked by
+/// enumeration order is a guess, and remembering a guess would freeze one bad
+/// tick into a permanently mislabelled session instead of letting the next
+/// scan correct it. Entries for processes no longer visible are dropped on
+/// each remember pass — pid recycling cannot resurrect a stale assignment.
 public final class GhosttyAssignmentMemory: @unchecked Sendable {
     private let lock = NSLock()
     private var assignmentsByProcessKey: [String: String] = [:]
@@ -16,17 +19,9 @@ public final class GhosttyAssignmentMemory: @unchecked Sendable {
         return assignmentsByProcessKey
     }
 
-    public func remember(_ matched: [DetectedAgentProcess]) {
-        let current = Dictionary(
-            matched.compactMap { process in
-                process.terminal.ghosttyTerminalID.map {
-                    (GhosttySessionMatcher.assignmentKey(for: process), $0)
-                }
-            },
-            uniquingKeysWith: { $1 }
-        )
+    public func remember(_ identifiedTerminalIDs: [String: String]) {
         lock.lock()
-        assignmentsByProcessKey = current
+        assignmentsByProcessKey = identifiedTerminalIDs
         lock.unlock()
     }
 }

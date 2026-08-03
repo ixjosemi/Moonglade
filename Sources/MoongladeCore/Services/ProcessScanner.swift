@@ -29,12 +29,21 @@ public struct DetectedAgentProcess: Equatable, Sendable {
 public protocol ProcessScanning: Sendable {
     func activeProcesses() throws -> [DetectedAgentProcess]
     func basicActiveProcesses() throws -> [DetectedAgentProcess]
-    func enrichTerminalContexts(in processes: [DetectedAgentProcess]) -> [DetectedAgentProcess]
+    /// `sessionTitles` maps a process ID to the name its agent reported for
+    /// the session, which is the strongest signal for telling apart several
+    /// panes sharing one directory.
+    func enrichTerminalContexts(
+        in processes: [DetectedAgentProcess],
+        sessionTitles: [Int32: String]
+    ) -> [DetectedAgentProcess]
 }
 
 public extension ProcessScanning {
     func basicActiveProcesses() throws -> [DetectedAgentProcess] { try activeProcesses() }
-    func enrichTerminalContexts(in processes: [DetectedAgentProcess]) -> [DetectedAgentProcess] { processes }
+    func enrichTerminalContexts(
+        in processes: [DetectedAgentProcess],
+        sessionTitles: [Int32: String] = [:]
+    ) -> [DetectedAgentProcess] { processes }
 }
 
 public struct SystemProcessScanner: ProcessScanning {
@@ -96,7 +105,10 @@ public struct SystemProcessScanner: ProcessScanning {
         return Self.droppingRuntimeLaunchers(classified)
     }
 
-    public func enrichTerminalContexts(in detected: [DetectedAgentProcess]) -> [DetectedAgentProcess] {
+    public func enrichTerminalContexts(
+        in detected: [DetectedAgentProcess],
+        sessionTitles: [Int32: String] = [:]
+    ) -> [DetectedAgentProcess] {
         let ghosttyProcesses = detected.filter { $0.terminal.termProgram == "ghostty" }
         guard !ghosttyProcesses.isEmpty,
                let terminals = terminalQueryCache.terminals(
@@ -106,12 +118,14 @@ public struct SystemProcessScanner: ProcessScanning {
             return detected
         }
         let nonGhosttyProcesses = detected.filter { $0.terminal.termProgram != "ghostty" }
-        let matched = GhosttySessionMatcher.match(
+        let match = GhosttySessionMatcher.match(
             processes: ghosttyProcesses,
             terminals: terminals,
+            sessionTitles: sessionTitles,
             previousAssignments: assignmentMemory.assignments()
         )
-        assignmentMemory.remember(matched)
+        assignmentMemory.remember(match.identifiedTerminalIDs)
+        let matched = match.processes
         let matchedByKey = Dictionary(
             matched.map { (GhosttySessionMatcher.assignmentKey(for: $0), $0) },
             uniquingKeysWith: { $1 }

@@ -335,7 +335,20 @@ public final class ObservationScheduler {
         } catch {
             NSLog("Moonglade reaper failed: %@", String(describing: error))
         }
-        let enriched = processScanner.enrichTerminalContexts(in: detected)
+        // The reported session names are what tell apart several agent panes
+        // sharing one project directory, which Ghostty alone cannot do. One
+        // process can hold documents for several sessions — a TUI the user
+        // switched between — and its pane carries the name of the one it is
+        // showing, so the most recently updated session wins the process.
+        let enriched = processScanner.enrichTerminalContexts(
+            in: detected,
+            sessionTitles: Dictionary(
+                snapshot.sessions
+                    .sorted { $0.updatedAt < $1.updatedAt }
+                    .compactMap { session in session.sessionTitle.map { (session.pid, $0) } },
+                uniquingKeysWith: { $1 }
+            )
+        )
         do {
             try reaper.applyTerminalEnrichment(
                 basic: detected,
