@@ -58,7 +58,33 @@ public enum FocusPlanner {
            session.terminal.termProgram == "Apple_Terminal" {
             return .appleScript(terminalScript(tty: tty))
         }
+        // Claude for Desktop sessions have no TTY / surface identity. The only
+        // reliable action is app-level activation of the desktop host. Key off
+        // process ancestry (or a scanner-recorded Claude_Desktop term program),
+        // never off "missing terminal identity" alone — that would also match
+        // stale Ghostty hooks and daemon-hosted tools (#15).
+        if isClaudeDesktopHosted(session) {
+            return .appleScript(claudeDesktopActivateScript())
+        }
         throw FocusError.missingTerminalTarget
+    }
+
+    private static func isClaudeDesktopHosted(_ session: AgentSession) -> Bool {
+        if session.terminal.termProgram == SystemProcessScanner.claudeDesktopTermProgram {
+            return true
+        }
+        return SystemProcessScanner.hostTerminalProgram(of: session.pid)
+            == SystemProcessScanner.claudeDesktopTermProgram
+    }
+
+    /// Bundle-id activation: Claude for Desktop has no scripting dictionary,
+    /// so a specific session cannot be selected — only the app can be raised.
+    private static func claudeDesktopActivateScript() -> String {
+        """
+        tell application id "com.anthropic.claudefordesktop"
+          activate
+        end tell
+        """
     }
 
     /// cmux exposes the same scripting vocabulary as Ghostty — a `terminal`

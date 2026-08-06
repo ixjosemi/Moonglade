@@ -6815,6 +6815,135 @@ func testFocusPlannerMatchesTerminalTTYExactlyAndRaisesItsWindow() throws {
     )
 }
 
+/// #15: Claude Desktop has no per-session scripting; focus is app-level activate.
+func testFocusPlannerActivatesClaudeDesktopWhenTermProgramIsRecorded() throws {
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "claude-desktop-recorded",
+        pid: 99,
+        status: .working,
+        cwd: "/tmp/project",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext(termProgram: SystemProcessScanner.claudeDesktopTermProgram)
+    )
+
+    let actions = try FocusPlanner.actions(for: session)
+    guard case let .appleScript(script)? = actions.last else {
+        throw TestFailure.expectation("Claude Desktop focus did not produce AppleScript")
+    }
+    try expect(
+        script.contains("tell application id \"com.anthropic.claudefordesktop\""),
+        equals: true,
+        "Claude Desktop is activated by bundle id"
+    )
+    try expect(script.contains("activate"), equals: true, "desktop app is activated")
+    try expect(
+        script.contains("focus") || script.contains("select"),
+        equals: false,
+        "desktop focus never pretends to select a session"
+    )
+}
+
+/// #15: missing terminal identity alone must not activate Claude Desktop.
+func testFocusPlannerDoesNotActivateClaudeDesktopForBareMissingTerminal() throws {
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "no-terminal",
+        pid: 1,
+        status: .idle,
+        cwd: "/tmp/project",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext()
+    )
+
+    do {
+        _ = try FocusPlanner.actions(for: session)
+        throw TestFailure.expectation("missing terminal identity planned an activation")
+    } catch let error as FocusError {
+        try expect(error, equals: .missingTerminalTarget, "non-desktop empty terminal fails closed")
+    }
+}
+
+/// #15: live ancestry under Claude.app plans desktop activation even when
+/// `terminal_context` was never captured (hooks leave it null).
+func testFocusPlannerActivatesClaudeDesktopFromProcessAncestry() throws {
+    let agent = try spawnFakeAgent(named: "claude", underFakeTerminalApp: "Claude.app")
+    defer { agent.tearDown() }
+
+    let scanner = SystemProcessScanner(ghosttyTerminalSource: { nil })
+    var match: DetectedAgentProcess?
+    let deadline = Date().addingTimeInterval(2)
+    repeat {
+        match = try scanner.activeProcesses().first {
+            $0.tool == .claude && $0.cwd == agent.expectedWorkingDirectory
+        }
+        if match == nil { usleep(50_000) }
+    } while match == nil && Date() < deadline
+    guard let match else {
+        throw TestFailure.expectation("agent under Claude.app was not detected")
+    }
+    defer { kill(match.processID, SIGTERM) }
+
+    try expect(
+        match.terminal.termProgram,
+        equals: SystemProcessScanner.claudeDesktopTermProgram,
+        "scanner records Claude Desktop as host"
+    )
+
+    // Focus with an empty terminal context + live PID (as stored by hooks).
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "claude-desktop-live",
+        pid: match.processID,
+        status: .working,
+        cwd: match.cwd,
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext()
+    )
+    let actions = try FocusPlanner.actions(for: session)
+    guard case let .appleScript(script)? = actions.last else {
+        throw TestFailure.expectation("ancestry-based Claude Desktop focus missing")
+    }
+    try expect(
+        script.contains("com.anthropic.claudefordesktop"),
+        equals: true,
+        "live ancestry activates Claude Desktop by bundle id"
+    )
+}
+
+func testProcessScannerIdentifiesClaudeDesktopHostFromAncestors() throws {
+    let agent = try spawnFakeAgent(named: "claude", underFakeTerminalApp: "Claude.app")
+    defer { agent.tearDown() }
+
+    let scanner = SystemProcessScanner(ghosttyTerminalSource: { nil })
+    var match: DetectedAgentProcess?
+    let deadline = Date().addingTimeInterval(2)
+    repeat {
+        match = try scanner.activeProcesses().first {
+            $0.tool == .claude && $0.cwd == agent.expectedWorkingDirectory
+        }
+        if match == nil { usleep(50_000) }
+    } while match == nil && Date() < deadline
+    guard let match else {
+        throw TestFailure.expectation("agent under Claude.app was not detected")
+    }
+    defer { kill(match.processID, SIGTERM) }
+
+    try expect(
+        match.terminal.termProgram,
+        equals: SystemProcessScanner.claudeDesktopTermProgram,
+        "host Claude Desktop program"
+    )
+    try expect(
+        SystemProcessScanner.hostTerminalProgram(of: match.processID),
+        equals: SystemProcessScanner.claudeDesktopTermProgram,
+        "static ancestry helper agrees with scan"
+    )
+}
+
 func testGhosttyMatcherPrefersProcessAndTTYOverRememberedHeuristics() throws {
     let legacyTerminalData = Data(
         #"[{"id":"legacy","name":"project","cwd":"/tmp/shared"}]"#.utf8
@@ -9745,6 +9874,9 @@ let tests: [(String, () throws -> Void)] = [
     ("focus planner normalizes iTerm identity and selects its window", testFocusPlannerNormalizesITermIdentityAndSelectsItsWindow),
     ("focus planner rejects empty iTerm identity without TTY", testFocusPlannerRejectsEmptyITermIdentityWithoutTTY),
     ("focus planner matches Terminal TTY exactly and raises its window", testFocusPlannerMatchesTerminalTTYExactlyAndRaisesItsWindow),
+    ("focus planner activates Claude Desktop when term program is recorded", testFocusPlannerActivatesClaudeDesktopWhenTermProgramIsRecorded),
+    ("focus planner does not activate Claude Desktop for bare missing terminal", testFocusPlannerDoesNotActivateClaudeDesktopForBareMissingTerminal),
+    ("focus planner activates Claude Desktop from process ancestry", testFocusPlannerActivatesClaudeDesktopFromProcessAncestry),
     ("Ghostty matcher prefers process and TTY over remembered heuristics", testGhosttyMatcherPrefersProcessAndTTYOverRememberedHeuristics),
     ("Ghostty matcher excludes orphaned processes and assigns exact terminals", testGhosttyMatcherExcludesOrphanedProcessesAndAssignsExactTerminals),
     ("Ghostty matcher prefers same-directory terminal naming the tool", testGhosttyMatcherPrefersSameDirectoryTerminalNamingTheTool),
@@ -9761,6 +9893,7 @@ let tests: [(String, () throws -> Void)] = [
     ("process scanner collapses runtime launcher onto native child", testProcessScannerCollapsesRuntimeLauncherOntoNativeChild),
     ("process scanner resolves parent of root-owned processes", testProcessScannerResolvesParentOfRootOwnedProcesses),
     ("process scanner identifies host terminal from ancestors", testProcessScannerIdentifiesHostTerminalFromAncestors),
+    ("process scanner identifies Claude Desktop host from ancestors", testProcessScannerIdentifiesClaudeDesktopHostFromAncestors),
     ("Claude settings merge preserves hooks and is idempotent", testClaudeSettingsMergePreservesHooksAndIsIdempotent),
     ("Claude settings removal preserves user hooks", testClaudeSettingsRemovalPreservesUserHooks),
     ("Claude settings quotes hook paths for the shell", testClaudeSettingsQuotesHookPathsForTheShell),
