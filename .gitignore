@@ -2,6 +2,7 @@
 /.build
 /Packages
 /.serena
+/.codegraph
 /.swiftpm
 *.dmg
 *.pkg
