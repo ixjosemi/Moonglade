@@ -230,11 +230,23 @@ public struct SystemProcessScanner: ProcessScanning {
         }
     }
 
+    /// Path markers are matched case-sensitively against kernel-resolved
+    /// executable paths and argv[0]. Claude Desktop uses `Claude.app` with a
+    /// capital C; the nested Claude Code helper under Application Support uses
+    /// `claude.app` and must not match (activating the desktop app for a
+    /// helper-only process tree would be wrong).
     private static let terminalAppMarkers: [(pathMarker: String, termProgram: String)] = [
         ("/Ghostty.app/", "ghostty"),
         ("/iTerm.app/", "iTerm.app"),
         ("/Terminal.app/", "Apple_Terminal"),
+        // Desktop binary path; do not use a bare `/Claude.app/` — that would
+        // also hit the lowercase `claude.app` helper on case-insensitive FS
+        // when compared carefully, and the nested helper is not the focus target.
+        ("/Claude.app/Contents/MacOS/", "Claude_Desktop"),
     ]
+
+    /// Term program stored on sessions hosted by Claude for Desktop.
+    public static let claudeDesktopTermProgram = "Claude_Desktop"
 
     /// Walks up the parent chain looking for a known terminal application.
     /// Both the kernel-resolved executable path and argv[0] are checked, for
@@ -249,6 +261,25 @@ public struct SystemProcessScanner: ProcessScanning {
             }
             guard let parent = Self.parentProcessID(of: ancestorProcessID) else { return nil }
             ancestorProcessID = parent
+        }
+        return nil
+    }
+
+    /// Resolves a host terminal / desktop app from process ancestry without a
+    /// scan cache. Used at focus time so Claude Desktop sessions with a null
+    /// `terminal_context` still plan app-level activation when the live PID is
+    /// a descendant of the desktop bundle (see issue #15).
+    public static func hostTerminalProgram(of processID: pid_t) -> String? {
+        var ancestorProcessID = parentProcessID(of: processID)
+        for _ in 0..<8 {
+            guard let current = ancestorProcessID, current > 1 else { return nil }
+            let command = readCommand(ofProcess: current)
+            if let program = classify(command, { identifier in
+                terminalAppMarkers.first { identifier.contains($0.pathMarker) }?.termProgram
+            }) {
+                return program
+            }
+            ancestorProcessID = parentProcessID(of: current)
         }
         return nil
     }

@@ -111,6 +111,7 @@ Then quit Moonglade and delete the app bundle. Review your Claude or Codex confi
 | cmux | exact surface ID, no fallback | Resolved before Ghostty: cmux ships Ghostty's engine and reports the same `TERM_PROGRAM`. Requires AppleScript enabled — cmux reports an empty `id` when it is off |
 | iTerm2 | exact normalized session ID, then TTY | Selects the split, tab, and window |
 | Terminal | exact TTY | Selects the tab and raises its containing window |
+| Claude for Desktop | app-level activation by bundle id | Detected via process ancestry (`/Claude.app/Contents/MacOS/…`). Desktop has no scripting dictionary, so Moonglade raises the app rather than a specific session |
 | tmux | validated pane ID, then host activation | `tmux` must be in a trusted standard install location |
 
 macOS asks for Automation access the first time Moonglade controls a terminal. If denied, enable it under **System Settings → Privacy & Security → Automation**.
