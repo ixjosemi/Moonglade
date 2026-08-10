@@ -53,7 +53,34 @@ The release job fails when they are absent rather than falling back to an ad-hoc
 ./scripts/build-site.sh && python3 -m http.server -d _site 8000
 ```
 
-The page's palette is taken from `assets/icon.svg` — the same night gradient, violet and blue blooms, and frost. Keep them in step.
+The page's palette is taken from `assets/icon.svg` — the same night gradient, violet and blue blooms, and frost. `assets/header.svg`, the README banner, is built from the same three: the icon's moon and its glade, the page's palette and type, and the app's own notch geometry, with the brand marks copied out of `Sources/MoongladeCore/Resources/icons`. Three surfaces have to agree, so none of them invents a colour, a silhouette, or a mark of its own.
+
+The banner is rendered by GitHub in a browser but is worth checking through a second rasterizer before committing, because the failures are silent ones — a dropped `feGaussianBlur` flattens every glow, and AppKit resolves a `<use>` of a path but not a `<use>` of a group that itself contains one, which quietly costs the Codex mark five of its six blades:
+
+```bash
+rsvg-convert -w 880 assets/header.svg -o /tmp/header.png
+```
+
+### The moon
+
+The moon in `assets/header.svg` and in `assets/icon.svg` is not drawn. It is one photograph — the hero's own moon, cut out of `assets/hero-moonglade.webp` — embedded in both as the same base64 `data:` URI, so the tile, the page and the banner show a single moon between them. Embedded rather than referenced because all three are rendered where a relative path resolves to nothing: AppKit rasterizing the iconset, and every browser loading the icon as a favicon or the banner through `<img>`.
+
+The alpha is the crop's own luminance times a radial falloff, baked into the file. The night it was cut from then contributes nothing, the crop has no edge of its own, and no rasterizer is asked for a blend mode it might not have — WebP with alpha in a `data:` URI is decoded by AppKit, librsvg and browsers alike, and is four times smaller than the equivalent PNG, which matters because this file is also served as the site's favicon. Regenerate it with:
+
+```bash
+magick assets/hero-moonglade.webp -crop 480x430+517+0 +repage -modulate 106,104 rgb.png
+magick rgb.png -colorspace gray -level 11%,66% lum.png
+magick -size 480x430 radial-gradient:white-black -level 16%,74% fade.png
+magick lum.png fade.png -compose multiply -composite alpha.png
+magick rgb.png alpha.png -alpha off -compose copy_opacity -composite -strip \
+    -quality 82 moon.webp
+```
+
+Then base64 it into the `href` of the `<image>` in both files, and run `./scripts/make-icon.sh`.
+
+The crop holds the moon at (240, 213) with a radius of 118. The banner wants it at (520, 310) with a radius of 58 and the tile at (512, 344) with a radius of 106, which is where each `<image>`'s `x`, `y`, `width` and `height` come from; move the moon and all four change with it. Two values are worth re-checking by eye rather than trusting: the `-level` on the luminance, because too high leaves the disc translucent and greying against the sky behind it while too low brings the photograph's clouds along, and the `-modulate` saturation, because the moon is violet and a boost that reads as rich at 512pt reads as pink at the 16pt the icon is also drawn at.
+
+The drawn halo behind each stays drawn. The cut-out fades to nothing well inside the photograph's own glow, and without that halo the moon lands on the sky rather than lighting the water under it.
 
 `assets/hero-moonglade.webp` is the hero scene, and it is deliberately diffused rather than photographic: a heavily blurred copy screened back over the original for bloom, then a light blur blended in for softness. The haze is baked into the asset because a full-bleed `filter: blur()` repaints on every scroll. The closing `-level` is not optional: the screen pass lifts the black point, and without pulling it back the night sky separates visibly from the page background it fades into. Regenerate it from a source image with:
 

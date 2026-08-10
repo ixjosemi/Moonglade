@@ -1,56 +1,110 @@
-<svg width="1040" height="486" viewBox="0 0 1040 486" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Moonglade under a crescent moon: the expanded notch panel listing three live coding agent sessions, and below the wordmark the collapsed bar with a braille spinner and count for running sessions, a green dot and count for sessions waiting at the prompt, and a count and red dot for sessions that need you">
+<svg width="1040" height="600" viewBox="0 0 1040 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Moonglade: the notch panel hanging from the top of a MacBook display, listing four live coding agent sessions with their provider mark, status, title, project, branch and elapsed time. Below it a frosted moon throws its glade across the water, and on that water the collapsed bar carries a spinner and count for running sessions, a green dot and count for sessions waiting at the prompt, and a count and red dot for sessions that need you.">
   <title>Moonglade</title>
   <defs>
-    <!-- Quiet, near-black night: enough life behind the panel for the glass
-         to read as translucent, never enough to compete with the wordmark. -->
-    <linearGradient id="mg-night" x1="0" y1="0" x2="0.35" y2="1">
-      <stop offset="0" stop-color="#0b0d15"/>
-      <stop offset="0.55" stop-color="#08090f"/>
-      <stop offset="1" stop-color="#06070a"/>
+    <!-- The palette is the landing page's, which took it from assets/icon.svg:
+         the same night gradient, the same violet and blue blooms, the same
+         frost. Three surfaces have to agree — the icon, the site and this
+         banner — so none of them invents a colour of its own. -->
+    <linearGradient id="mg-night" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#131c46"/>
+      <stop offset="0.45" stop-color="#0a0f26"/>
+      <stop offset="1" stop-color="#04060d"/>
     </linearGradient>
-    <!-- Moonlight washing in from the top right, and the colder deep of the
-         sky opposite it. Both stay under half opacity: the sky is a backdrop. -->
-    <radialGradient id="mg-moonWash" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#7d9bce" stop-opacity="0.34"/>
-      <stop offset="1" stop-color="#7d9bce" stop-opacity="0"/>
+    <!-- The blooms carry the colour, not the field: a flat bright navy leaves
+         no headroom for anything translucent in front of it to read against. -->
+    <radialGradient id="mg-bloomViolet" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#7d6dff" stop-opacity="0.46"/>
+      <stop offset="1" stop-color="#7d6dff" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="mg-deepSky" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#343a72" stop-opacity="0.46"/>
-      <stop offset="1" stop-color="#343a72" stop-opacity="0"/>
+    <radialGradient id="mg-bloomBlue" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3fa4ff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#3fa4ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="mg-wash" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#aec1f5" stop-opacity="0.22"/>
+      <stop offset="0.54" stop-color="#7d94d4" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#7d94d4" stop-opacity="0"/>
     </radialGradient>
 
-    <!-- The moon: lit from the upper right, so the crescent is the sphere
-         minus a second disc offset the same way. -->
-    <radialGradient id="mg-moonBody" cx="0.3" cy="0.7" r="0.85">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.55" stop-color="#eef1fa"/>
-      <stop offset="1" stop-color="#c3cbe4"/>
-    </radialGradient>
-    <radialGradient id="mg-moonHalo" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#c9d6f5" stop-opacity="0.42"/>
-      <stop offset="0.45" stop-color="#8ea4d8" stop-opacity="0.14"/>
-      <stop offset="1" stop-color="#8ea4d8" stop-opacity="0"/>
-    </radialGradient>
-    <mask id="mg-crescent">
-      <circle cx="978" cy="88" r="26" fill="#ffffff"/>
-      <circle cx="992" cy="78" r="23" fill="#000000"/>
+
+    <!-- Every ripple fades out along its own length. A rounded rect of even
+         fill has two abrupt ends, and a stack of those is a barcode however
+         carefully it is blurred. -->
+    <linearGradient id="mg-slat" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#e9e5ff" stop-opacity="0"/>
+      <stop offset="0.18" stop-color="#efeaff" stop-opacity="0.7"/>
+      <stop offset="0.46" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="0.8" stop-color="#efeaff" stop-opacity="0.58"/>
+      <stop offset="1" stop-color="#e9e5ff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- The sheet of water, and the light along its edge -->
+    <linearGradient id="mg-pane" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e4edff" stop-opacity="0.17"/>
+      <stop offset="0.16" stop-color="#cddcff" stop-opacity="0.08"/>
+      <stop offset="0.55" stop-color="#96abd8" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#7e93c4" stop-opacity="0.015"/>
+    </linearGradient>
+    <!-- The icon draws its water edge to edge because a squircle tile closes
+         the scene for it. A 1040pt banner has no such frame, so the lit sheet
+         is masked back to the width the moon actually reaches; carried to the
+         corners at an even value it stops being water and becomes a grey box
+         with a bright line on top of it. -->
+    <linearGradient id="mg-poolFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.18" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="0.82" stop-color="#ffffff" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="mg-pool">
+      <rect x="0" y="386" width="1040" height="214" fill="url(#mg-poolFade)"/>
     </mask>
-    <!-- The glade itself: the reflected streak the app is named for, pooling
-         under the panel where the wordmark sits. -->
-    <radialGradient id="mg-glade" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#9fb4e0" stop-opacity="0.16"/>
-      <stop offset="1" stop-color="#9fb4e0" stop-opacity="0"/>
+    <linearGradient id="mg-waterline" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.33" stop-color="#ffffff" stop-opacity="0.1"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="0.67" stop-color="#ffffff" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- The wordmark wears the gradient the site puts on the emphasised half of
+         its headline: frost at the cap line falling into violet past the
+         baseline, so the colour never fully arrives inside the letterform. -->
+    <!-- Anchored to the cap line and the baseline in user space rather than to
+         the text's bounding box: the box is stretched by the descender of the
+         g, so a box-relative ramp lands its violet on that one letter and
+         leaves the other eight frost. -->
+    <linearGradient id="mg-word" gradientUnits="userSpaceOnUse" x1="0" y1="443" x2="0" y2="488">
+      <stop offset="0" stop-color="#eef4ff"/>
+      <stop offset="0.5" stop-color="#dbe6ff"/>
+      <stop offset="1" stop-color="#8f81ff"/>
+    </linearGradient>
+
+    <!-- The hero's own scrim, and for the same reason: the scene has to arrive
+         at the page background rather than stop against it, and the copy has to
+         sit on something quieter than open sky. Laid over the sky and the water
+         but under the panel, the wordmark and the bar, so it settles the
+         backdrop without touching the interface standing on it. -->
+    <linearGradient id="mg-fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#04060d" stop-opacity="0.5"/>
+      <stop offset="0.3" stop-color="#04060d" stop-opacity="0.04"/>
+      <stop offset="0.62" stop-color="#04060d" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#04060d" stop-opacity="0.94"/>
+    </linearGradient>
+    <radialGradient id="mg-vignette" cx="0.5" cy="0.42" r="0.8">
+      <stop offset="0.48" stop-color="#04060d" stop-opacity="0"/>
+      <stop offset="1" stop-color="#04060d" stop-opacity="0.6"/>
     </radialGradient>
 
     <!-- The scrim: pure black across the camera band, then a smootherstep
          dissolve into smoked glass — NotchGlassStyle's curve, by eye. -->
     <linearGradient id="mg-scrim" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#000000" stop-opacity="1"/>
-      <stop offset="0.19" stop-color="#000000" stop-opacity="1"/>
-      <stop offset="0.32" stop-color="#000000" stop-opacity="0.97"/>
+      <stop offset="0.17" stop-color="#000000" stop-opacity="1"/>
+      <stop offset="0.30" stop-color="#000000" stop-opacity="0.97"/>
       <stop offset="0.50" stop-color="#000000" stop-opacity="0.91"/>
-      <stop offset="0.72" stop-color="#000000" stop-opacity="0.85"/>
-      <stop offset="1" stop-color="#000000" stop-opacity="0.80"/>
+      <stop offset="0.74" stop-color="#000000" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.74"/>
     </linearGradient>
     <!-- Light caught on the top shoulders, fading out down the sides. -->
     <linearGradient id="mg-rim" x1="0" y1="0" x2="0" y2="1">
@@ -61,72 +115,204 @@
     <!-- Desktop light pooled right behind each shoulder. Without it the black
          silhouette and the dark desktop merge and the concave flare is lost. -->
     <radialGradient id="mg-shoulderLight" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#8fa8d8" stop-opacity="0.30"/>
+      <stop offset="0" stop-color="#8fa8d8" stop-opacity="0.28"/>
       <stop offset="1" stop-color="#8fa8d8" stop-opacity="0"/>
     </radialGradient>
 
+    <filter id="mg-bloom" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="60"/>
+    </filter>
+    <filter id="mg-halo" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+    <filter id="mg-spread" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="11"/>
+    </filter>
+    <filter id="mg-throughFrost" x="-40%" y="-300%" width="180%" height="700%">
+      <feGaussianBlur stdDeviation="2.8"/>
+    </filter>
+    <filter id="mg-onSurface" x="-60%" y="-400%" width="220%" height="900%">
+      <feGaussianBlur stdDeviation="1.1"/>
+    </filter>
+    <filter id="mg-lineGlow" x="-20%" y="-1400%" width="140%" height="2900%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
     <filter id="mg-frost" x="-25%" y="-25%" width="150%" height="150%">
       <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <!-- The page's own grain, at the page's own weight. Flat noise over the
+         whole scene is what keeps large gradients from banding. -->
+    <filter id="mg-grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3"/>
+    </filter>
+
+    <!-- A status light on the site glows; the app's does too, against a black
+         bar. One filter serves both dots, tinted by whatever it is applied to. -->
+    <filter id="mg-lamp" x="-200%" y="-200%" width="500%" height="500%">
+      <feGaussianBlur stdDeviation="3.4"/>
     </filter>
 
     <!-- Expanded panel silhouette: concave 14pt shoulders flaring into the
          screen edge, circular 20pt lower corners. Same math as
          HangingNotchGeometry.path(style: .hangingNotch). -->
-    <path id="mg-panel" d="M120 0 C127.73 0 134 6.27 134 14 L134 196 C134 207.05 142.95 216 154 216 L886 216 C897.05 216 906 207.05 906 196 L906 14 C906 6.27 912.27 0 920 0 Z"/>
+    <path id="mg-panel" d="M120 0 C127.73 0 134 6.27 134 14 L134 218 C134 229.05 142.95 238 154 238 L886 238 C897.05 238 906 229.05 906 218 L906 14 C906 6.27 912.27 0 920 0 Z"/>
     <clipPath id="mg-panelClip"><use href="#mg-panel"/></clipPath>
     <!-- Collapsed bar silhouette: the same 14pt concave shoulders and 20pt
-         lower corners at the depth the bar occupies with nothing expanded.
-         The collapsed state renders as flat black — no glass — exactly as
+         lower corners at the depth the bar occupies with nothing expanded. The
+         collapsed state renders as flat black — no glass — exactly as
          NotchGlassStyle specifies. -->
-    <path id="mg-bar" d="M254 0 C261.73 0 268 6.27 268 14 L268 16 C268 27.05 276.95 36 288 36 L556 36 C567.05 36 576 27.05 576 16 L576 14 C576 6.27 582.27 0 590 0 Z"/>
-    <clipPath id="mg-screenClip"><rect x="0" y="0" width="1040" height="486" rx="22"/></clipPath>
+    <path id="mg-bar" d="M352 0 C359.73 0 366 6.27 366 14 L366 16 C366 27.05 374.95 36 386 36 L654 36 C665.05 36 674 27.05 674 16 L674 14 C674 6.27 680.27 0 688 0 Z"/>
+    <clipPath id="mg-screenClip"><rect x="0" y="0" width="1040" height="600" rx="22"/></clipPath>
+
+    <!-- The five brand marks, byte-for-byte the paths the app draws beside a
+         live session and the site shows in its own demo row. Held here at their
+         native viewBox scale and placed by <use>, so a row and a real session
+         can never show a different Claude. -->
+    <g id="mg-claude"><path fill="#D97757" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></g>
+    <g id="mg-opencode"><path fill="#F1ECEC" fill-rule="evenodd" d="M245 30H55V270H245V30ZM99 74V226H201V74H99Z"/></g>
+    <!-- Codex is one blade turned six times about the mark's centre. The
+         rotations are held here, one level of <use> deep, rather than wrapped
+         in a second group and placed by another: AppKit's rasterizer resolves
+         a <use> of a path but not a <use> of a group that itself contains one,
+         and drops five of the six blades without complaining. -->
+    <path id="mg-codexBlade" fill="#ffffff" d="M1107.3 299.1c-197.999 0-373.9 127.3-435.2 315.3L650 743.5v427.9c0 21.4 11 40.4 29.4 51.4l344.5 198.515V833.3h.1v-27.9L1372.7 604c33.715-19.52 70.44-32.857 108.47-39.828L1447.6 450.3C1361 353.5 1237.1 298.5 1107.3 299.1zm0 117.5-.6.6c79.699 0 156.3 27.5 217.6 78.4-2.5 1.2-7.4 4.3-11 6.1L952.8 709.3c-18.4 10.4-29.4 30-29.4 51.4V1248l-155.1-89.4V755.8c-.1-187.099 151.601-338.9 339-339.2z"/>
+    <g id="mg-convoy">
+      <rect x="4" y="4" width="8" height="8" rx="2" fill="#79ACEF"/>
+      <rect x="13" y="4" width="8" height="8" rx="2" fill="#77B8E5"/>
+      <rect x="22" y="4" width="8" height="8" rx="2" fill="#76C3DC"/>
+      <rect x="4" y="13" width="8" height="8" rx="2" fill="#77B8E5"/>
+      <rect x="4" y="22" width="8" height="8" rx="2" fill="#76C3DC"/>
+      <rect x="13" y="22" width="8" height="8" rx="2" fill="#74CFD3"/>
+      <rect x="22" y="22" width="8" height="8" rx="2" fill="#73DACA"/>
+    </g>
+
+    <!-- The real braille cycle, not an impression of one: the same ten glyphs
+         and the same 80 ms step as BrailleSpinner, held as ten stacked <text>
+         elements that hand the frame to each other, because SMIL can animate an
+         attribute but never the content of a node.
+         Only the first frame carries opacity 1 in the markup. A rasterizer with
+         no SMIL then draws exactly one glyph — the same one the site prints in
+         its own demo row — instead of all ten at once.
+         The font stack is every face known to carry U+2800: Menlo on macOS,
+         DejaVu on Linux, Segoe UI Symbol on Windows. -->
+    <g id="mg-spinner" fill="#dde8ff" font-family="'SF Mono',Menlo,'DejaVu Sans Mono','Cascadia Mono','Segoe UI Symbol',ui-monospace,monospace" font-size="21" text-anchor="middle">
+      <text y="8.4" opacity="1">⠋<animate attributeName="opacity" calcMode="discrete" values="1;0;0;0;0;0;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠙<animate attributeName="opacity" calcMode="discrete" values="0;1;0;0;0;0;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠹<animate attributeName="opacity" calcMode="discrete" values="0;0;1;0;0;0;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠸<animate attributeName="opacity" calcMode="discrete" values="0;0;0;1;0;0;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠼<animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;1;0;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠴<animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;0;1;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠦<animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;0;0;1;0;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠧<animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;0;0;0;1;0;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠇<animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;0;0;0;0;1;0" dur="0.8s" repeatCount="indefinite"/></text>
+      <text y="8.4" opacity="0">⠏<animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;0;0;0;0;0;1" dur="0.8s" repeatCount="indefinite"/></text>
+    </g>
   </defs>
 
   <g clip-path="url(#mg-screenClip)">
-    <rect width="1040" height="486" fill="url(#mg-night)"/>
+    <rect width="1040" height="600" fill="url(#mg-night)"/>
+
+    <!-- The blooms are lifted again, blurred, behind the panel further down:
+         one source for the desktop and for what the glass shows of it, so the
+         two cannot drift apart. -->
     <g id="mg-blobs">
-      <ellipse cx="880" cy="80" rx="420" ry="250" fill="url(#mg-moonWash)"/>
-      <ellipse cx="190" cy="330" rx="430" ry="250" fill="url(#mg-deepSky)"/>
+      <ellipse cx="838" cy="470" rx="400" ry="300" fill="url(#mg-bloomViolet)" filter="url(#mg-bloom)"/>
+      <ellipse cx="212" cy="164" rx="380" ry="280" fill="url(#mg-bloomBlue)" filter="url(#mg-bloom)"/>
     </g>
-    <ellipse cx="520" cy="330" rx="470" ry="150" fill="url(#mg-glade)"/>
+    <ellipse cx="520" cy="318" rx="440" ry="330" fill="url(#mg-wash)"/>
     <ellipse cx="120" cy="24" rx="150" ry="70" fill="url(#mg-shoulderLight)"/>
     <ellipse cx="920" cy="24" rx="150" ry="70" fill="url(#mg-shoulderLight)"/>
 
-    <!-- Stars: sparse enough to read as sky rather than as texture. Three of
-         them breathe on long, offset cycles so the image is never quite still.
-         All of them sit clear of the panel, the wordmark, and the legend. -->
+    <!-- Stars: sparse enough to read as sky rather than as texture, and all of
+         them clear of the panel, the moon, the wordmark and the bar. Three
+         breathe on long offset cycles so the scene is never quite still. -->
     <g fill="#dfe6f6">
-      <circle cx="58" cy="62" r="1.5" opacity="0.75">
-        <animate attributeName="opacity" values="0.75;0.28;0.75" dur="5.5s" repeatCount="indefinite"/>
+      <circle cx="56" cy="72" r="1.5" opacity="0.7">
+        <animate attributeName="opacity" values="0.7;0.26;0.7" dur="5.5s" repeatCount="indefinite"/>
       </circle>
-      <circle cx="94" cy="140" r="1" opacity="0.4"/>
-      <circle cx="42" cy="196" r="1.2" opacity="0.55"/>
-      <circle cx="78" cy="262" r="0.9" opacity="0.3"/>
-      <circle cx="30" cy="330" r="1.4" opacity="0.6">
-        <animate attributeName="opacity" values="0.6;0.2;0.6" dur="7.2s" begin="1.9s" repeatCount="indefinite"/>
+      <circle cx="92" cy="148" r="1" opacity="0.38"/>
+      <circle cx="40" cy="214" r="1.2" opacity="0.5"/>
+      <circle cx="86" cy="286" r="0.9" opacity="0.3"/>
+      <circle cx="188" cy="332" r="1.4" opacity="0.55">
+        <animate attributeName="opacity" values="0.55;0.18;0.55" dur="7.2s" begin="1.9s" repeatCount="indefinite"/>
       </circle>
-      <circle cx="118" cy="404" r="1" opacity="0.35"/>
-      <circle cx="962" cy="168" r="1.2" opacity="0.5"/>
-      <circle cx="1006" cy="232" r="0.9" opacity="0.32"/>
-      <circle cx="948" cy="300" r="1.5" opacity="0.7">
-        <animate attributeName="opacity" values="0.7;0.25;0.7" dur="6.3s" begin="3.4s" repeatCount="indefinite"/>
+      <circle cx="298" cy="288" r="1" opacity="0.34"/>
+      <circle cx="352" cy="344" r="0.9" opacity="0.26"/>
+      <circle cx="962" cy="118" r="1.2" opacity="0.46"/>
+      <circle cx="1004" cy="196" r="0.9" opacity="0.3"/>
+      <circle cx="868" cy="300" r="1.5" opacity="0.62">
+        <animate attributeName="opacity" values="0.62;0.22;0.62" dur="6.3s" begin="3.4s" repeatCount="indefinite"/>
       </circle>
-      <circle cx="1000" cy="374" r="1.1" opacity="0.42"/>
-      <circle cx="924" cy="428" r="0.9" opacity="0.3"/>
+      <circle cx="944" cy="266" r="1.1" opacity="0.4"/>
+      <circle cx="700" cy="330" r="0.9" opacity="0.28"/>
     </g>
-    <!-- Two get the four-point glint. More than two and it stops being a sky.
-         Both stay outside the panel: the scrim is translucent, so a glint
-         behind the glass bleeds through and reads as an artefact in a row. -->
-    <g stroke="#eaf0ff" stroke-width="1" stroke-linecap="round" opacity="0.42">
-      <path d="M62 132 v-6 M62 132 v6 M62 132 h-6 M62 132 h6"/>
-      <path d="M962 262 v-5 M962 262 v5 M962 262 h-5 M962 262 h5"/>
+    <!-- Two get the four-point glint. More than two and it stops being a sky. -->
+    <g stroke="#eaf0ff" stroke-width="1" stroke-linecap="round" opacity="0.4">
+      <path d="M250 268 v-6 M250 268 v6 M250 268 h-6 M250 268 h6"/>
+      <path d="M916 348 v-5 M916 348 v5 M916 348 h-5 M916 348 h5"/>
     </g>
 
-    <!-- The moon, high in the right gutter clear of the panel shoulder -->
-    <circle cx="978" cy="88" r="74" fill="url(#mg-moonHalo)"/>
-    <g mask="url(#mg-crescent)">
-      <circle cx="978" cy="88" r="26" fill="url(#mg-moonBody)"/>
+    <!-- The moon is the hero photograph's own, cut out of
+         assets/hero-moonglade.webp and carried here rather than drawn: the site
+         and the README then show the same moon, which no amount of matching
+         gradients achieves. It is centred on the panel's axis, which is the
+         notch's axis, because the site spends its whole hero lining those two
+         up and a banner that broke the alignment would read as another product.
+
+         Embedded as data rather than referenced: an SVG loaded through <img>,
+         which is how GitHub serves this, may not fetch anything external, so a
+         relative path would leave a hole where the moon is. Its alpha is the
+         crop's own luminance times a radial falloff, baked into the file — the
+         night it was cut from contributes nothing and the crop has no edges of
+         its own, without asking the rasterizer for a blend mode. See the
+         landing-page section of CLAUDE.md for how to regenerate it. -->
+    <!-- The far halo, drawn rather than carried: the cut-out is faded to
+         nothing well inside the photograph's own glow, which reaches most of
+         the way across that frame, and without this the moon arrives in the
+         sky rather than lighting it. Violet, because the moon is. -->
+    <circle cx="520" cy="310" r="146" fill="#a99bff" opacity="0.15" filter="url(#mg-halo)"/>
+    <image href="data:image/webp;base64,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" x="402" y="205.3" width="235.9" height="211.3"/>
+
+    <!-- The glade the app is named for: the streak of moonlight water throws
+         back at you. Its body is one continuous soft column, so the ripples
+         over it read as breaks in something rather than as bars in the dark. -->
+    <ellipse cx="520" cy="436" rx="104" ry="76" fill="#d3ceff" opacity="0.26" filter="url(#mg-spread)"/>
+    <ellipse cx="519" cy="396" rx="56" ry="26" fill="#ece7ff" opacity="0.4" filter="url(#mg-spread)"/>
+
+    <!-- The reflection: the disc mirrored about the waterline, chord widths
+         perturbed off their exact values and each row nudged off centre, then
+         displaced right of the moon's axis the way refraction displaces
+         anything seen through a medium it enters at an angle. The gaps run
+         9, 11, 13 and do not settle into a rhythm — a rhythm reads as the rungs
+         of a ladder however carefully each row is shaded. -->
+    <g filter="url(#mg-throughFrost)">
+      <rect x="486" y="392" width="72" height="3.5" rx="1.75" fill="url(#mg-slat)" opacity="0.85"/>
+      <rect x="464" y="401" width="118" height="4" rx="2" fill="url(#mg-slat)" opacity="0.68"/>
+      <rect x="640" y="407" width="34" height="3" rx="1.5" fill="url(#mg-slat)" opacity="0.24"/>
+      <rect x="432" y="412" width="190" height="4.5" rx="2.25" fill="url(#mg-slat)" opacity="0.5"/>
+      <rect x="372" y="419" width="40" height="3" rx="1.5" fill="url(#mg-slat)" opacity="0.2"/>
+      <rect x="400" y="425" width="250" height="5" rx="2.5" fill="url(#mg-slat)" opacity="0.32"/>
     </g>
+
+    <!-- The sheet of water, washing everything under it -->
+    <rect x="0" y="386" width="1040" height="214" fill="url(#mg-pane)" mask="url(#mg-pool)"/>
+    <!-- Its edge: the horizon, brightest where the moon meets it -->
+    <rect x="0" y="383" width="1040" height="6" fill="url(#mg-waterline)" opacity="0.45" filter="url(#mg-lineGlow)"/>
+    <rect x="0" y="385.5" width="1040" height="2" fill="url(#mg-waterline)"/>
+    <rect x="0" y="394" width="1040" height="1.2" fill="url(#mg-waterline)" opacity="0.26"/>
+
+    <!-- The two ripples nearest the horizon are also caught on top of the
+         sheet, where they stay crisp. That contrast against the frosted copies
+         beneath is what tells the eye there are two surfaces, not one wash. -->
+    <g filter="url(#mg-onSurface)">
+      <rect x="488" y="392" width="68" height="1.6" rx="0.8" fill="url(#mg-slat)" opacity="0.7"/>
+      <rect x="467" y="401" width="112" height="1.6" rx="0.8" fill="url(#mg-slat)" opacity="0.52"/>
+      <rect x="436" y="412" width="182" height="1.6" rx="0.8" fill="url(#mg-slat)" opacity="0.36"/>
+      <rect x="405" y="425" width="240" height="1.6" rx="0.8" fill="url(#mg-slat)" opacity="0.22"/>
+    </g>
+
+    <rect width="1040" height="600" fill="url(#mg-vignette)"/>
+    <rect width="1040" height="600" fill="url(#mg-fade)"/>
 
     <!-- Menu bar, flanking the panel -->
     <g fill="#ffffff" fill-opacity="0.22">
@@ -142,7 +328,7 @@
     <!-- Liquid glass: a blurred lift of the desktop, then the scrim -->
     <g clip-path="url(#mg-panelClip)">
       <use href="#mg-blobs" filter="url(#mg-frost)"/>
-      <rect x="120" y="0" width="800" height="216" fill="url(#mg-scrim)"/>
+      <rect x="120" y="0" width="800" height="238" fill="url(#mg-scrim)"/>
     </g>
     <use href="#mg-panel" fill="none" stroke="url(#mg-rim)" stroke-width="1"/>
 
@@ -151,13 +337,12 @@
     <circle cx="520" cy="18" r="2" fill="#24262d"/>
 
     <!-- Header, living in the wings beside the camera -->
-    <text x="158" y="22.5" font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="12.5" font-weight="600" fill="#ffffff" fill-opacity="0.55">Active sessions</text>
-    <text x="850" y="22" text-anchor="end" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.35">3</text>
-    <!-- SF Symbols `gearshape`, 11pt semibold at 0.35 white: a hollow
-         ring with eight rounded teeth. -->
-    <g transform="translate(870 18)" fill="#ffffff" fill-opacity="0.35">
-      <circle r="3.9" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="2.2"/>
-      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(0)"/>
+    <text x="158" y="22.5" font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="13" font-weight="560" fill="#96a6cd">Active sessions</text>
+    <text x="858" y="22.5" text-anchor="end" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="12" font-weight="500" fill="#96a6cd">4</text>
+    <!-- SF Symbols `gearshape`: a hollow ring with eight rounded teeth -->
+    <g transform="translate(878 18)" fill="#96a6cd" fill-opacity="0.85">
+      <circle r="3.9" fill="none" stroke="#96a6cd" stroke-opacity="0.85" stroke-width="2.2"/>
+      <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1"/>
       <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(45)"/>
       <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(90)"/>
       <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(135)"/>
@@ -167,168 +352,90 @@
       <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(315)"/>
     </g>
 
-    <!-- ── Row 1 · Claude Code, running ───────────────────────────────── -->
-    <g transform="translate(154 52)">
-      <g transform="scale(0.6667)" fill="#D97757">
-        <path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/>
+    <!-- Four rows: two running, one waiting, one blocked. That is exactly what
+         the collapsed bar below counts, so the two halves of this image agree
+         about how many sessions there are. -->
+    <g font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif">
+
+      <!-- Row 1 · Claude Code, running -->
+      <use href="#mg-claude" transform="translate(154 59) scale(0.75)"/>
+      <use href="#mg-spinner" transform="translate(190 68)"/>
+      <text x="208" y="65" font-size="15" font-weight="560" fill="#eef4ff">Refactor the session matcher</text>
+      <text x="208" y="81" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">~/Development/moonglade · feat/ghostty-identity</text>
+      <text x="886" y="72" text-anchor="end" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">4m 12s</text>
+
+      <!-- Row 2 · OpenCode, blocked on a permission ask -->
+      <use href="#mg-opencode" transform="translate(154 107) scale(0.06)"/>
+      <circle cx="190" cy="116" r="4.5" fill="#ff5d5d" filter="url(#mg-lamp)" opacity="0.9"/>
+      <circle cx="190" cy="116" r="4.5" fill="#ff5d5d">
+        <animate attributeName="opacity" values="1;0.45;1" dur="1.8s" repeatCount="indefinite"/>
+      </circle>
+      <circle cx="190" cy="116" r="4.5" fill="none" stroke="#ff5d5d" stroke-width="1.2">
+        <animate attributeName="r" values="4.5;12" dur="1.8s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.6;0" dur="1.8s" repeatCount="indefinite"/>
+      </circle>
+      <text x="208" y="113" font-size="15" font-weight="560" fill="#eef4ff">Wire the release pipeline</text>
+      <text x="208" y="129" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">~/Development/moonglade · permission requested</text>
+      <text x="886" y="120" text-anchor="end" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">18s</text>
+
+      <!-- Row 3 · Convoy, running a pipeline step -->
+      <use href="#mg-convoy" transform="translate(154 155) scale(0.5625)"/>
+      <use href="#mg-spinner" transform="translate(190 164)"/>
+      <text x="208" y="161" font-size="15" font-weight="560" fill="#eef4ff">implement · step 4 of 6</text>
+      <text x="208" y="177" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">~/Development/api · review</text>
+      <text x="886" y="168" text-anchor="end" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">7m 08s</text>
+
+      <!-- Row 4 · Codex, waiting at the prompt -->
+      <g transform="translate(154 203) scale(0.00748)">
+        <use href="#mg-codexBlade"/>
+        <use href="#mg-codexBlade" transform="rotate(60 1203 1203)"/>
+        <use href="#mg-codexBlade" transform="rotate(120 1203 1203)"/>
+        <use href="#mg-codexBlade" transform="rotate(180 1203 1203)"/>
+        <use href="#mg-codexBlade" transform="rotate(240 1203 1203)"/>
+        <use href="#mg-codexBlade" transform="rotate(300 1203 1203)"/>
       </g>
-    </g>
-    <!-- The braille dot-matrix spinner, on the app's own 80 ms cadence -->
-    <g fill="#ffffff">
-      <circle cx="185" cy="64.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;0;0;0;0;1;1;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
-      <circle cx="185" cy="68" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;1;1;1;1;1;0" dur="0.8s" repeatCount="indefinite"/></circle>
-      <circle cx="185" cy="71.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;1;1;1;1;1;1;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
-      <circle cx="190" cy="64.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;0;0;0;0;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
-      <circle cx="190" cy="68" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;0;0;0;0;0;1" dur="0.8s" repeatCount="indefinite"/></circle>
-      <circle cx="190" cy="71.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;1;1;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
-    </g>
-    <text x="205" y="64.5" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="14" font-weight="600" fill="#ffffff" fill-opacity="0.94">payments-api</text>
-    <g fill="#ffffff" fill-opacity="0.55">
-      <g transform="translate(205 72)">
-        <rect x="0" y="0.6" width="4.9" height="3.2" rx="1.1"/>
-        <rect x="0" y="2.1" width="10" height="7.3" rx="1.5"/>
-      </g>
-      <text x="220" y="81.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">acme-payments</text>
-      <text x="313" y="81.5" font-family="-apple-system,Arial,sans-serif" font-size="11">·</text>
-      <g transform="translate(322 74)" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.3" fill="none" stroke-linecap="round">
-        <path d="M2 8.6 V2.4"/><path d="M2 5.4 h4.2 a1.8 1.8 0 0 0 1.8 -1.8 V2.6"/>
-        <circle cx="2" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
-        <circle cx="8" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
-        <circle cx="2" cy="9.6" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
-      </g>
-      <text x="337" y="81.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">feat/isin-detection</text>
-    </g>
-    <text x="852" y="72" text-anchor="end" font-family="-apple-system,'SF Pro Rounded',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.45">12m</text>
-    <g transform="translate(874 68)" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M-3.4 -1.7 L0 1.7 L3.4 -1.7"/>
+      <circle cx="190" cy="212" r="4.5" fill="#4ade80" filter="url(#mg-lamp)" opacity="0.85"/>
+      <circle cx="190" cy="212" r="4.5" fill="#4ade80"/>
+      <text x="208" y="209" font-size="15" font-weight="560" fill="#eef4ff">Audit the state repository</text>
+      <text x="208" y="225" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">~/Development/moonglade · main</text>
+      <text x="886" y="216" text-anchor="end" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="12" fill="#61708f">1m 40s</text>
     </g>
 
-    <!-- ── Row 2 · OpenCode, waiting at the prompt ────────────────────── -->
-    <g transform="translate(154 104)">
-      <g transform="scale(0.05333)" fill="#F1ECEC">
-        <path d="M245 30H55V270H245V30ZM99 74V226H201V74H99Z" fill-rule="evenodd"/>
-      </g>
-    </g>
-    <circle cx="187.5" cy="120" r="4.5" fill="#32d74b"/>
-    <text x="205" y="116.5" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="14" font-weight="600" fill="#ffffff" fill-opacity="0.94">notch-polish</text>
-    <g fill="#ffffff" fill-opacity="0.55">
-      <g transform="translate(205 124)">
-        <rect x="0" y="0.6" width="4.9" height="3.2" rx="1.1"/>
-        <rect x="0" y="2.1" width="10" height="7.3" rx="1.5"/>
-      </g>
-      <text x="220" y="133.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">Moonglade</text>
-      <text x="298" y="133.5" font-family="-apple-system,Arial,sans-serif" font-size="11">·</text>
-      <g transform="translate(307 126)" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.3" fill="none" stroke-linecap="round">
-        <path d="M2 8.6 V2.4"/><path d="M2 5.4 h4.2 a1.8 1.8 0 0 0 1.8 -1.8 V2.6"/>
-        <circle cx="2" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
-        <circle cx="8" cy="1.4" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
-        <circle cx="2" cy="9.6" r="1.4" fill="#ffffff" fill-opacity="0.55" stroke="none"/>
-      </g>
-      <text x="322" y="133.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">fix/notch-shoulder</text>
-    </g>
-    <text x="852" y="124" text-anchor="end" font-family="-apple-system,'SF Pro Rounded',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.45">4m</text>
-    <g transform="translate(874 120)" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M-3.4 -1.7 L0 1.7 L3.4 -1.7"/>
-    </g>
-
-    <!-- ── Row 3 · Convoy, blocked on a human gate ────────────────────── -->
-    <g transform="translate(154 156)">
-      <g transform="scale(0.5)">
-        <rect x="4" y="4" width="8" height="8" rx="2" fill="#79ACEF"/>
-        <rect x="13" y="4" width="8" height="8" rx="2" fill="#77B8E5"/>
-        <rect x="22" y="4" width="8" height="8" rx="2" fill="#76C3DC"/>
-        <rect x="4" y="13" width="8" height="8" rx="2" fill="#77B8E5"/>
-        <rect x="4" y="22" width="8" height="8" rx="2" fill="#76C3DC"/>
-        <rect x="13" y="22" width="8" height="8" rx="2" fill="#74CFD3"/>
-        <rect x="22" y="22" width="8" height="8" rx="2" fill="#73DACA"/>
-      </g>
-    </g>
-    <circle cx="187.5" cy="172" r="4.5" fill="#ff453a">
-      <animate attributeName="opacity" values="1;0.4;1" dur="1.8s" repeatCount="indefinite"/>
-    </circle>
-    <circle cx="187.5" cy="172" r="4.5" fill="none" stroke="#ff453a" stroke-width="1.2">
-      <animate attributeName="r" values="4.5;12" dur="1.8s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="0.65;0" dur="1.8s" repeatCount="indefinite"/>
-    </circle>
-    <text x="205" y="168.5" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="14" font-weight="600" fill="#ffffff" fill-opacity="0.94">release-audit</text>
-    <g fill="#ffffff" fill-opacity="0.55">
-      <g transform="translate(205 176)">
-        <rect x="0" y="0.6" width="4.9" height="3.2" rx="1.1"/>
-        <rect x="0" y="2.1" width="10" height="7.3" rx="1.5"/>
-      </g>
-      <text x="220" y="185.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">Moonglade</text>
-      <text x="298" y="185.5" font-family="-apple-system,Arial,sans-serif" font-size="11">·</text>
-      <g transform="translate(307 178)">
-        <path d="M1.6 8.8 L5 2.2 L8.4 8.8 Z" fill="none" stroke="#ffffff" stroke-opacity="0.4" stroke-width="1" stroke-dasharray="1.6 1.6"/>
-        <circle cx="5" cy="1.9" r="1.5" fill="#ffffff" fill-opacity="0.55"/>
-        <circle cx="1.4" cy="9.1" r="1.5" fill="#ffffff" fill-opacity="0.55"/>
-        <circle cx="8.6" cy="9.1" r="1.5" fill="#ffffff" fill-opacity="0.55"/>
-      </g>
-      <text x="322" y="185.5" font-family="'SF Mono',ui-monospace,Menlo,monospace" font-size="11">adversarial-review</text>
-    </g>
-    <text x="852" y="176" text-anchor="end" font-family="-apple-system,'SF Pro Rounded',Arial,sans-serif" font-size="11" font-weight="500" fill="#ffffff" fill-opacity="0.45">1m</text>
-    <g transform="translate(874 172)" fill="none" stroke="#ffffff" stroke-opacity="0.3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M-3.4 -1.7 L0 1.7 L3.4 -1.7"/>
-    </g>
-
-    <!-- Wordmark -->
-    <text x="520" y="308" text-anchor="middle" font-family="-apple-system,'SF Pro Display','Helvetica Neue',Arial,sans-serif" font-size="48" font-weight="700" letter-spacing="-1.4" fill="#f5f5f7">Moonglade</text>
-    <text x="520" y="342" text-anchor="middle" font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="16" fill="#9a9aa3">Know when your coding agents need you — without leaving the notch.</text>
+    <!-- The wordmark, standing in the glade -->
+    <text x="520" y="476" text-anchor="middle" font-family="-apple-system,'SF Pro Display','Helvetica Neue',Arial,sans-serif" font-size="46" font-weight="600" letter-spacing="-2" fill="url(#mg-word)">Moonglade</text>
+    <text x="520" y="504" text-anchor="middle" font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="17" fill="#96a6cd">A quiet indicator for your coding agents.</text>
 
     <!-- The same panel at rest. This collapsed bar is all you see while the
-         sessions run, so it is what the legend below actually annotates.
-         Its contents keep the bar's own coordinates and move as one piece. -->
-    <path d="M300 374 H740" stroke="#ffffff" stroke-opacity="0.09" stroke-width="1"/>
-    <g transform="translate(98 374)">
+         sessions run, and its counts are the four rows above: two running, one
+         waiting at the prompt, one that needs you. Running and waiting sit left
+         of the camera and blocked sits right, each pair putting its round glyph
+         on the outer edge so both wings meet the shoulders symmetrically. -->
+    <g transform="translate(0 540)">
       <use href="#mg-bar" fill="#000000"/>
       <use href="#mg-bar" fill="none" stroke="url(#mg-rim)" stroke-width="1"/>
 
-      <!-- Left wing · running: braille spinner, then its count -->
-      <g fill="#ffffff">
-        <circle cx="279.5" cy="14.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;0;0;0;0;1;1;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="279.5" cy="18" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;1;1;1;1;1;0" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="279.5" cy="21.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;1;1;1;1;1;1;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="284.5" cy="14.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;0;0;0;0;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="284.5" cy="18" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;0;0;0;0;0;1" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="284.5" cy="21.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;1;1;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
-      </g>
-      <text x="294" y="22.5" text-anchor="middle" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="12" font-weight="500" fill="#ffffff" fill-opacity="0.94">2</text>
+      <use href="#mg-spinner" transform="translate(379.5 18)"/>
+      <text x="396.5" y="22.5" text-anchor="middle" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="12.5" font-weight="500" fill="#eef4ff">2</text>
 
-      <!-- Left wing · waiting: green dot on the outer edge, then its count -->
-      <circle cx="318" cy="18" r="4" fill="#32d74b"/>
-      <text x="330" y="22.5" text-anchor="middle" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="12" font-weight="500" fill="#ffffff" fill-opacity="0.94">1</text>
+      <circle cx="419" cy="18" r="4" fill="#4ade80" filter="url(#mg-lamp)" opacity="0.85"/>
+      <circle cx="419" cy="18" r="4" fill="#4ade80"/>
+      <text x="431" y="22.5" text-anchor="middle" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="12.5" font-weight="500" fill="#eef4ff">1</text>
 
-      <circle cx="422" cy="18" r="4.6" fill="#15161b"/>
-      <circle cx="422" cy="18" r="2" fill="#24262d"/>
+      <circle cx="520" cy="18" r="4.6" fill="#15161b"/>
+      <circle cx="520" cy="18" r="2" fill="#24262d"/>
 
-      <!-- Right wing · blocked: the pair mirrors, so the round dot — not the
-           flat numeral — is what meets the concave shoulder -->
-      <text x="533.5" y="22.5" text-anchor="middle" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="12" font-weight="500" fill="#ffffff" fill-opacity="0.94">1</text>
-      <circle cx="547" cy="18" r="4" fill="#ff453a">
-        <animate attributeName="opacity" values="1;0.4;1" dur="1.8s" repeatCount="indefinite"/>
+      <text x="644" y="22.5" text-anchor="middle" font-family="-apple-system,'SF Pro Rounded','SF Pro Text',Arial,sans-serif" font-size="12.5" font-weight="500" fill="#eef4ff">1</text>
+      <circle cx="658" cy="18" r="4" fill="#ff5d5d" filter="url(#mg-lamp)" opacity="0.9"/>
+      <circle cx="658" cy="18" r="4" fill="#ff5d5d">
+        <animate attributeName="opacity" values="1;0.45;1" dur="1.8s" repeatCount="indefinite"/>
       </circle>
-      <circle cx="547" cy="18" r="4" fill="none" stroke="#ff453a" stroke-width="1.2">
+      <circle cx="658" cy="18" r="4" fill="none" stroke="#ff5d5d" stroke-width="1.2">
         <animate attributeName="r" values="4;11" dur="1.8s" repeatCount="indefinite"/>
-        <animate attributeName="opacity" values="0.65;0" dur="1.8s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.6;0" dur="1.8s" repeatCount="indefinite"/>
       </circle>
     </g>
 
-    <!-- Legend: the bar's whole vocabulary, and nothing it does not use -->
-    <g font-family="-apple-system,'SF Pro Text','Helvetica Neue',Arial,sans-serif" font-size="12" fill="#7a7a86">
-      <g fill="#ffffff" fill-opacity="0.85">
-        <circle cx="351.5" cy="442.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;0;0;0;0;1;1;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="351.5" cy="446" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;0;0;1;1;1;1;1;0" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="351.5" cy="449.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="0;0;1;1;1;1;1;1;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="356.5" cy="442.4" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;0;0;0;0;1;1;1" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="356.5" cy="446" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;0;0;0;0;0;1" dur="0.8s" repeatCount="indefinite"/></circle>
-        <circle cx="356.5" cy="449.6" r="1.8"><animate attributeName="opacity" calcMode="discrete" values="1;1;1;1;1;1;0;0;0;0" dur="0.8s" repeatCount="indefinite"/></circle>
-      </g>
-      <text x="368" y="450">running</text>
-      <circle cx="450" cy="446" r="4" fill="#32d74b"/>
-      <text x="462" y="450">waiting at the prompt</text>
-      <circle cx="596" cy="446" r="4" fill="#ff453a"/>
-      <text x="608" y="450">needs you now</text>
-    </g>
+    <rect width="1040" height="600" filter="url(#mg-grain)" opacity="0.04"/>
   </g>
-  <rect x="0.5" y="0.5" width="1039" height="485" rx="22" fill="none" stroke="#ffffff" stroke-opacity="0.07"/>
+  <rect x="0.5" y="0.5" width="1039" height="599" rx="22" fill="none" stroke="#ffffff" stroke-opacity="0.07"/>
 </svg>
