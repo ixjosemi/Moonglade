@@ -1,0 +1,69 @@
+name: Pages
+
+# The landing page and the installer it serves at /install are deployed from
+# main, so the curl command on the page always matches scripts/install-remote.sh.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      # Everything build-site.sh copies out of assets/. A glob rather than a
+      # file list because a missed entry here silently ships a stale image.
+      - assets/**
+      - scripts/install-remote.sh
+      - scripts/build-site.sh
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A queued deploy replaces a running one; a half-published site is worse than a
+# slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Assemble the site
+        run: ./scripts/build-site.sh
+
+      # The installer is the one asset here that runs on someone's machine, so
+      # it is checked for syntax before it is served to anyone.
+      - name: Check the served installer
+        run: |
+          /bin/sh -n _site/install
+          test -s _site/index.html
+          test -s _site/icon.svg
+
+      # A page that references a file build-site.sh does not copy deploys
+      # perfectly happily and renders with a hole in it. Derive the list from
+      # the page rather than maintaining a second copy of it here.
+      - name: Check every referenced local asset was published
+        run: |
+          set -euo pipefail
+          { grep -oE '(src|href)="[^"]*"' _site/index.html | sed -E 's/.*="([^"]*)"/\1/'
+            grep -oE 'url\("[^"]*"\)' _site/index.html | sed -E 's/url\("([^"]*)"\)/\1/'
+          } | grep -vE '^(#|https?:|mailto:|data:)' | sort -u \
+            | while read -r reference; do
+                test -e "_site/$reference" || { echo "not published: $reference" >&2; exit 1; }
+                echo "ok: $reference"
+              done
+
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v3.0.1
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

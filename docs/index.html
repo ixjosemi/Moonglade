@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moonglade — know when your coding agents need you</title>
+<meta name="description" content="A quiet, native macOS indicator for Claude Code, OpenCode, Codex CLI, Pi and Convoy sessions. It lives around the notch and returns you to the exact terminal pane with one click.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta property="og:title" content="Moonglade">
+<meta property="og:description" content="Know when your coding agents need you — without leaving the notch.">
+<meta property="og:type" content="website">
+<style>
+/* ---------------------------------------------------------------------------
+   The palette is lifted from assets/icon.svg rather than re-invented: the same
+   night gradient, the same violet and blue blooms, the same frost. A moonglade
+   is the streak of moonlight water throws back at you, and the hero shows
+   exactly that — one drawn scene, moon above the horizon and its glade below —
+   so everything under the hero is built to stay out of its way.
+--------------------------------------------------------------------------- */
+:root {
+  --night-top: #1d2a5e;
+  --night-mid: #0f1533;
+  --night-deep: #04060d;
+  --violet: #7d6dff;
+  --blue: #3fa4ff;
+  --frost: #dde8ff;
+  --ink: #eef4ff;
+  --ink-dim: #96a6cd;
+  --ink-faint: #61708f;
+  --hairline: rgba(233, 241, 255, 0.10);
+  --hairline-bright: rgba(233, 241, 255, 0.22);
+  --glass: rgba(147, 168, 224, 0.06);
+  --spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --shell: 2rem;
+  /* The native platform face. A macOS-only product has no business pulling a
+     webfont off a third-party CDN when its own pitch is that it never touches
+     the network. */
+  --sans: ui-sans-serif, -apple-system, "SF Pro Display", "SF Pro Text", "Segoe UI Variable", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--sans);
+  background: var(--night-deep);
+  color: var(--ink);
+  line-height: 1.55;
+  letter-spacing: -0.011em;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Fixed, pointer-transparent grain. Attached to the viewport, never to a
+   scrolling container, so it never triggers a repaint on scroll. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+::selection { background: rgba(125, 109, 255, 0.35); color: #fff; }
+
+a { color: inherit; text-decoration: none; }
+
+.wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+
+/* --- The nav, wearing the app's own silhouette --------------------------- */
+/* Moonglade hangs from the notch, and that outline is the product's signature:
+   the top edge flares outward into concave shoulders that meet the screen edge,
+   and the body drops into rounded lower corners. The numbers are the app's own
+   — HangingNotchMetrics, a 14pt shoulder and a 20pt lower corner — so the page
+   wears the shape the app draws on the display instead of an impression of it.
+   Circular arcs here against the app's continuous curve; at this radius the
+   two differ by well under a pixel.
+
+   The silhouette is one SVG path used twice: as the clip that cuts the glass,
+   and stroked to give the rim. One `d`, so the shape cannot drift from itself.
+
+   The fixed width is what keeps this free of JavaScript. A `clip-path` carries
+   absolute coordinates, so a bar that resized with its content would need its
+   path recomputed on every resize; the panel it imitates has a fixed width too.
+
+   No outer drop shadow, deliberately: a `filter` on this element or its parent
+   would reset the backdrop root and leave `backdrop-filter` blurring nothing.
+   The rim and the frost carry the edge on their own. */
+.nav {
+  position: fixed;
+  top: 0; left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 28px;
+  width: 720px; height: 56px;
+  /* Measured from the body of the panel rather than from the box: the shoulder
+     insets the body by 14px on each side, so 28px leaves the wordmark and the
+     button an equal 14px of air inside the real edge. Anything under 14 falls
+     outside the silhouette entirely and the clip cuts it off. */
+  padding: 0 28px;
+  background: rgba(9, 13, 30, 0.55);
+  backdrop-filter: blur(28px) saturate(160%);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  clip-path: url(#notch-silhouette-clip);
+}
+.nav-shape { position: absolute; inset: 0; pointer-events: none; }
+/* Stroked at double width and left for the nav's own clip to halve: what
+   survives is a crisp inner rim that follows every arc, including the concave
+   ones a border or an inset shadow would cut straight across. */
+.nav-rim { fill: none; stroke: rgba(233, 241, 255, 0.16); stroke-width: 2; }
+.nav-mark { display: flex; align-items: center; gap: 9px; font-weight: 560; font-size: 14px; }
+.nav-mark svg { width: 17px; height: 17px; }
+.nav-links { display: flex; gap: 24px; font-size: 13px; color: var(--ink-dim); }
+.nav-links a { transition: color 420ms var(--spring); }
+.nav-links a:hover { color: var(--ink); }
+.nav-cta {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 8px 7px 16px;
+  font-size: 13px; font-weight: 520;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-bright);
+  background: rgba(233, 241, 255, 0.06);
+  transition: transform 500ms var(--spring), background 500ms var(--spring);
+}
+.nav-cta:hover { background: rgba(233, 241, 255, 0.12); }
+.nav-cta:active { transform: scale(0.97); }
+/* Button-in-button: the arrow lives in its own well, flush with the pill. */
+.nav-cta i {
+  display: grid; place-items: center;
+  width: 24px; height: 24px;
+  border-radius: 999px;
+  background: rgba(233, 241, 255, 0.10);
+  font-style: normal; font-size: 11px;
+  transition: transform 500ms var(--spring);
+}
+.nav-cta:hover i { transform: translate(2px, -2px); }
+/* A display without a notch gets a detached bubble from the app rather than a
+   panel welded to an edge that isn't there, and the page answers a viewport too
+   narrow for the panel the same way: the shoulders have nothing to attach to,
+   so the bar floats free as a capsule. */
+@media (max-width: 720px) {
+  .nav {
+    top: 12px;
+    width: calc(100vw - 24px); max-width: 420px; height: 52px;
+    padding: 0 10px 0 18px;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+    clip-path: none;
+  }
+  .nav-shape { display: none; }
+  .nav-links { display: none; }
+}
+
+/* --- Hero ---------------------------------------------------------------- */
+.hero {
+  position: relative;
+  min-height: 100dvh;
+  display: flex; flex-direction: column; justify-content: center;
+  /* The panel now starts at the screen edge instead of floating 24px below it,
+     so the copy climbs the same distance to keep the gap under it unchanged. */
+  padding: 136px 0 80px;
+  isolation: isolate;
+}
+/* The scene is one drawn image rather than a sky assembled out of gradients,
+   blooms, a waterline and a ripple stack. It is the product's own metaphor —
+   the moon and the glade it throws across the water — so it carries the hero
+   on its own and the copy only has to stay legible over it. It is continuous
+   tone rather than pixel art on purpose: the app is frosted glass and the page
+   below the hero is glass cards, and the icon it inherits its palette from is a
+   smooth gradient moon.
+
+   The diffusion is baked into the asset, not applied here — a full-bleed
+   `filter: blur()` repaints the whole hero on every scroll. See the landing
+   page section of AGENTS.md for the recipe. */
+.sky {
+  position: absolute; z-index: -2; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  /* The moon sits at a fifth of the way down the frame, so a viewport wider
+     than 3:2 has to crop the water, never the top. */
+  /* The moon is centred in the file itself, not nudged here: a viewport wider
+     than the image scales it to the width and leaves no horizontal slack for
+     object-position to work with, so the file is the only place the alignment
+     with the notch above can be made to hold at every size. */
+  object-position: 50% 40%;
+  pointer-events: none;
+  user-select: none;
+}
+/* Two scrims in one layer. A pool in the middle, because the copy is centred
+   and therefore lands on the moon and its glade — the brightest part of the
+   drawing, and the one the earlier left-weighted wash was written to spare.
+   It is a radial so the darkening falls off before the corners and the scene
+   keeps its edges. Down: a fade into the page background, so the hero dissolves
+   into the next section instead of ending on a cut. */
+.hero::after {
+  content: "";
+  position: absolute; z-index: -1; inset: 0;
+  background:
+    radial-gradient(74% 54% at 50% 50%,
+        rgba(4, 6, 13, 0.74) 0%,
+        rgba(4, 6, 13, 0.46) 58%,
+        rgba(4, 6, 13, 0) 100%),
+    linear-gradient(180deg,
+        rgba(4, 6, 13, 0.66) 0%,
+        rgba(4, 6, 13, 0.10) 22%,
+        rgba(4, 6, 13, 0.16) 52%,
+        var(--night-deep) 100%);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--glass);
+  font-size: 10px; font-weight: 560;
+  text-transform: uppercase; letter-spacing: 0.2em;
+  color: var(--ink-dim);
+}
+.eyebrow b { color: var(--violet); font-weight: 560; }
+
+h1 {
+  margin-top: 26px;
+  font-size: clamp(40px, 7.2vw, 82px);
+  line-height: 0.98;
+  letter-spacing: -0.045em;
+  font-weight: 580;
+}
+h1 em {
+  font-style: normal;
+  background: linear-gradient(180deg, var(--frost) 0%, rgba(125, 109, 255, 0.85) 130%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+/* The hero is the one centred block on the page. Everything below it stays
+   ranged left, because a centred paragraph is only readable while it is short
+   and none of the sections below are. */
+.hero .wrap { text-align: center; }
+.hero .command-shell { margin-left: auto; margin-right: auto; }
+.lede {
+  margin-top: 24px; max-width: 620px; margin-left: auto; margin-right: auto;
+  font-size: clamp(15px, 1.7vw, 18px);
+  color: var(--ink-dim);
+  letter-spacing: -0.014em;
+}
+
+/* The same brand marks the app draws beside a live session, at the size they
+   are meant to be read rather than the 16px of a menu row. No enclosure around
+   them: the eyebrow above is already a pill, and five more would turn the top
+   of the hero into a run of outlines. They sit slightly back at rest so they
+   support the headline instead of competing with it. */
+.agents {
+  margin-top: 26px;
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
+  gap: 26px;
+  list-style: none;
+}
+.agents img {
+  display: block;
+  width: 26px; height: 26px;
+  object-fit: contain;
+  opacity: 0.78;
+  transition: opacity 500ms var(--spring);
+}
+.agents li:hover img { opacity: 1; }
+
+/* --- The install command: outer tray, inner plate ------------------------ */
+.command-shell {
+  margin-top: 42px;
+  width: max-content; max-width: 100%;
+  padding: 6px;
+  border-radius: var(--shell);
+  border: 1px solid var(--hairline);
+  background: rgba(147, 168, 224, 0.05);
+  box-shadow: 0 40px 90px -50px rgba(0, 0, 0, 0.95);
+}
+.command {
+  position: relative; overflow: hidden;
+  display: flex; align-items: center; gap: 20px;
+  padding: 17px 10px 17px 22px;
+  border-radius: calc(var(--shell) - 6px);
+  background: linear-gradient(180deg, rgba(12, 17, 38, 0.92), rgba(6, 9, 22, 0.92));
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.11);
+  cursor: pointer;
+}
+.command code {
+  font-family: var(--mono);
+  font-size: clamp(11.5px, 1.5vw, 14px);
+  color: var(--frost);
+  white-space: nowrap; overflow-x: auto;
+  scrollbar-width: none;
+}
+.command code::-webkit-scrollbar { display: none; }
+.command code b { color: var(--violet); font-weight: 400; }
+/* A word that says what the glyph already says is a word the button does not
+   need. Dropping it buys the target room: 44px square is Apple's own minimum
+   for something you are meant to hit. */
+.copy {
+  flex-shrink: 0;
+  display: grid; place-items: center;
+  width: 44px; height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-bright);
+  background: rgba(233, 241, 255, 0.05);
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 500ms var(--spring), background 500ms var(--spring),
+              border-color 500ms var(--spring);
+}
+.copy:hover { background: rgba(233, 241, 255, 0.11); }
+.copy:active { transform: scale(0.96); }
+.copy i {
+  font-style: normal; font-size: 19px; line-height: 1;
+  transition: transform 500ms var(--spring);
+}
+.copy:hover i { transform: translate(1px, -1px) scale(1.08); }
+.copy.done {
+  background: rgba(125, 109, 255, 0.20);
+  border-color: rgba(125, 109, 255, 0.45);
+}
+/* The app answers a click with a Metal ripple; so does the command. */
+.ripple-ink {
+  position: absolute; border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  background: radial-gradient(circle, rgba(233,241,255,0.22) 0%, rgba(233,241,255,0) 70%);
+  animation: ink 900ms var(--spring) forwards;
+  pointer-events: none;
+}
+@keyframes ink { to { transform: translate(-50%, -50%) scale(1); opacity: 0; } }
+
+.hero-note { margin-top: 18px; font-size: 12.5px; color: var(--ink-faint); }
+/* A link sitting inside a running sentence needs an affordance the standalone
+   links in the nav and the footer row do not: on its own it would be invisible,
+   because every link on this page inherits its colour. */
+.hero-note a, .byline { color: var(--ink-dim); border-bottom: 1px solid var(--hairline); transition: color 420ms var(--spring); }
+.hero-note a:hover, .byline:hover { color: var(--ink); }
+
+/* --- Reveal choreography ------------------------------------------------- */
+.reveal { opacity: 0; transform: translateY(48px); filter: blur(10px); transition: opacity 900ms var(--spring), transform 900ms var(--spring), filter 900ms var(--spring); }
+.reveal.in { opacity: 1; transform: none; filter: none; }
+@media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; filter: none; } }
+
+/* --- Sections ------------------------------------------------------------ */
+section { position: relative; padding: 140px 0; }
+.section-head { max-width: 620px; }
+h2 {
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.06; letter-spacing: -0.035em; font-weight: 570;
+}
+.section-head p { margin-top: 18px; color: var(--ink-dim); font-size: clamp(14.5px, 1.6vw, 17px); }
+
+/* Asymmetrical bento */
+.bento { margin-top: 64px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; }
+.tile {
+  padding: 5px;
+  border-radius: var(--shell);
+  border: 1px solid var(--hairline);
+  background: rgba(147, 168, 224, 0.05);
+}
+.tile-core {
+  height: 100%;
+  padding: 30px;
+  border-radius: calc(var(--shell) - 5px);
+  background: linear-gradient(180deg, rgba(14, 19, 42, 0.86), rgba(6, 9, 22, 0.86));
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
+}
+.tile h3 { font-size: 17px; font-weight: 560; letter-spacing: -0.02em; }
+.tile p { margin-top: 10px; color: var(--ink-dim); font-size: 14px; }
+.span-7 { grid-column: span 7; }
+.span-5 { grid-column: span 5; }
+.span-4 { grid-column: span 4; }
+.span-8 { grid-column: span 8; }
+.span-12 { grid-column: span 12; }
+@media (max-width: 860px) {
+  .bento { grid-template-columns: 1fr; gap: 16px; }
+  .span-7, .span-5, .span-4, .span-8, .span-12 { grid-column: span 1; }
+}
+
+/* The three states, rendered as themselves */
+.states { display: flex; flex-direction: column; gap: 16px; margin-top: 22px; }
+.state { display: flex; align-items: center; gap: 14px; font-size: 14px; }
+.state span:last-child { color: var(--ink-dim); }
+.dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.dot.green { background: #4ade80; box-shadow: 0 0 12px rgba(74, 222, 128, 0.6); }
+.dot.red { background: #ff5d5d; box-shadow: 0 0 12px rgba(255, 93, 93, 0.6); }
+.dot.grey { background: var(--ink-faint); }
+.spin { font-family: var(--mono); color: var(--frost); font-size: 13px; width: 9px; }
+
+/* The notch, recreated */
+.notch-stage {
+  margin-top: 64px;
+  padding: 6px;
+  border-radius: var(--shell);
+  border: 1px solid var(--hairline);
+  background: rgba(147, 168, 224, 0.05);
+}
+.notch-core {
+  border-radius: calc(var(--shell) - 6px);
+  background: linear-gradient(180deg, rgba(16, 22, 48, 0.9), rgba(5, 8, 20, 0.94));
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.09);
+  padding: 34px 24px 40px;
+  display: flex; flex-direction: column; align-items: center;
+}
+.bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 7px 16px;
+  border-radius: 0 0 16px 16px;
+  background: #000;
+  border: 1px solid rgba(233, 241, 255, 0.08); border-top: none;
+  font-size: 12.5px; font-family: var(--mono);
+}
+.bar .pair { display: flex; align-items: center; gap: 6px; }
+.camera { width: 7px; height: 7px; border-radius: 50%; background: #14181f; margin: 0 6px; }
+.menu {
+  margin-top: 22px; width: 100%; max-width: 640px;
+  border-radius: 18px;
+  border: 1px solid var(--hairline);
+  background: rgba(10, 14, 32, 0.72);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+.row {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(233, 241, 255, 0.05);
+  transition: background 500ms var(--spring);
+}
+.row:last-child { border-bottom: none; }
+.row:hover { background: rgba(233, 241, 255, 0.045); }
+.row-main { flex: 1; min-width: 0; }
+.row-title { font-size: 13.5px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-meta { margin-top: 3px; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-time { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); flex-shrink: 0; }
+/* 16px is what AgentIconView draws in a real row, so the demo is at scale
+   rather than an impression of one. The name the mark replaced now lives in
+   its alt text, which is also what a screen reader reads out of this row.
+   Unlike the elapsed time, the mark survives a narrow viewport: it is how you
+   tell one row from another, and it costs 16px to keep. */
+.provider { width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; }
+@media (max-width: 640px) { .row-time { display: none; } }
+
+/* Install section */
+/* Stacked, not side by side. Two columns halve the width available to a command
+   that is 89 characters long, which forces it to scroll at every viewport size;
+   full width it simply fits, and the two paths read in the order you would try
+   them. */
+.paths { margin-top: 56px; display: grid; gap: 18px; }
+.path-core pre {
+  padding: 16px 58px 16px 16px;
+  background: rgba(3, 5, 14, 0.75);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  font-family: var(--mono); font-size: 12px; color: var(--frost);
+  /* Never wrapped and never broken across lines with a backslash: a command is
+     copied far more often than it is read, and a continuation that survives the
+     page but not the clipboard is a trap. It scrolls instead. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.path-core pre::-webkit-scrollbar { display: none; }
+/* Every command on the page copies the same way, so it is the same button —
+   smaller here because it sits inside the block rather than beside it. */
+.snippet { position: relative; margin-top: 16px; overflow: hidden; border-radius: 14px; cursor: pointer; }
+.snippet .copy { position: absolute; top: 9px; right: 9px; z-index: 1; width: 34px; height: 34px; }
+.snippet .copy i { font-size: 15px; }
+
+footer {
+  padding: 70px 0 90px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-faint); font-size: 13px;
+}
+.foot-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
+.foot-links { display: flex; gap: 22px; }
+.foot-links a { transition: color 420ms var(--spring); }
+.foot-links a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <!-- Traversed clockwise from the top-left: the top edge runs the full outer
+       width, both shoulders curve inward with the sweep flag reversed because
+       they are concave, and the lower corners round like any panel. -->
+  <svg class="nav-shape" viewBox="0 0 720 56" width="720" height="56" aria-hidden="true" focusable="false">
+    <defs>
+      <path id="notch-silhouette"
+            d="M0 0 H720 A14 14 0 0 0 706 14 V36 A20 20 0 0 1 686 56 H34 A20 20 0 0 1 14 36 V14 A14 14 0 0 0 0 0 Z"/>
+      <clipPath id="notch-silhouette-clip" clipPathUnits="userSpaceOnUse">
+        <use href="#notch-silhouette"/>
+      </clipPath>
+    </defs>
+    <use class="nav-rim" href="#notch-silhouette"/>
+  </svg>
+
+  <a class="nav-mark" href="#top">
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <circle cx="16" cy="12" r="7" fill="url(#m)"/>
+      <circle cx="16" cy="12" r="7" stroke="rgba(255,255,255,0.55)" stroke-width="0.8"/>
+      <rect x="6" y="22" width="20" height="1" rx="0.5" fill="rgba(255,255,255,0.6)"/>
+      <rect x="9" y="25" width="14" height="1" rx="0.5" fill="rgba(233,241,255,0.28)"/>
+      <rect x="11" y="28" width="10" height="1" rx="0.5" fill="rgba(233,241,255,0.16)"/>
+      <defs><radialGradient id="m" cx="0.42" cy="0.36" r="0.84">
+        <stop offset="0" stop-color="#f6f9ff" stop-opacity="0.74"/>
+        <stop offset="0.52" stop-color="#dde8ff" stop-opacity="0.54"/>
+        <stop offset="1" stop-color="#b6c8ef" stop-opacity="0.34"/>
+      </radialGradient></defs>
+    </svg>
+    Moonglade
+  </a>
+  <div class="nav-links">
+    <a href="#how">How it works</a>
+    <a href="#privacy">Privacy</a>
+    <a href="#install">Install</a>
+  </div>
+  <a class="nav-cta" href="https://github.com/ixjosemi/Moonglade">GitHub <i>↗</i></a>
+</nav>
+
+<header class="hero" id="top">
+  <img class="sky" src="hero-moonglade.webp" alt="" width="1506" height="1024"
+       fetchpriority="high" decoding="async">
+
+  <div class="wrap">
+    <div class="reveal">
+      <span class="eyebrow"><b>●</b> v0.2.0</span>
+      <h1>Know when your agents<br><em>need you.</em></h1>
+      <p class="lede">
+        A quiet indicator for your coding agents.
+      </p>
+      <!-- The marks are served from the app's own resource directory, so the
+           row and a live session row can never show a different Claude. The
+           name is carried by alt text: it is what a screen reader announces and
+           what appears if a file ever fails to load. -->
+      <ul class="agents" aria-label="Works with">
+        <li><img src="icons/claude.svg" alt="Claude Code" title="Claude Code" width="26" height="26" decoding="async"></li>
+        <li><img src="icons/opencode.svg" alt="OpenCode" title="OpenCode" width="26" height="26" decoding="async"></li>
+        <li><img src="icons/codex.svg" alt="Codex" title="Codex" width="26" height="26" decoding="async"></li>
+        <li><img src="icons/pi.svg" alt="Pi" title="Pi" width="26" height="26" decoding="async"></li>
+        <li><img src="icons/convoy.svg" alt="Convoy" title="Convoy" width="26" height="26" decoding="async"></li>
+      </ul>
+    </div>
+
+    <div class="reveal" style="transition-delay: 120ms">
+      <div class="command-shell">
+        <div class="command" data-copy>
+          <code>curl -fsSL <b>https://github.com/ixjosemi/Moonglade/releases/latest/download/install.sh</b> | sh</code>
+          <!-- Icon only. The glyph carries the meaning, and the label the button
+               no longer prints is the one screen readers announce. -->
+          <button class="copy" type="button" aria-label="Copy the install command"><i>⧉</i></button>
+        </div>
+      </div>
+      <p class="hero-note">
+        Apple Silicon · macOS 14+ ·
+        <a href="https://github.com/ixjosemi/Moonglade/blob/main/scripts/install-remote.sh">read it first</a> ·
+        <a href="#install">build from source</a>
+      </p>
+    </div>
+  </div>
+</header>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <h2>Three states, and no guessing between them.</h2>
+      <p>
+        A count per state, and no slot for the states sitting at zero. When nothing
+        is running it collapses to a single dimmed moon.
+      </p>
+    </div>
+
+    <div class="notch-stage reveal">
+      <div class="notch-core">
+        <div class="bar">
+          <span class="pair"><span class="spin" id="spinner">⠋</span> 2</span>
+          <span class="pair"><span class="dot green"></span> 1</span>
+          <span class="camera"></span>
+          <span class="pair"><span class="dot red"></span> 1</span>
+        </div>
+        <div class="menu">
+          <div class="row">
+            <img class="provider" src="icons/claude.svg" alt="Claude Code" width="16" height="16" decoding="async">
+            <span class="spin">⠙</span>
+            <div class="row-main">
+              <div class="row-title">Refactor the session matcher</div>
+              <div class="row-meta">~/Development/moonglade · feat/ghostty-identity</div>
+            </div>
+            <span class="row-time">4m 12s</span>
+          </div>
+          <div class="row">
+            <img class="provider" src="icons/opencode.svg" alt="OpenCode" width="16" height="16" decoding="async">
+            <span class="dot red"></span>
+            <div class="row-main">
+              <div class="row-title">Wire the release pipeline</div>
+              <div class="row-meta">~/Development/moonglade · permission requested</div>
+            </div>
+            <span class="row-time">18s</span>
+          </div>
+          <div class="row">
+            <img class="provider" src="icons/convoy.svg" alt="Convoy" width="16" height="16" decoding="async">
+            <span class="spin">⠸</span>
+            <div class="row-main">
+              <div class="row-title">implement · step 4 of 6</div>
+              <div class="row-meta">~/Development/api · review</div>
+            </div>
+            <span class="row-time">7m 08s</span>
+          </div>
+          <div class="row">
+            <img class="provider" src="icons/codex.svg" alt="Codex" width="16" height="16" decoding="async">
+            <span class="dot green"></span>
+            <div class="row-main">
+              <div class="row-title">Audit the state repository</div>
+              <div class="row-meta">~/Development/moonglade · main</div>
+            </div>
+            <span class="row-time">1m 40s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bento">
+      <div class="tile span-5 reveal">
+        <div class="tile-core">
+          <h3>What the lights mean</h3>
+          <div class="states">
+            <div class="state"><span class="spin">⠋</span><span>The agent is processing.</span></div>
+            <div class="state"><span class="dot green"></span><span>Waiting at the prompt for you.</span></div>
+            <div class="state"><span class="dot red"></span><span>A question or permission needs you.</span></div>
+            <div class="state"><span class="dot grey"></span><span>Process exited, about to be reaped.</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="tile span-7 reveal" style="transition-delay: 90ms">
+        <div class="tile-core">
+          <h3>A blocked session stays red until you answer it</h3>
+          <p>
+            Not until you glance at it. Visiting the tab does not clear a pending
+            permission, so the bar never disagrees with the menu.
+          </p>
+        </div>
+      </div>
+      <div class="tile span-8 reveal">
+        <div class="tile-core">
+          <h3>One click lands on the exact pane</h3>
+          <p>
+            Ghostty, cmux, iTerm2, Terminal, tmux — Moonglade focuses the surface a
+            session lives in, not merely the app. Panes are told apart by the name
+            the agent reports, so several agents in one directory never trade places.
+          </p>
+        </div>
+      </div>
+      <div class="tile span-4 reveal" style="transition-delay: 90ms">
+        <div class="tile-core">
+          <h3>Inline actions</h3>
+          <p>
+            Expand a row to rename it, copy the project path, reveal it in Finder, kill the process,
+            or close its exact tmux pane or Ghostty tab.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <h2>No network. No telemetry. No accounts.</h2>
+      <p>
+        It never opens a socket. Session metadata stays in
+        <code style="font-family:var(--mono);font-size:0.92em">~/.moonglade/state</code>
+        with user-only permissions, and your prompts and model responses are never
+        stored — not locally, not anywhere.
+      </p>
+    </div>
+    <div class="bento">
+      <div class="tile span-4 reveal"><div class="tile-core">
+        <h3>~1% CPU</h3>
+        <p>A libproc scan at about 2 ms per sweep on a five-second heartbeat, off the main thread.</p>
+      </div></div>
+      <div class="tile span-4 reveal" style="transition-delay: 80ms"><div class="tile-core">
+        <h3>~16 MB</h3>
+        <p>Event-driven throughout: kernel exit notifications and debounced directory observation.</p>
+      </div></div>
+      <div class="tile span-4 reveal" style="transition-delay: 160ms"><div class="tile-core">
+        <h3>Open source</h3>
+        <p>Every line of the app, the hooks and this installer is on GitHub, under the MIT licence.</p>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <h2>Two paths, one result.</h2>
+      <p>
+        Either way you end with the app in <code style="font-family:var(--mono);font-size:0.92em">/Applications</code>,
+        your agent hooks wired, and <code style="font-family:var(--mono);font-size:0.92em">moonglade doctor</code>
+        reporting a clean install.
+      </p>
+    </div>
+
+    <div class="paths">
+      <div class="tile reveal"><div class="tile-core path-core">
+        <h3>Published build</h3>
+        <p>Downloads the latest release, checks it against the published checksums, installs it. No Xcode needed.</p>
+        <div class="snippet" data-copy>
+          <pre>curl -fsSL https://github.com/ixjosemi/Moonglade/releases/latest/download/install.sh | sh</pre>
+          <button class="copy" type="button" aria-label="Copy the install command"><i>⧉</i></button>
+        </div>
+      </div></div>
+      <div class="tile reveal" style="transition-delay: 90ms"><div class="tile-core path-core">
+        <h3>From source</h3>
+        <p>Compiles it on your machine. Needs Swift 6.0+. Also the path for Intel Macs, which the published build does not cover.</p>
+        <div class="snippet" data-copy>
+          <pre>git clone https://github.com/ixjosemi/Moonglade.git
+cd Moonglade
+./scripts/install.sh</pre>
+          <button class="copy" type="button" aria-label="Copy the build commands"><i>⧉</i></button>
+        </div>
+      </div></div>
+    </div>
+
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-row">
+    <span>Moonglade — MIT licensed. Built by
+      <a class="byline" href="https://josemi.me" rel="me">Josemi Hernandez</a>.</span>
+    <div class="foot-links">
+      <a href="https://github.com/ixjosemi/Moonglade">Source</a>
+      <a href="https://github.com/ixjosemi/Moonglade/blob/main/PRIVACY.md">Privacy</a>
+      <a href="https://github.com/ixjosemi/Moonglade/releases">Releases</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// The braille dot-matrix spinner the bar actually uses.
+(function spin() {
+  const frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+  const target = document.getElementById('spinner');
+  let index = 0;
+  setInterval(() => { target.textContent = frames[index++ % frames.length]; }, 90);
+})();
+
+// Entry choreography. IntersectionObserver, never a scroll listener.
+(function reveal() {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('in');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { rootMargin: '0px 0px -12% 0px' });
+  document.querySelectorAll('.reveal').forEach((node) => observer.observe(node));
+})();
+
+// Copy, and answer the click with a ripple the way the app does.
+// Every command on the page copies the same way, so there is one implementation
+// of it: a container marked data-copy, the text taken from the code or pre it
+// holds, and the button inside it reporting what happened.
+(function copy() {
+  document.querySelectorAll('[data-copy]').forEach((surface) => {
+    const source = surface.querySelector('code, pre');
+    const button = surface.querySelector('.copy');
+    // The button prints no words, so the state it reports lives in the glyph
+    // and in the label a screen reader reads out. Both move together.
+    const glyph = button.querySelector('i');
+    const idleLabel = button.getAttribute('aria-label');
+
+    function say(mark, label) {
+      glyph.textContent = mark;
+      button.setAttribute('aria-label', label);
+    }
+
+    function ink(event) {
+      const bounds = surface.getBoundingClientRect();
+      const drop = document.createElement('span');
+      const size = Math.max(bounds.width, bounds.height) * 2;
+      drop.className = 'ripple-ink';
+      drop.style.width = drop.style.height = size + 'px';
+      drop.style.left = (event.clientX - bounds.left) + 'px';
+      drop.style.top = (event.clientY - bounds.top) + 'px';
+      surface.appendChild(drop);
+      setTimeout(() => drop.remove(), 900);
+    }
+
+    surface.addEventListener('click', async (event) => {
+      // Someone who has just dragged across part of the command wants that
+      // part, not the whole thing. Leave their selection and their clipboard
+      // alone.
+      if (!window.getSelection().isCollapsed) return;
+      ink(event);
+      try {
+        await navigator.clipboard.writeText(source.textContent);
+        button.classList.add('done');
+        say('✓', 'Copied');
+        setTimeout(() => {
+          button.classList.remove('done');
+          say('⧉', idleLabel);
+        }, 1800);
+      } catch (error) {
+        // Clipboard permission denied or an insecure context. Select the
+        // command rather than pretending the copy happened: it is then one
+        // keystroke away.
+        const range = document.createRange();
+        range.selectNodeContents(source);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        say('⧉', 'Clipboard blocked — the command is selected, press Cmd-C');
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

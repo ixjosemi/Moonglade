@@ -1,0 +1,125 @@
+name: Release
+
+# Publishing a release builds the app that the curl installer downloads and
+# attaches it, its checksums, and the installer itself to that release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and attach assets to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    # macos-15 is Apple Silicon, which is the only architecture this build
+    # targets: the project does not validate Intel, so it ships nothing for it.
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Show toolchain
+        run: swift --version
+
+      # A release that fails its own tests must not become the build the
+      # install command hands to strangers.
+      - name: Test
+        run: swift run moonglade-tests
+
+      # TCC keys the automation grant to the signing identity, so the published
+      # build is signed with a self-signed certificate that stays the same
+      # across releases. Under build-app.sh's default ad-hoc signature the
+      # identity is the binary's own hash, and every update would look like a
+      # different app and lose its permission to focus the user's terminal.
+      # Without the certificate there is no correct build to publish, so the
+      # job fails rather than shipping one that silently breaks focus.
+      - name: Import the signing identity
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_SIGN_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGN_CERTIFICATE_PASSWORD }}
+        run: |
+          set -eu
+          if [ -z "${CERTIFICATE_P12_BASE64:-}" ] || [ -z "${CERTIFICATE_PASSWORD:-}" ]; then
+            echo "MACOS_SIGN_CERTIFICATE_P12 and MACOS_SIGN_CERTIFICATE_PASSWORD are required." >&2
+            echo "See the Releasing section of CLAUDE.md for how to create and store it." >&2
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/moonglade-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 1800 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/identity.p12"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/identity.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+      - name: Build the signed app
+        env:
+          MOONGLADE_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          set -eu
+          if [ -z "${MOONGLADE_SIGN_IDENTITY:-}" ]; then
+            echo "MACOS_SIGN_IDENTITY is required (the certificate's common name)." >&2
+            exit 1
+          fi
+          ./scripts/build-app.sh
+
+      - name: Verify the bundle
+        run: |
+          set -eu
+          codesign --verify --deep --strict .build/Moonglade.app
+          codesign --display --verbose=2 .build/Moonglade.app
+          test -x .build/Moonglade.app/Contents/MacOS/Moonglade
+          test -x .build/Moonglade.app/Contents/Resources/bin/moonglade
+          test -x .build/Moonglade.app/Contents/Resources/install-app.sh
+          test -f .build/Moonglade.app/Contents/Resources/Moonglade_MoongladeApp.bundle/default.metallib
+          plist=.build/Moonglade.app/Contents/Info.plist
+          bundled="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+          if [ "v$bundled" != "$TAG" ]; then
+            echo "Tag $TAG does not match the bundle version $bundled." >&2
+            echo "Bump config/Info.plist before tagging." >&2
+            exit 1
+          fi
+
+      # ditto is Apple's way to archive a signed bundle: plain zip and tar drop
+      # or duplicate the metadata the signature is sealed over, and the app
+      # would fail verification on the user's machine after extraction.
+      - name: Archive
+        run: |
+          set -eu
+          mkdir -p dist
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            .build/Moonglade.app dist/Moonglade-arm64.zip
+          cp scripts/install-remote.sh dist/install.sh
+          cd dist
+          shasum -a 256 Moonglade-arm64.zip install.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      # A round trip through the archive proves the user's extraction verifies,
+      # rather than trusting that the bundle we signed survives the transport.
+      - name: Verify the archived bundle extracts and verifies
+        run: |
+          set -eu
+          /usr/bin/ditto -x -k dist/Moonglade-arm64.zip "$RUNNER_TEMP/extracted"
+          codesign --verify --deep --strict "$RUNNER_TEMP/extracted/Moonglade.app"
+
+      - name: Attach the assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release upload "$TAG" \
+            dist/Moonglade-arm64.zip dist/SHA256SUMS dist/install.sh \
+            --repo "$GITHUB_REPOSITORY" --clobber
