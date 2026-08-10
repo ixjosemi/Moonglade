@@ -22,6 +22,72 @@ SwiftPM cannot compile Metal sources, so `Sources/MoongladeApp/Ripple.metal` is 
 
 It needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). The script also rewrites `Resources/default.metallib.source-sha256`, which records the source the committed library was built from; commit it alongside the library. CI compares that hash against `Ripple.metal` and fails when they disagree, so an edited shader with a stale library is caught instead of shipping silently.
 
+## Distribution
+
+There are two install paths and they converge: `scripts/install.sh` builds from source, the published build is downloaded by `scripts/install-remote.sh`, and both hand the finished bundle to `scripts/install-app.sh`. That last script ships inside the bundle at `Contents/Resources/install-app.sh` because the remote installer is fetched standalone through `curl` and cannot read this repository — one implementation, distributed with the artifact it installs. Change the install sequence there, never in two places.
+
+`curl` is the delivery channel on purpose. Gatekeeper's quarantine attribute is set by the downloading application, not by the file, so an app fetched with `curl` never meets the "unidentified developer" wall an unsigned `.dmg` from a browser would. Nothing here asks a user to disable a security control.
+
+### Releasing
+
+1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `config/Info.plist`. That plist is the only record of the version; the settings pane reads it through `Bundle.main`.
+2. Tag and publish a GitHub release as `v<version>`. `.github/workflows/release.yml` then runs the tests, builds a signed app, verifies the tag matches the bundle version, and attaches `Moonglade-arm64.zip`, `SHA256SUMS`, and `install.sh` to the release.
+
+The published build is signed with a **self-signed certificate that must stay the same across releases**. TCC keys the automation grant to the signer, and `build-app.sh`'s default ad-hoc signature has no stable identity — its identity is the binary's own hash — so every update would look like a new app and silently lose permission to focus the user's terminal. This is not notarization and does not pretend to be; it exists so permissions survive updates.
+
+Create the identity once in Keychain Access (Certificate Assistant → Create a Certificate → Code Signing, self-signed), export it as a `.p12`, and store three repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_SIGN_CERTIFICATE_P12` | `base64 -i identity.p12` |
+| `MACOS_SIGN_CERTIFICATE_PASSWORD` | the password used on export |
+| `MACOS_SIGN_IDENTITY` | the certificate's common name |
+
+The release job fails when they are absent rather than falling back to an ad-hoc signature, because that fallback would publish a build that breaks focus on every update.
+
+### The landing page
+
+`docs/index.html` is deployed to GitHub Pages by `.github/workflows/pages.yml`, which runs `scripts/build-site.sh` to assemble `_site/` from the page, `assets/icon.svg`, and `scripts/install-remote.sh` served at `/install`. The installer therefore has one source of truth and is published, never duplicated. Preview locally with:
+
+```bash
+./scripts/build-site.sh && python3 -m http.server -d _site 8000
+```
+
+The page's palette is taken from `assets/icon.svg` — the same night gradient, violet and blue blooms, and frost. Keep them in step.
+
+`assets/hero-moonglade.webp` is the hero scene, and it is deliberately diffused rather than photographic: a heavily blurred copy screened back over the original for bloom, then a light blur blended in for softness. The haze is baked into the asset because a full-bleed `filter: blur()` repaints on every scroll. The closing `-level` is not optional: the screen pass lifts the black point, and without pulling it back the night sky separates visibly from the page background it fades into. Regenerate it from a source image with:
+
+```bash
+magick source.png -blur 0x28 glow.png
+magick source.png glow.png -compose screen -composite bloomed.png
+magick source.png bloomed.png -compose blend -define compose:args=72 -composite step.png
+magick step.png \( +clone -blur 0x15 \) -compose blend -define compose:args=80 -composite \
+    -level 4%,100% centred.png
+```
+
+Then crop so the moon lands on the horizontal centre of the file. The nav wears the notch silhouette and is centred on the viewport, and the two have to line up; a viewport wider than the image is scaled to the width and leaves no horizontal slack, so `object-position` cannot correct this and the file is the only place it can be fixed.
+
+Find the moon by its **axis of symmetry**, not by thresholding. Its halo is brighter on one side and its surface markings break the disc into several blobs, so every brightness-based measure — bounding box, centroid, steepest rim — lands somewhere different, and they disagreed by 20px here. The disc is radially symmetric about its own centre, so the column that best mirrors onto itself is the answer:
+
+```bash
+magick centred.png -crop 400x300+540+50 +repage -colorspace gray -depth 8 txt:- | python3 -c "
+import sys, re
+px = {}
+for line in sys.stdin:
+    m = re.match(r'(\d+),(\d+): \((\d+)', line)
+    if m: px[(int(m.group(1)), int(m.group(2)))] = int(m.group(3))
+W, H, X0 = 400, 300, 540
+print(min(((c + X0, sum(abs(px[(c - d, y)] - px[(c + d, y)])
+                        for d in range(1, min(c, W - 1 - c, 150)) for y in range(0, H, 3))
+                    / min(c, W - 1 - c, 150)) for c in range(120, 280)), key=lambda p: p[1]))"
+```
+
+Crop symmetrically about that column — `2 × min(axis, width − axis)` wide — and re-run the measurement on the result to confirm it lands on the centre line. `docs/index.html` carries the resulting dimensions in the `<img>` tag and they must be updated with it, or the browser reserves a box of the wrong shape and the hero jumps as the image loads:
+
+```bash
+magick centred.png -crop 1506x1024+30+0 +repage -strip -quality 90 assets/hero-moonglade.webp
+```
+
 ## Engineering rules
 
 - Add a failing behavioral test before changing runtime behavior.
