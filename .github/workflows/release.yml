@@ -64,6 +64,23 @@ jobs:
           rm -f "$RUNNER_TEMP/identity.p12"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # This certificate is its own root, and an untrusted root is not a
+          # valid identity: codesign answers "no identity found" after an import
+          # that otherwise succeeded. An Apple-issued certificate needs none of
+          # this because its chain is already trusted; a self-signed one does,
+          # and trust settings do not travel inside the .p12. The certificate is
+          # read back out of the keychain rather than out of the .p12 so nothing
+          # here has to guess how the file was encrypted.
+          security find-certificate -a -p "$keychain" > "$RUNNER_TEMP/identity.pem"
+          security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$RUNNER_TEMP/identity.pem"
+          rm -f "$RUNNER_TEMP/identity.pem"
+          # Fail here, with the reason, rather than inside build-app.sh with a
+          # bare "no identity found" from codesign.
+          if ! security find-identity -v -p codesigning "$keychain" | grep -q "1 valid identities found"; then
+            security find-identity -v -p codesigning "$keychain" >&2
+            echo "The imported certificate is not a valid code signing identity." >&2
+            exit 1
+          fi
 
       - name: Build the signed app
         env:
