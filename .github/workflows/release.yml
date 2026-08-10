@@ -43,6 +43,11 @@ jobs:
       # Without the certificate there is no correct build to publish, so the
       # job fails rather than shipping one that silently breaks focus.
       - name: Import the signing identity
+        # Everything here is a keychain call that either answers at once or is
+        # waiting for an authorization dialog that will never be answered. Three
+        # minutes turns that into a failure instead of a job that burns its
+        # entire thirty-minute budget before anyone finds out.
+        timeout-minutes: 3
         env:
           CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_SIGN_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGN_CERTIFICATE_PASSWORD }}
@@ -71,8 +76,14 @@ jobs:
           # and trust settings do not travel inside the .p12. The certificate is
           # read back out of the keychain rather than out of the .p12 so nothing
           # here has to guess how the file was encrypted.
+          # Into the system trust store with sudo, never the user's. The user
+          # domain asks for authorization through a dialog, which on a headless
+          # runner is nobody: the step does not fail, it hangs until the job
+          # times out. The runner has passwordless sudo and is destroyed after
+          # the job, so the system store is both reachable and disposable.
           security find-certificate -a -p "$keychain" > "$RUNNER_TEMP/identity.pem"
-          security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$RUNNER_TEMP/identity.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/identity.pem"
           rm -f "$RUNNER_TEMP/identity.pem"
           # Fail here, with the reason, rather than inside build-app.sh with a
           # bare "no identity found" from codesign.
