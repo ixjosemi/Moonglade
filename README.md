@@ -46,7 +46,7 @@ Apple Silicon is the tested development platform. Intel builds have not yet been
 One command downloads the latest release, verifies it against the published checksums, installs it into `/Applications`, wires the agent hooks, launches it, and verifies everything:
 
 ```bash
-curl -fsSL https://github.com/ixjosemi/Moonglade/releases/latest/download/install.sh | sh
+curl -fsSL https://moonglade.josemi.me/install | sh
 ```
 
 Read [the script](scripts/install-remote.sh) before running it if you would rather see what it does first. It needs Apple Silicon and macOS 14+, and it never prompts. Because `curl` does not set the quarantine attribute a browser download would, the app is not sent through Gatekeeper's unidentified-developer wall and you are never asked to disable a security control — the build is signed, but with a self-signed certificate rather than an Apple Developer identity, so it is not notarized.

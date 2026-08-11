@@ -358,7 +358,8 @@ h1 em {
   white-space: nowrap; overflow-x: auto;
   scrollbar-width: none;
   /* A flex item is as wide as its content unless it is told it may be smaller,
-     and this one is 89 unbreakable characters. Without this the command sizes
+     and this one is one unbroken line: a URL offers nowhere to break, so the
+     command is exactly as wide as it is. Without this the command sizes
      the shell past the viewport on every phone, `overflow-x: hidden` on the
      body swallows the excess, and the tail of the command is not scrolled off —
      it is gone, with no way to reach it. With it the shell fits and the code
@@ -457,7 +458,8 @@ h2 {
 /* `minmax(0, 1fr)` rather than `1fr`, here and on every track below. A grid
    track is at least as wide as the widest thing it holds unless it is told it
    may be narrower, and `1fr` alone does not tell it that. One un-wrappable line
-   inside a tile — the install command is 89 characters of it — would otherwise
+   inside a tile — the install command, whose URL offers nowhere to break —
+   would otherwise
    widen its track, the grid, the document, and with it the containing block a
    `position: fixed` element centres against. That is a single overflowing `pre`
    pulling the nav off centre two sections away, which is exactly as difficult
@@ -585,9 +587,9 @@ h2 {
 
 /* Install section */
 /* Stacked, not side by side. Two columns halve the width available to a command
-   that is 89 characters long, which forces it to scroll at every viewport size;
-   full width it simply fits, and the two paths read in the order you would try
-   them. */
+   that cannot be broken, which puts it back to scrolling at most viewport
+   sizes; full width it simply fits, and the two paths read in the order you
+   would try them. */
 /* The single column is written out rather than left implicit, because the
    implicit one is `auto` — which sizes to the longest line of the command it
    holds. See the note on the bento's tracks. */
@@ -716,7 +718,7 @@ footer {
     <div class="reveal" style="transition-delay: 120ms">
       <div class="command-shell">
         <div class="command" data-copy>
-          <code>curl -fsSL <b>https://github.com/ixjosemi/Moonglade/releases/latest/download/install.sh</b> | sh</code>
+          <code>curl -fsSL <b>https://moonglade.josemi.me/install</b> | sh</code>
           <!-- Icon only. The glyph carries the meaning, and the label the button
                no longer prints is the one screen readers announce. -->
           <button class="copy" type="button" aria-label="Copy the install command"><i>⧉</i></button>
@@ -881,7 +883,7 @@ footer {
         <h3>Published build</h3>
         <p>Downloads the latest release, checks it against the published checksums, installs it. No Xcode needed.</p>
         <div class="snippet" data-copy>
-          <pre>curl -fsSL https://github.com/ixjosemi/Moonglade/releases/latest/download/install.sh | sh</pre>
+          <pre>curl -fsSL https://moonglade.josemi.me/install | sh</pre>
           <button class="copy" type="button" aria-label="Copy the install command"><i>⧉</i></button>
         </div>
       </div></div>
