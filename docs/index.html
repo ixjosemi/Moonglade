@@ -32,6 +32,13 @@
   --glass: rgba(147, 168, 224, 0.06);
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --shell: 2rem;
+  /* Two fluid rhythms, declared once and read everywhere below, so a narrow
+     viewport tightens the page as a whole rather than section by section. The
+     gutter is the distance anything holds off the edge; the section is the air
+     above and below a band of content. Both are the desktop figure at the top
+     of their range, so nothing about the wide layout moves. */
+  --gutter: clamp(20px, 4.6vw, 32px);
+  --section: clamp(76px, 11vw, 140px);
   /* The native platform face. A macOS-only product has no business pulling a
      webfont off a third-party CDN when its own pitch is that it never touches
      the network. */
@@ -69,7 +76,19 @@ body::after {
 
 a { color: inherit; text-decoration: none; }
 
-.wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 32px; }
+/* Safari paints a grey rectangle over anything tappable the instant a finger
+   lands on it. The command answers a tap with its own ripple and the buttons
+   with their own press; none of them need a second, rectangular one. */
+a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
+
+/* The gutter is a floor rather than a fixed inset: a phone held in landscape
+   puts the sensor housing over the leading edge, and `env()` is the only thing
+   that knows how much of it. */
+.wrap {
+  width: 100%; max-width: 1080px; margin: 0 auto;
+  padding-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+}
 
 /* --- The nav, wearing the app's own silhouette --------------------------- */
 /* Moonglade hangs from the notch, and that outline is the product's signature:
@@ -116,7 +135,15 @@ a { color: inherit; text-decoration: none; }
 .nav-mark svg { width: 17px; height: 17px; }
 .nav-links { display: flex; gap: 24px; font-size: 13px; color: var(--ink-dim); }
 .nav-links a { transition: color 420ms var(--spring); }
-.nav-links a:hover { color: var(--ink); }
+/* Every hover state on this page is gated the same way, and this is the note
+   for all of them. Hover is a pointer's idea. A tap on a touch screen latches
+   `:hover` onto whatever was tapped and leaves it there until something else is
+   tapped, so an ungated hover reads on a phone as a row that stays lit and a
+   button stuck bright — the page describing a state the finger left long ago.
+   `hover: hover` is also what tells an iPad with a trackpad from one without. */
+@media (hover: hover) {
+  .nav-links a:hover { color: var(--ink); }
+}
 .nav-cta {
   display: flex; align-items: center; gap: 9px;
   padding: 7px 8px 7px 16px;
@@ -126,7 +153,9 @@ a { color: inherit; text-decoration: none; }
   background: rgba(233, 241, 255, 0.06);
   transition: transform 500ms var(--spring), background 500ms var(--spring);
 }
-.nav-cta:hover { background: rgba(233, 241, 255, 0.12); }
+@media (hover: hover) {
+  .nav-cta:hover { background: rgba(233, 241, 255, 0.12); }
+}
 .nav-cta:active { transform: scale(0.97); }
 /* Button-in-button: the arrow lives in its own well, flush with the pill. */
 .nav-cta i {
@@ -137,22 +166,41 @@ a { color: inherit; text-decoration: none; }
   font-style: normal; font-size: 11px;
   transition: transform 500ms var(--spring);
 }
-.nav-cta:hover i { transform: translate(2px, -2px); }
+@media (hover: hover) {
+  .nav-cta:hover i { transform: translate(2px, -2px); }
+}
 /* A display without a notch gets a detached bubble from the app rather than a
    panel welded to an edge that isn't there, and the page answers a viewport too
    narrow for the panel the same way: the shoulders have nothing to attach to,
-   so the bar floats free as a capsule. */
-@media (max-width: 720px) {
+   so the bar floats free as a capsule.
+
+   It changes at 780 rather than at its own 720, because a panel that is exactly
+   as wide as the viewport is a panel with no shoulders to see: the shape only
+   reads as the app's while there is night on either side of it. 780 leaves 30px
+   of that, which is the least that still looks deliberate. Below it the capsule
+   takes the page's own gutter, so the nav and the copy under it share an edge.
+
+   The safe-area inset is the top one here and only here: this is the single
+   fixed element on the page, so it is the only thing that can land under a
+   sensor housing without the document scrolling it back out. */
+@media (max-width: 780px) {
   .nav {
-    top: 12px;
-    width: calc(100vw - 24px); max-width: 420px; height: 52px;
-    padding: 0 10px 0 18px;
+    top: max(12px, env(safe-area-inset-top, 0px));
+    width: calc(100vw - 2 * var(--gutter)); max-width: 420px; height: 52px;
+    /* 9px of vertical padding around a 24px well is a 44px target, which is
+       what Apple asks of anything a thumb is meant to hit. The desktop panel
+       gets this for free from its own 56px height. */
+    padding: 0 9px 0 16px;
     border: 1px solid var(--hairline);
     border-radius: 999px;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
     clip-path: none;
   }
+  .nav-cta { padding: 9px 9px 9px 15px; }
   .nav-shape { display: none; }
+  /* Three anchors into a page of four sections are not worth a menu button and
+     the panel it would open. What is left is the mark and the one link that
+     leaves the page. */
   .nav-links { display: none; }
 }
 
@@ -162,8 +210,12 @@ a { color: inherit; text-decoration: none; }
   min-height: 100dvh;
   display: flex; flex-direction: column; justify-content: center;
   /* The panel now starts at the screen edge instead of floating 24px below it,
-     so the copy climbs the same distance to keep the gap under it unchanged. */
-  padding: 136px 0 80px;
+     so the copy climbs the same distance to keep the gap under it unchanged.
+     Fluid, because 136px is a comfortable clearance under a 56px panel on a
+     desktop and a sixth of the screen on a phone. The floor is the mobile
+     capsule's own reach — 12px down plus 52px tall — with the same air again
+     beneath it. */
+  padding: clamp(104px, 17vw, 136px) 0 clamp(56px, 8vw, 80px);
   isolation: isolate;
 }
 /* The scene is one drawn image rather than a sky assembled out of gradients,
@@ -227,8 +279,12 @@ a { color: inherit; text-decoration: none; }
 .eyebrow b { color: var(--violet); font-weight: 560; }
 
 h1 {
-  margin-top: 26px;
-  font-size: clamp(40px, 7.2vw, 82px);
+  margin-top: clamp(20px, 3vw, 26px);
+  /* The floor is set by the longer of the two lines: "Know when your agents" is
+     21 characters, and 33px is the largest size at which it still clears the
+     gutters of a 390pt phone on one line. A larger floor does not read as
+     bolder, it reads as a headline that broke. */
+  font-size: clamp(33px, 7.6vw, 82px);
   line-height: 0.98;
   letter-spacing: -0.045em;
   font-weight: 580;
@@ -245,7 +301,7 @@ h1 em {
 .hero .wrap { text-align: center; }
 .hero .command-shell { margin-left: auto; margin-right: auto; }
 .lede {
-  margin-top: 24px; max-width: 620px; margin-left: auto; margin-right: auto;
+  margin-top: clamp(16px, 2.4vw, 24px); max-width: 620px; margin-left: auto; margin-right: auto;
   font-size: clamp(15px, 1.7vw, 18px);
   color: var(--ink-dim);
   letter-spacing: -0.014em;
@@ -257,9 +313,12 @@ h1 em {
    of the hero into a run of outlines. They sit slightly back at rest so they
    support the headline instead of competing with it. */
 .agents {
-  margin-top: 26px;
+  margin-top: clamp(22px, 3vw, 26px);
   display: flex; flex-wrap: wrap; justify-content: center; align-items: center;
-  gap: 26px;
+  /* Five 26px marks and four gaps have to stay on one line: wrapped, the row
+     stops reading as a set and starts reading as a list that ran out of room.
+     18px is what keeps them on one line inside a 320pt phone's gutters. */
+  gap: clamp(18px, 3.4vw, 26px);
   list-style: none;
 }
 .agents img {
@@ -269,11 +328,13 @@ h1 em {
   opacity: 0.78;
   transition: opacity 500ms var(--spring);
 }
-.agents li:hover img { opacity: 1; }
+@media (hover: hover) {
+  .agents li:hover img { opacity: 1; }
+}
 
 /* --- The install command: outer tray, inner plate ------------------------ */
 .command-shell {
-  margin-top: 42px;
+  margin-top: clamp(30px, 4.4vw, 42px);
   width: max-content; max-width: 100%;
   padding: 6px;
   border-radius: var(--shell);
@@ -283,8 +344,8 @@ h1 em {
 }
 .command {
   position: relative; overflow: hidden;
-  display: flex; align-items: center; gap: 20px;
-  padding: 17px 10px 17px 22px;
+  display: flex; align-items: center; gap: clamp(10px, 2.4vw, 20px);
+  padding: 17px 10px 17px clamp(16px, 3vw, 22px);
   border-radius: calc(var(--shell) - 6px);
   background: linear-gradient(180deg, rgba(12, 17, 38, 0.92), rgba(6, 9, 22, 0.92));
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.11);
@@ -296,6 +357,16 @@ h1 em {
   color: var(--frost);
   white-space: nowrap; overflow-x: auto;
   scrollbar-width: none;
+  /* A flex item is as wide as its content unless it is told it may be smaller,
+     and this one is 89 unbreakable characters. Without this the command sizes
+     the shell past the viewport on every phone, `overflow-x: hidden` on the
+     body swallows the excess, and the tail of the command is not scrolled off —
+     it is gone, with no way to reach it. With it the shell fits and the code
+     scrolls inside, which is what the `overflow-x` above was always for. */
+  min-width: 0;
+  /* And a horizontal fling that reaches the end of the command should stop
+     there rather than turn into the browser's back gesture. */
+  overscroll-behavior-x: contain;
 }
 .command code::-webkit-scrollbar { display: none; }
 .command code b { color: var(--violet); font-weight: 400; }
@@ -314,13 +385,17 @@ h1 em {
   transition: transform 500ms var(--spring), background 500ms var(--spring),
               border-color 500ms var(--spring);
 }
-.copy:hover { background: rgba(233, 241, 255, 0.11); }
+@media (hover: hover) {
+  .copy:hover { background: rgba(233, 241, 255, 0.11); }
+}
 .copy:active { transform: scale(0.96); }
 .copy i {
   font-style: normal; font-size: 19px; line-height: 1;
   transition: transform 500ms var(--spring);
 }
-.copy:hover i { transform: translate(1px, -1px) scale(1.08); }
+@media (hover: hover) {
+  .copy:hover i { transform: translate(1px, -1px) scale(1.08); }
+}
 .copy.done {
   background: rgba(125, 109, 255, 0.20);
   border-color: rgba(125, 109, 255, 0.45);
@@ -340,7 +415,29 @@ h1 em {
    links in the nav and the footer row do not: on its own it would be invisible,
    because every link on this page inherits its colour. */
 .hero-note a, .byline { color: var(--ink-dim); border-bottom: 1px solid var(--hairline); transition: color 420ms var(--spring); }
-.hero-note a:hover, .byline:hover { color: var(--ink); }
+@media (hover: hover) {
+  .hero-note a:hover, .byline:hover { color: var(--ink); }
+}
+
+/* A phone held in landscape is the one viewport where width lies about how much
+   room there is. Every size in the hero is keyed to `vw`, and 852 of them make
+   a 65px headline inside a window 393px tall — so the eyebrow and the headline
+   fill the screen and the install command, the one thing the hero exists to
+   hand over, sits below the fold. Height is the binding constraint here, so in
+   this one band the type and the clearance answer to it instead.
+
+   The floor at 100dvh goes with it: a hero that insists on a full screen it
+   cannot fill is just more of the scrolling this is trying to avoid. Bounded by
+   `max-height` and not by orientation alone, so an iPad in landscape — 834px of
+   height — keeps the full-size hero. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .hero { min-height: 0; padding: 92px 0 56px; }
+  h1 { font-size: clamp(30px, 5.2vh, 46px); }
+  .lede { font-size: 15px; }
+  .agents { margin-top: 18px; gap: 20px; }
+  .agents img { width: 22px; height: 22px; }
+  .command-shell { margin-top: 24px; }
+}
 
 /* --- Reveal choreography ------------------------------------------------- */
 .reveal { opacity: 0; transform: translateY(48px); filter: blur(10px); transition: opacity 900ms var(--spring), transform 900ms var(--spring), filter 900ms var(--spring); }
@@ -348,7 +445,7 @@ h1 em {
 @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; filter: none; } }
 
 /* --- Sections ------------------------------------------------------------ */
-section { position: relative; padding: 140px 0; }
+section { position: relative; padding: var(--section) 0; }
 .section-head { max-width: 620px; }
 h2 {
   font-size: clamp(28px, 4vw, 44px);
@@ -357,7 +454,15 @@ h2 {
 .section-head p { margin-top: 18px; color: var(--ink-dim); font-size: clamp(14.5px, 1.6vw, 17px); }
 
 /* Asymmetrical bento */
-.bento { margin-top: 64px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; }
+/* `minmax(0, 1fr)` rather than `1fr`, here and on every track below. A grid
+   track is at least as wide as the widest thing it holds unless it is told it
+   may be narrower, and `1fr` alone does not tell it that. One un-wrappable line
+   inside a tile — the install command is 89 characters of it — would otherwise
+   widen its track, the grid, the document, and with it the containing block a
+   `position: fixed` element centres against. That is a single overflowing `pre`
+   pulling the nav off centre two sections away, which is exactly as difficult
+   to find as it sounds. */
+.bento { margin-top: clamp(36px, 5.4vw, 64px); display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: clamp(14px, 1.8vw, 18px); }
 .tile {
   padding: 5px;
   border-radius: var(--shell);
@@ -366,7 +471,7 @@ h2 {
 }
 .tile-core {
   height: 100%;
-  padding: 30px;
+  padding: clamp(20px, 3.4vw, 30px);
   border-radius: calc(var(--shell) - 5px);
   background: linear-gradient(180deg, rgba(14, 19, 42, 0.86), rgba(6, 9, 22, 0.86));
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
@@ -378,9 +483,36 @@ h2 {
 .span-4 { grid-column: span 4; }
 .span-8 { grid-column: span 8; }
 .span-12 { grid-column: span 12; }
-@media (max-width: 860px) {
-  .bento { grid-template-columns: 1fr; gap: 16px; }
-  .span-7, .span-5, .span-4, .span-8, .span-12 { grid-column: span 1; }
+/* Three steps down, not one. The twelve tracks stay put at every width and only
+   the spans move, so there is one grid to reason about rather than three.
+
+   An iPad in portrait is 834pt wide. Collapsing straight to a single column
+   there — which is what one breakpoint at 860 did — spends a screen with room
+   for two side by side on a stack of full-width blocks. So the first step keeps
+   the pairs paired and only evens them out: the 5/7 and the 8/4 both become
+   6/6, which is the same reading order at a width that no longer has the slack
+   for the asymmetry.
+
+   The three measurements are the exception, and they get their own step. They
+   are a row of figures — the point of them is that you read across, not down —
+   so they hold three abreast until the third of a viewport left to each stops
+   being wide enough for the sentence under the figure. */
+@media (max-width: 1000px) {
+  .bento > [class*="span-"] { grid-column: span 6; }
+  .bento > .span-12 { grid-column: span 12; }
+  .measures > .span-4 { grid-column: span 4; }
+}
+@media (max-width: 700px) {
+  .bento > [class*="span-"] { grid-column: span 12; }
+  .measures > .span-4 { grid-column: span 4; }
+}
+/* The measurements hold three abreast far longer than the tiles do, and they
+   have to: a figure and its one-line gloss stretched across the full width is a
+   band of empty card, and three of them in a column stop reading as a set you
+   compare. They break only when a third of the width can no longer hold the
+   gloss in a few lines, which is around 620. */
+@media (max-width: 620px) {
+  .measures > .span-4 { grid-column: span 12; }
 }
 
 /* The three states, rendered as themselves */
@@ -395,7 +527,7 @@ h2 {
 
 /* The notch, recreated */
 .notch-stage {
-  margin-top: 64px;
+  margin-top: clamp(36px, 5.4vw, 64px);
   padding: 6px;
   border-radius: var(--shell);
   border: 1px solid var(--hairline);
@@ -405,7 +537,10 @@ h2 {
   border-radius: calc(var(--shell) - 6px);
   background: linear-gradient(180deg, rgba(16, 22, 48, 0.9), rgba(5, 8, 20, 0.94));
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.09);
-  padding: 34px 24px 40px;
+  /* The stage's side padding gives way first: it is framing, and the menu
+     inside it is the thing being framed. On a phone the frame is down to 12px
+     a side and the rows keep their width. */
+  padding: clamp(22px, 4vw, 34px) clamp(12px, 3vw, 24px) clamp(26px, 4.6vw, 40px);
   display: flex; flex-direction: column; align-items: center;
 }
 .bar {
@@ -427,13 +562,15 @@ h2 {
   overflow: hidden;
 }
 .row {
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 18px;
+  display: flex; align-items: center; gap: clamp(10px, 2vw, 14px);
+  padding: 14px clamp(12px, 2.4vw, 18px);
   border-bottom: 1px solid rgba(233, 241, 255, 0.05);
   transition: background 500ms var(--spring);
 }
 .row:last-child { border-bottom: none; }
-.row:hover { background: rgba(233, 241, 255, 0.045); }
+@media (hover: hover) {
+  .row:hover { background: rgba(233, 241, 255, 0.045); }
+}
 .row-main { flex: 1; min-width: 0; }
 .row-title { font-size: 13.5px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-meta { margin-top: 3px; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -451,9 +588,14 @@ h2 {
    that is 89 characters long, which forces it to scroll at every viewport size;
    full width it simply fits, and the two paths read in the order you would try
    them. */
-.paths { margin-top: 56px; display: grid; gap: 18px; }
+/* The single column is written out rather than left implicit, because the
+   implicit one is `auto` — which sizes to the longest line of the command it
+   holds. See the note on the bento's tracks. */
+.paths { margin-top: clamp(32px, 5vw, 56px); display: grid; grid-template-columns: minmax(0, 1fr); gap: clamp(14px, 1.8vw, 18px); }
 .path-core pre {
-  padding: 16px 58px 16px 16px;
+  /* The right inset clears the gutter below, so the last character of a command
+     scrolled to its end stops before the fade rather than inside it. */
+  padding: 16px 84px 16px 16px;
   background: rgba(3, 5, 14, 0.75);
   border: 1px solid var(--hairline);
   border-radius: 14px;
@@ -462,24 +604,49 @@ h2 {
      copied far more often than it is read, and a continuation that survives the
      page but not the clipboard is a trap. It scrolls instead. */
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
 }
 .path-core pre::-webkit-scrollbar { display: none; }
 /* Every command on the page copies the same way, so it is the same button —
    smaller here because it sits inside the block rather than beside it. */
 .snippet { position: relative; margin-top: 16px; overflow: hidden; border-radius: 14px; cursor: pointer; }
+/* The button floats over a block that scrolls under it, so it needs ground of
+   its own: without this the command runs straight through the glyph the moment
+   the viewport is too narrow to hold the whole line. The opaque end is the
+   `pre`'s own composited background sampled off the rendered page, not a guess
+   at what four stacked translucent layers add up to — a near miss here reads as
+   a grey patch welded to the corner. The fade doubles as the only hint the page
+   gives that there is more command to the right.
+   Clipped by the snippet's own radius and `overflow: hidden`, so it needs no
+   corner of its own. */
+.snippet::after {
+  content: "";
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 80px;
+  background: linear-gradient(90deg, rgba(7, 9, 19, 0) 0%, rgb(7, 9, 19) 55%);
+  pointer-events: none;
+}
 .snippet .copy { position: absolute; top: 9px; right: 9px; z-index: 1; width: 34px; height: 34px; }
 .snippet .copy i { font-size: 15px; }
 
 footer {
-  padding: 70px 0 90px;
+  padding-top: clamp(44px, 6vw, 70px);
+  /* The last thing on the page, so it is the one that has to clear the home
+     indicator on a phone held upright. */
+  padding-bottom: calc(clamp(52px, 7vw, 90px) + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid var(--hairline);
   color: var(--ink-faint); font-size: 13px;
 }
-.foot-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
-.foot-links { display: flex; gap: 22px; }
+/* Wrapping is the whole layout here rather than a fallback: on a wide viewport
+   the byline and the links sit at opposite ends of one line, and on a narrow
+   one they stack in reading order with the same gap between them. */
+.foot-row { display: flex; justify-content: space-between; align-items: center; gap: 20px 24px; flex-wrap: wrap; }
+.foot-links { display: flex; flex-wrap: wrap; gap: 22px; }
 .foot-links a { transition: color 420ms var(--spring); }
-.foot-links a:hover { color: var(--ink); }
+@media (hover: hover) {
+  .foot-links a:hover { color: var(--ink); }
+}
 </style>
 </head>
 <body>
@@ -678,7 +845,10 @@ footer {
         stored — not locally, not anywhere.
       </p>
     </div>
-    <div class="bento">
+    <!-- A row of figures rather than a row of cards: see the `.measures` step
+         in the bento's breakpoints for why these three collapse on their own
+         schedule. -->
+    <div class="bento measures">
       <div class="tile span-4 reveal"><div class="tile-core">
         <h3>~1% CPU</h3>
         <p>A libproc scan at about 2 ms per sweep on a five-second heartbeat, off the main thread.</p>
