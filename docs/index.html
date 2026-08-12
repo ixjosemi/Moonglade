@@ -527,45 +527,152 @@ h2 {
 .dot.grey { background: var(--ink-faint); }
 .spin { font-family: var(--mono); color: var(--frost); font-size: 13px; width: 9px; }
 
-/* The notch, recreated */
-.notch-stage {
-  margin-top: clamp(36px, 5.4vw, 64px);
-  padding: 6px;
-  border-radius: var(--shell);
-  border: 1px solid var(--hairline);
-  background: rgba(147, 168, 224, 0.05);
+/* --- The machine, and the two shapes that hang from it -------------------- */
+/* The lid is a 14-inch MacBook Pro reduced to the two ratios the eye actually
+   checks: the bezel is 1.67% of the display's width, and the band across the
+   camera is 2.4% of it. It stops above the chin. A hinge, a wordmark and a
+   keyboard would cost the panel half its size and teach nothing about the app.
+
+   What hangs inside is at the app's scale rather than the display's: 800pt of
+   panel, a 36pt band, 48pt rows, straight out of NotchLayout. That makes the
+   depicted screen about 1200 points wide instead of 1512 — every piece of
+   chrome enlarged by the same 1.26 — which reads as a coarser display and
+   nothing worse, while the type stays at a size you can read. Scaling the
+   interface down to a true 1512 instead would put the row titles at 10px.
+
+   Both silhouettes are the app's own geometry and are built the way `.nav` is:
+   one path per shape, used twice — as the clip that cuts the glass and as the
+   stroke that rims it. The note above `.nav` covers why they carry a fixed
+   size, and what happens at the width where they no longer fit. */
+.lid {
+  /* Wider than the column it sits in. An 800pt panel inside a display only a
+     third wider than itself stops reading as a display; the page's own gutter
+     is still what holds it off the edge. */
+  --lid: min(1240px, calc(100vw - 2 * var(--gutter)));
+  width: var(--lid);
+  margin: clamp(36px, 5.4vw, 64px) calc((100% - var(--lid)) / 2) 0;
+  padding: 20px 20px 0;
+  border-radius: 28px 28px 0 0;
+  background: linear-gradient(180deg, #1c212c, #0b0e15);
+  box-shadow: inset 0 1px 0 rgba(233, 241, 255, 0.20),
+              inset 0 0 0 1px rgba(233, 241, 255, 0.07);
+  /* Cropped, and faded rather than cut, so the eye finishes the machine
+     instead of finding it truncated. A mask and not a filter: a filter here
+     would reset the backdrop root and leave the panel's frost blurring
+     nothing. Same trap the nav's missing drop shadow avoids. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 150px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 150px), transparent);
 }
-.notch-core {
-  border-radius: calc(var(--shell) - 6px);
-  background: linear-gradient(180deg, rgba(16, 22, 48, 0.9), rgba(5, 8, 20, 0.94));
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.09);
-  /* The stage's side padding gives way first: it is framing, and the menu
-     inside it is the thing being framed. On a phone the frame is down to 12px
-     a side and the rows keep their width. */
-  padding: clamp(22px, 4vw, 34px) clamp(12px, 3vw, 24px) clamp(26px, 4.6vw, 40px);
-  display: flex; flex-direction: column; align-items: center;
-}
-.bar {
-  display: flex; align-items: center; gap: 12px;
-  padding: 7px 16px;
-  border-radius: 0 0 16px 16px;
-  background: #000;
-  border: 1px solid rgba(233, 241, 255, 0.08); border-top: none;
-  font-size: 12.5px; font-family: var(--mono);
-}
-.bar .pair { display: flex; align-items: center; gap: 6px; }
-.camera { width: 7px; height: 7px; border-radius: 50%; background: #14181f; margin: 0 6px; }
-.menu {
-  margin-top: 22px; width: 100%; max-width: 640px;
-  border-radius: 18px;
-  border: 1px solid var(--hairline);
-  background: rgba(10, 14, 32, 0.72);
-  backdrop-filter: blur(12px);
+.screen {
+  position: relative;
   overflow: hidden;
+  border-radius: 14px 14px 0 0;
+  background: var(--night-deep);
+  padding-bottom: 190px;
 }
+/* The banner pools desktop light behind each shoulder so the flare does not
+   merge into a dark desktop. Not here, and the reason is the gutter: the
+   silhouette's straight side sits 14px inside the panel's box, so that strip
+   of wallpaper runs the panel's full height, and anything lit behind it comes
+   out as a stripe down both sides rather than a bloom at the corner. The lit
+   wallpaper carries the flare on its own. */
+/* The desktop is the page's own scene, dimmed until it is wallpaper: one moon
+   across the hero, the icon, the banner and this screen. Dimmed rather than
+   replaced by a flat fill because the menu bar's translucency and the panel's
+   frost need something behind them to work on. Already fetched by the hero, so
+   the second display of it costs nothing. */
+/* Framed on the moon rather than on the sky above it. The panel is pure black
+   and the menu bar is a 40% wash, so both need a lit desktop under them to be
+   told apart at all — a scene dimmed until it is uniform turns the machine off
+   and the notch into a smudge. */
+.wallpaper {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover; object-position: 50% 42%;
+  filter: brightness(0.92) saturate(0.95);
+}
+.menubar {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  height: 36px; padding: 0 16px;
+  font-size: 12.5px;
+  color: rgba(238, 244, 255, 0.9);
+  background: rgba(9, 13, 30, 0.4);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+}
+.menubar > div { display: flex; align-items: center; gap: 15px; white-space: nowrap; }
+.menubar b { font-weight: 620; }
+.menubar svg { display: block; color: rgba(238, 244, 255, 0.76); }
+
+/* The panel, hanging. 800 x 238 and the 34px content inset are NotchLayout's
+   own numbers — 14 of shoulder, then the 20 the app keeps inside it — and the
+   negative top margin is what welds the shape to the screen edge: the app
+   draws over the menu bar strip, it does not sit under it. */
+.panel {
+  position: relative;
+  width: 800px; height: 238px;
+  margin: -36px auto 0;
+  padding: 0 34px;
+  clip-path: url(#panel-clip);
+  /* Pure black across the camera band, always, in every state: the housing is
+     under it. Below the band the frost takes over, and it is a layer of its
+     own rather than this element's own background — see `.panel-glass`. */
+  background: linear-gradient(180deg, #000 0, #000 36px, transparent 36px);
+}
+/* The frost, inset to the straight sides the shoulders leave behind.
+   `backdrop-filter` is NOT clipped by `clip-path` — Chrome fills the whole
+   border box with the filtered backdrop and lets `clip-path` cut only the
+   element's own paint — so a frosted panel carrying the silhouette directly
+   lights up the 14px gutter beside each straight side and draws a bright
+   stripe down both edges where the wallpaper should simply show through. A
+   box that never enters the gutter cannot leak into it, and `border-radius`,
+   unlike `clip-path`, does clip the backdrop: 20px here is the same lower
+   corner the silhouette turns, so the two edges coincide exactly.
+
+   The stops are the banner's `mg-scrim` curve, remapped onto the shorter box
+   and taken down a little: the banner has lit blooms behind it and this has a
+   night sky, and carried over as-is the glass comes out a black card. What
+   makes it read as vibrancy rather than a tint is the saturate, not the fill —
+   macOS pulls the colour up out of the desktop as it blurs it. */
+.panel-glass {
+  position: absolute; z-index: 0;
+  top: 36px; right: 14px; bottom: 0; left: 14px;
+  border-radius: 0 0 20px 20px;
+  background: linear-gradient(180deg,
+      rgba(0, 0, 0, 0.95) 0,
+      rgba(0, 0, 0, 0.78) 17%,
+      rgba(0, 0, 0, 0.66) 41%,
+      rgba(0, 0, 0, 0.56) 69%,
+      rgba(0, 0, 0, 0.5) 100%);
+  backdrop-filter: blur(30px) saturate(190%) brightness(1.2);
+  -webkit-backdrop-filter: blur(30px) saturate(190%) brightness(1.2);
+}
+.panel-head, .menu { position: relative; z-index: 1; }
+.shapes { position: absolute; width: 0; height: 0; }
+.panel-shape { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
+/* Light caught on the top shoulders and fading out down the sides, not a line
+   drawn evenly around the shape: an even one reads as a border, and a border
+   is the one thing a pane of glass does not have. */
+.rim { fill: none; stroke: url(#rim-light); stroke-width: 2; }
+.panel-head {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  height: 36px;
+  font-size: 12.5px; font-weight: 560; color: var(--ink-dim);
+}
+.panel-head > :last-child {
+  justify-self: end;
+  display: flex; align-items: center; gap: 9px;
+  font-size: 11.5px; font-weight: 500;
+}
+.camera {
+  width: 9.2px; height: 9.2px; border-radius: 50%;
+  background: radial-gradient(circle, #24262d 0 2px, #15161b 2.2px);
+}
+.menu { margin-top: 8px; }
 .row {
-  display: flex; align-items: center; gap: clamp(10px, 2vw, 14px);
-  padding: 14px clamp(12px, 2.4vw, 18px);
+  display: flex; align-items: center; gap: 10px;
+  height: 48px;
   border-bottom: 1px solid rgba(233, 241, 255, 0.05);
   transition: background 500ms var(--spring);
 }
@@ -573,17 +680,115 @@ h2 {
 @media (hover: hover) {
   .row:hover { background: rgba(233, 241, 255, 0.045); }
 }
+/* A fixed column for the light, so four rows put their status on one axis
+   however wide the mark beside it draws. */
+.led { position: relative; display: grid; place-items: center; width: 18px; flex-shrink: 0; }
+/* The one light that is asking for something does not sit still — not in the
+   app, not in the banner. Same 1.8s period, same ring leaving with it. */
+/* Positioned so the ring measures the dot and not the column: `.led` is a
+   full-height cell, and an `inset: 0` resolved against it comes out an ellipse. */
+.led .dot.red { position: relative; animation: led-pulse 1.8s ease-in-out infinite; }
+.led .dot.red::after {
+  content: ""; position: absolute; inset: 0;
+  border: 1.2px solid #ff5d5d; border-radius: 50%;
+  animation: led-ring 1.8s ease-out infinite;
+}
+@keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes led-ring { from { transform: scale(1); opacity: 0.6; } to { transform: scale(2.6); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .led .dot.red { animation: none; }
+  .led .dot.red::after { display: none; }
+}
+/* A step under the app's own 15 and 12. The boxes around them are at the app's
+   scale but the display holding those boxes is drawn at 0.79 of its real
+   width, so type set at native size comes out reading a size too large against
+   the machine. Dropping one step splits the difference, and leaves the 48pt
+   row the air it has on screen. */
 .row-main { flex: 1; min-width: 0; }
-.row-title { font-size: 13.5px; font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row-title { font-size: 13.5px; font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-meta { margin-top: 3px; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row-time { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); flex-shrink: 0; }
+.row-time { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); flex-shrink: 0; }
 /* 16px is what AgentIconView draws in a real row, so the demo is at scale
    rather than an impression of one. The name the mark replaced now lives in
    its alt text, which is also what a screen reader reads out of this row.
    Unlike the elapsed time, the mark survives a narrow viewport: it is how you
    tell one row from another, and it costs 16px to keep. */
 .provider { width: 16px; height: 16px; object-fit: contain; flex-shrink: 0; }
+
+/* The same panel at rest, which is all you see while the sessions run. Its
+   counts are the four rows above: two running, one waiting, one that needs
+   you. Running and waiting sit left of the camera and blocked sits right, each
+   pair turning its round glyph to the outer edge so both wings meet their
+   shoulder the same way. */
+.at-rest {
+  margin-top: clamp(30px, 4.4vw, 48px);
+  text-align: center;
+  font-size: 13.5px; color: var(--ink-faint);
+}
+.bar {
+  position: relative;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  width: 336px; height: 36px;
+  margin: 14px auto 0;
+  /* The outermost glyph clears the shoulder rather than landing on the point
+     where the curve peels away — NotchLayout's hardwareNotchOuterWingPadding,
+     which is the shoulder radius plus a little air. */
+  padding: 0 28px;
+  clip-path: url(#bar-clip);
+  background: #000;
+  font-size: 12.5px;
+}
+.bar .wing { display: flex; align-items: center; gap: 16px; }
+.bar > .pair { justify-self: end; }
+.bar .pair { display: flex; align-items: center; gap: 7px; }
+
 @media (max-width: 640px) { .row-time { display: none; } }
+/* Below the width that still leaves night on either side of an 800pt panel,
+   the page shows the presentation the app itself falls back to on a display
+   with no camera housing: NotchLayout's `.pill`, every corner rounded to the
+   same 20pt lower radius, floating `pillExpandedTopGap` clear of the edge
+   instead of welded to it. The nav changes for the same reason at 780. */
+@media (max-width: 1000px) {
+  .lid {
+    padding: 14px 14px 0;
+    border-radius: 22px 22px 0 0;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 110px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 110px), transparent);
+  }
+  .screen { border-radius: 10px 10px 0 0; padding-bottom: clamp(84px, 13vw, 150px); }
+  .panel {
+    /* Off the screen's edges by the gap it keeps from the top one: a bubble
+       flush with three sides is a card, not something floating on a desktop. */
+    width: min(800px, calc(100% - 16px)); height: auto;
+    margin-top: 8px;
+    padding: 14px 20px;
+    overflow: hidden;
+    clip-path: none;
+    background: none;
+  }
+  /* No shoulders to stay clear of, so the frost is the whole bubble. */
+  .panel-glass {
+    inset: 0;
+    border-radius: 20px;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.58));
+  }
+  /* No camera housing on a display that has none, in either shape. */
+  .panel-shape, .camera { display: none; }
+  .panel-head { grid-template-columns: 1fr auto; height: 26px; }
+  .bar {
+    display: flex; justify-content: center; gap: 16px;
+    clip-path: none;
+    border-radius: 999px;
+  }
+  /* With no camera between them there is no outer edge to face, so the wing
+     that was mirrored turns back and every pair reads glyph-then-count. */
+  .bar > .pair { flex-direction: row-reverse; }
+}
+@media (max-width: 700px) {
+  .menubar { padding: 0 12px; }
+  .menubar .apps span, .menubar svg { display: none; }
+}
+@media (max-width: 400px) { .bar { width: 100%; padding: 0 20px; } }
 
 /* Install section */
 /* Stacked, not side by side. Two columns halve the width available to a command
@@ -743,53 +948,121 @@ footer {
       </p>
     </div>
 
-    <div class="notch-stage reveal">
-      <div class="notch-core">
-        <div class="bar">
-          <span class="pair"><span class="spin" id="spinner">⠋</span> 2</span>
-          <span class="pair"><span class="dot green"></span> 1</span>
-          <span class="camera"></span>
-          <span class="pair"><span class="dot red"></span> 1</span>
+    <!-- Both silhouettes and the light on them, defined once. Traversed
+         clockwise from the top-left exactly as the nav's is: the top edge runs
+         the full outer width, both shoulders curve inward with the sweep flag
+         reversed because they are concave, and the lower corners round like
+         any panel. -->
+    <svg class="shapes" aria-hidden="true" focusable="false">
+      <defs>
+        <path id="panel-silhouette"
+              d="M0 0 H800 A14 14 0 0 0 786 14 V218 A20 20 0 0 1 766 238 H34 A20 20 0 0 1 14 218 V14 A14 14 0 0 0 0 0 Z"/>
+        <path id="bar-silhouette"
+              d="M0 0 H336 A14 14 0 0 0 322 14 V16 A20 20 0 0 1 302 36 H34 A20 20 0 0 1 14 16 V14 A14 14 0 0 0 0 0 Z"/>
+        <clipPath id="panel-clip" clipPathUnits="userSpaceOnUse"><use href="#panel-silhouette"/></clipPath>
+        <clipPath id="bar-clip" clipPathUnits="userSpaceOnUse"><use href="#bar-silhouette"/></clipPath>
+        <linearGradient id="rim-light" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
+          <stop offset="0.25" stop-color="#ffffff" stop-opacity="0.10"/>
+          <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+        </linearGradient>
+      </defs>
+    </svg>
+
+    <div class="lid reveal">
+      <div class="screen">
+        <img class="wallpaper" src="hero-moonglade.webp" alt="" width="1506" height="1024" loading="lazy" decoding="async">
+
+        <div class="menubar" aria-hidden="true">
+          <div class="apps"><b>Ghostty</b><span>File</span><span>Edit</span><span>View</span></div>
+          <div>
+            <svg viewBox="0 0 16 12" width="16" height="12" fill="none" focusable="false"><path d="M8 10.4 6 8.3a2.9 2.9 0 0 1 4 0Z" fill="currentColor"/><path d="M2.9 5.2a7.3 7.3 0 0 1 10.2 0M5 7.3a4.3 4.3 0 0 1 6 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 26 12" width="26" height="12" focusable="false"><rect x=".6" y=".6" width="21" height="10.8" rx="3.2" fill="none" stroke="currentColor" stroke-opacity=".5" stroke-width="1.2"/><rect x="2.4" y="2.4" width="13.2" height="7.2" rx="1.7" fill="currentColor"/><path d="M23.4 4.3a3 3 0 0 1 0 3.4Z" fill="currentColor" fill-opacity=".5"/></svg>
+            <span>Tue 21:14</span>
+          </div>
         </div>
-        <div class="menu">
-          <div class="row">
-            <img class="provider" src="icons/claude.svg" alt="Claude Code" width="16" height="16" decoding="async">
-            <span class="spin">⠙</span>
-            <div class="row-main">
-              <div class="row-title">Refactor the session matcher</div>
-              <div class="row-meta">~/Development/moonglade · feat/ghostty-identity</div>
-            </div>
-            <span class="row-time">4m 12s</span>
+
+        <div class="panel">
+          <div class="panel-glass"></div>
+          <svg class="panel-shape" viewBox="0 0 800 238" aria-hidden="true" focusable="false">
+            <use class="rim" href="#panel-silhouette"/>
+          </svg>
+
+          <div class="panel-head">
+            <span>Active sessions</span>
+            <span class="camera"></span>
+            <span>4
+              <!-- SF Symbols `gearshape`: a hollow ring with eight rounded teeth -->
+              <svg viewBox="-9 -9 18 18" width="13" height="13" aria-hidden="true" focusable="false">
+                <circle r="3.9" fill="none" stroke="currentColor" stroke-width="2.2"/>
+                <g fill="currentColor">
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1"/>
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(45)"/>
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(90)"/>
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(135)"/>
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(180)"/>
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(225)"/>
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(270)"/>
+                  <rect x="-1.28" y="-6.55" width="2.55" height="2.9" rx="1" transform="rotate(315)"/>
+                </g>
+              </svg>
+            </span>
           </div>
-          <div class="row">
-            <img class="provider" src="icons/opencode.svg" alt="OpenCode" width="16" height="16" decoding="async">
-            <span class="dot red"></span>
-            <div class="row-main">
-              <div class="row-title">Wire the release pipeline</div>
-              <div class="row-meta">~/Development/moonglade · permission requested</div>
+
+          <div class="menu">
+            <div class="row">
+              <img class="provider" src="icons/claude.svg" alt="Claude Code" width="16" height="16" decoding="async">
+              <span class="led"><span class="spin">⠙</span></span>
+              <div class="row-main">
+                <div class="row-title">Refactor the session matcher</div>
+                <div class="row-meta">~/Development/moonglade · feat/ghostty-identity</div>
+              </div>
+              <span class="row-time">4m 12s</span>
             </div>
-            <span class="row-time">18s</span>
-          </div>
-          <div class="row">
-            <img class="provider" src="icons/convoy.svg" alt="Convoy" width="16" height="16" decoding="async">
-            <span class="spin">⠸</span>
-            <div class="row-main">
-              <div class="row-title">implement · step 4 of 6</div>
-              <div class="row-meta">~/Development/api · review</div>
+            <div class="row">
+              <img class="provider" src="icons/opencode.svg" alt="OpenCode" width="16" height="16" decoding="async">
+              <span class="led"><span class="dot red"></span></span>
+              <div class="row-main">
+                <div class="row-title">Wire the release pipeline</div>
+                <div class="row-meta">~/Development/moonglade · permission requested</div>
+              </div>
+              <span class="row-time">18s</span>
             </div>
-            <span class="row-time">7m 08s</span>
-          </div>
-          <div class="row">
-            <img class="provider" src="icons/codex.svg" alt="Codex" width="16" height="16" decoding="async">
-            <span class="dot green"></span>
-            <div class="row-main">
-              <div class="row-title">Audit the state repository</div>
-              <div class="row-meta">~/Development/moonglade · main</div>
+            <div class="row">
+              <img class="provider" src="icons/convoy.svg" alt="Convoy" width="16" height="16" decoding="async">
+              <span class="led"><span class="spin">⠸</span></span>
+              <div class="row-main">
+                <div class="row-title">implement · step 4 of 6</div>
+                <div class="row-meta">~/Development/api · review</div>
+              </div>
+              <span class="row-time">7m 08s</span>
             </div>
-            <span class="row-time">1m 40s</span>
+            <div class="row">
+              <img class="provider" src="icons/codex.svg" alt="Codex" width="16" height="16" decoding="async">
+              <span class="led"><span class="dot green"></span></span>
+              <div class="row-main">
+                <div class="row-title">Audit the state repository</div>
+                <div class="row-meta">~/Development/moonglade · main</div>
+              </div>
+              <span class="row-time">1m 40s</span>
+            </div>
           </div>
         </div>
       </div>
+    </div>
+
+    <p class="at-rest reveal">At rest, all of that is this:</p>
+    <div class="bar reveal" role="img"
+         aria-label="The bar at rest: two sessions running, one waiting at the prompt, one that needs you.">
+      <svg class="panel-shape" viewBox="0 0 336 36" aria-hidden="true" focusable="false">
+        <use class="rim" href="#bar-silhouette"/>
+      </svg>
+      <span class="wing">
+        <span class="pair"><span class="spin">⠋</span>2</span>
+        <span class="pair"><span class="dot green"></span>1</span>
+      </span>
+      <span class="camera"></span>
+      <span class="pair">1<span class="dot red"></span></span>
     </div>
 
     <div class="bento">
@@ -915,12 +1188,20 @@ cd Moonglade
 </footer>
 
 <script>
-// The braille dot-matrix spinner the bar actually uses.
+// The braille dot-matrix spinner the bar actually uses. Every one on the page
+// turns, and each keeps the phase its glyph was authored at: four independent
+// processes do not step together, and a row that did would read as decoration.
 (function spin() {
   const frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
-  const target = document.getElementById('spinner');
-  let index = 0;
-  setInterval(() => { target.textContent = frames[index++ % frames.length]; }, 90);
+  const targets = [...document.querySelectorAll('.spin')];
+  const phase = targets.map((node) => Math.max(0, frames.indexOf(node.textContent.trim())));
+  let tick = 0;
+  setInterval(() => {
+    tick += 1;
+    targets.forEach((node, index) => {
+      node.textContent = frames[(phase[index] + tick) % frames.length];
+    });
+  }, 90);
 })();
 
 // Entry choreography. IntersectionObserver, never a scroll listener.
