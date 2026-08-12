@@ -4,12 +4,13 @@
 #   ./scripts/build-site.sh
 #   python3 -m http.server -d _site 8000    # preview at localhost:8000
 #
-# The site is four things that live elsewhere in the repo, gathered rather than
-# copied by hand: the page, the app icon it uses as its favicon, the agent brand
-# marks the app itself renders in a session row, and the remote installer served
-# at /install so the curl command can name this domain instead of a release
-# asset URL. The installer has exactly one source of truth,
-# scripts/install-remote.sh, and this is where it is published from.
+# The site is five things that live elsewhere in the repo, gathered rather than
+# copied by hand: the page, the app icon it uses as its favicon, the social card
+# a pasted link unfurls into, the agent brand marks the app itself renders in a
+# session row, and the remote installer served at /install so the curl command
+# can name this domain instead of a release asset URL. The installer has exactly
+# one source of truth, scripts/install-remote.sh, and this is where it is
+# published from.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -21,6 +22,10 @@ output="_site"
 /bin/cp docs/index.html "$output/index.html"
 /bin/cp assets/icon.svg "$output/icon.svg"
 /bin/cp assets/hero-moonglade.webp "$output/hero-moonglade.webp"
+# The social card. Committed rather than rendered here, because the render
+# wants librsvg and ImageMagick and the deploy runner has neither; regenerate
+# it with ./scripts/make-og.sh whenever the banner changes.
+/bin/cp assets/og.jpg "$output/og.jpg"
 
 # Straight out of the app's own bundle, never a second copy: the page shows an
 # agent with the same mark the panel draws next to a live session. The whole

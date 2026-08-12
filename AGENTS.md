@@ -63,6 +63,12 @@ The banner is rendered by GitHub in a browser but is worth checking through a se
 rsvg-convert -w 880 assets/header.svg -o /tmp/header.png
 ```
 
+`assets/og.jpg`, the card a pasted link unfurls into, is that same banner unframed and fitted to 1200×630. It is committed rather than rendered at deploy time, because the Pages runner has neither librsvg nor ImageMagick — so after any change to the banner, regenerate and commit it alongside:
+
+```bash
+./scripts/make-og.sh
+```
+
 ### The moon
 
 The moon in `assets/header.svg` and in `assets/icon.svg` is not drawn. It is one photograph — the hero's own moon, cut out of `assets/hero-moonglade.webp` — embedded in both as the same base64 `data:` URI, so the tile, the page and the banner show a single moon between them. Embedded rather than referenced because all three are rendered where a relative path resolves to nothing: AppKit rasterizing the iconset, and every browser loading the icon as a favicon or the banner through `<img>`.
