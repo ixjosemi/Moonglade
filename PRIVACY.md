@@ -6,6 +6,7 @@ Moonglade is local-only. It does not contain networking code, telemetry, analyti
 
 - running Claude Code, OpenCode, and Codex process metadata;
 - process identifiers, working directories, terminal names, TTYs, and terminal session identifiers;
+- the optional `ORCA_TERMINAL_HANDLE` exported by an Orca-hosted session;
 - Herdr pane and local socket identifiers exported by the hosting terminal;
 - when focused-window display selection is enabled, the frontmost application's PID and normal on-screen window bounds, but never window names, images, or content;
 - Moonglade hook events from Claude Code and OpenCode;
@@ -19,6 +20,6 @@ Focused-window geometry is sampled locally, reused for up to half a second, and 
 
 ## Data stored
 
-Transient session metadata is stored as JSON in `~/.moonglade/state`. The directory is mode `0700` and files are mode `0600`. State may include project paths, process IDs, status, timestamps, terminal identifiers, Herdr pane/socket identity, and a window-title hint. Moonglade also stores a private, bounded ownership index containing only OpenCode session IDs already named by Convoy metadata; it uses those IDs to keep internal pipeline phases out of the global session list.
+Transient session metadata is stored as JSON in `~/.moonglade/state`. The directory is mode `0700` and files are mode `0600`. State may include project paths, process IDs, status, timestamps, terminal identifiers, an Orca terminal handle, Herdr pane/socket identity, and a window-title hint. Moonglade also stores a private, bounded ownership index containing only OpenCode session IDs already named by Convoy metadata; it uses those IDs to keep internal pipeline phases out of the global session list.
 
 No Moonglade data leaves the Mac. Uninstall integrations with `moonglade uninstall`; this removes Moonglade-owned hooks, plugin files, binaries, and state.

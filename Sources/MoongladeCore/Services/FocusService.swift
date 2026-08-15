@@ -19,6 +19,7 @@ public enum FocusAction: Equatable, Sendable {
 public enum FocusError: Error, Equatable, Sendable {
     case invalidTmuxPane(String)
     case invalidHerdrBinding
+    case invalidOrcaHandle
     case missingTerminalTarget
     case sessionUnavailable
     case commandFailed(String, Int32)
@@ -28,10 +29,20 @@ public enum FocusPlanner {
     public static func actions(for session: AgentSession) throws -> [FocusAction] {
         if let herdrAction = try herdrAction(for: session) {
             var actions = [herdrAction]
-            if let activation = outerTerminalActivationAction(for: session) {
+            if isOrcaHosted(session) {
+                // Herdr chooses the exact pane first; switching to its exact
+                // Orca host then raises the pane's containing terminal. Plan
+                // both targets up front so missing or malformed Orca identity
+                // fails before the Herdr command is allowed to run.
+                actions.append(try orcaAction(for: session))
+            } else if let activation = outerTerminalActivationAction(for: session) {
                 actions.append(activation)
             }
             return actions
+        }
+
+        if isOrcaHosted(session) {
+            return [try orcaAction(for: session)]
         }
 
         var actions: [FocusAction] = []
@@ -80,6 +91,41 @@ public enum FocusPlanner {
             return false
         }
         return value.rangeOfCharacter(from: .controlCharacters) == nil
+    }
+
+    private static func orcaAction(for session: AgentSession) throws -> FocusAction {
+        guard let handle = session.terminal.orcaTerminalHandle else {
+            throw FocusError.missingTerminalTarget
+        }
+        guard validOrcaHandle(handle) else {
+            throw FocusError.invalidOrcaHandle
+        }
+        return .run(
+            executable: "orca",
+            arguments: ["terminal", "switch", "--terminal", handle, "--json"]
+        )
+    }
+
+    /// Orca handles are opaque identifiers, not paths or shell fragments. Keep
+    /// the validation deliberately structural so future handle formats remain
+    /// usable while rejecting argument injection, control characters, and
+    /// unbounded state-file input.
+    private static func validOrcaHandle(_ value: String) -> Bool {
+        guard !value.isEmpty,
+              value.utf8.count <= 256,
+              !value.hasPrefix("-"),
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return value.rangeOfCharacter(from: .controlCharacters) == nil
+            && value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+    }
+
+    private static func isOrcaHosted(_ session: AgentSession) -> Bool {
+        if session.terminal.termProgram?.lowercased() == "orca" {
+            return true
+        }
+        return SystemProcessScanner.hostTerminalProgram(of: session.pid)?.lowercased() == "orca"
     }
 
     /// Herdr owns exact pane selection. Once it has done that work, only raise
@@ -372,19 +418,24 @@ package enum FocusActionRunner {
         throw CocoaError(.fileNoSuchFile)
     }
 
-    /// Herdr documents user-local installation paths. Keep those mutable
-    /// locations out of lookup for established commands such as tmux so this
-    /// integration cannot silently broaden unrelated command execution.
+    /// Herdr and Orca document an `~/.local/bin` fallback. Keep user-writable
+    /// lookup scoped to those integrations so it cannot silently broaden
+    /// established command execution. Herdr also supports its documented mise
+    /// and Nix shim locations.
     package static func trustedDirectories(for executable: String) -> [String] {
         let systemDirectories = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
             "/usr/bin",
         ]
-        guard executable == "herdr" else { return systemDirectories }
+        guard executable == "herdr" || executable == "orca" else { return systemDirectories }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let userLocalDirectory = "\(home)/.local/bin"
+        guard executable == "herdr" else {
+            return systemDirectories + [userLocalDirectory]
+        }
         return systemDirectories + [
-            "\(home)/.local/bin",
+            userLocalDirectory,
             "\(home)/.local/share/mise/shims",
             "\(home)/.nix-profile/bin",
         ]

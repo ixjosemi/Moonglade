@@ -48,6 +48,9 @@ public struct ProcessIdentity: Codable, Equatable, Hashable, Sendable {
 
 public struct TerminalContext: Codable, Equatable, Sendable {
     public let termProgram: String?
+    /// Orca's stable terminal identity. It is meaningful only when the
+    /// hosting terminal is Orca and is used instead of cwd or tmux guesses.
+    public let orcaTerminalHandle: String?
     public let ghosttyTerminalID: String?
     /// cmux reports `TERM_PROGRAM=ghostty` but is a separate application
     /// (`com.cmuxterm.app`), so its surface ID is the only signal that
@@ -66,6 +69,7 @@ public struct TerminalContext: Codable, Equatable, Sendable {
 
     public init(
         termProgram: String? = nil,
+        orcaTerminalHandle: String? = nil,
         ghosttyTerminalID: String? = nil,
         cmuxSurfaceID: String? = nil,
         herdrPaneID: String? = nil,
@@ -76,6 +80,7 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         windowTitleHint: String? = nil
     ) {
         self.termProgram = termProgram
+        self.orcaTerminalHandle = orcaTerminalHandle
         self.ghosttyTerminalID = ghosttyTerminalID
         self.cmuxSurfaceID = cmuxSurfaceID
         self.herdrPaneID = herdrPaneID
@@ -88,6 +93,7 @@ public struct TerminalContext: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case termProgram = "term_program"
+        case orcaTerminalHandle = "orca_terminal_handle"
         case ghosttyTerminalID = "ghostty_terminal_id"
         case cmuxSurfaceID = "cmux_surface_id"
         case herdrPaneID = "herdr_pane_id"
@@ -98,17 +104,22 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         case windowTitleHint = "window_title_hint"
     }
 
-    /// Applies identifiers exported by the current integration. Herdr's pane
-    /// and socket are intentionally not carried forward here: the repository
-    /// preserves a complete binding only when the lifecycle process matches.
+    /// Applies identifiers exported by the current integration. Host-owned
+    /// Orca and Herdr identity is intentionally not carried forward here: the
+    /// repository preserves a known target only when the lifecycle process
+    /// matches.
     public func mergingEnvironment(_ environment: [String: String]) -> TerminalContext {
         func value(_ key: String) -> String? {
             guard let candidate = environment[key], !candidate.isEmpty else { return nil }
             return candidate
         }
 
+        let capturedTermProgram = value("TERM_PROGRAM") ?? termProgram
         return TerminalContext(
-            termProgram: value("TERM_PROGRAM") ?? termProgram,
+            termProgram: capturedTermProgram,
+            orcaTerminalHandle: capturedTermProgram?.lowercased() == "orca"
+                ? value("ORCA_TERMINAL_HANDLE")
+                : nil,
             ghosttyTerminalID: ghosttyTerminalID,
             cmuxSurfaceID: value("CMUX_SURFACE_ID") ?? cmuxSurfaceID,
             herdrPaneID: value("HERDR_PANE_ID"),

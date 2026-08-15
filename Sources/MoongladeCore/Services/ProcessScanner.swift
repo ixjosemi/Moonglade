@@ -239,6 +239,7 @@ public struct SystemProcessScanner: ProcessScanning {
         ("/Ghostty.app/", "ghostty"),
         ("/iTerm.app/", "iTerm.app"),
         ("/Terminal.app/", "Apple_Terminal"),
+        ("/Orca.app/Contents/MacOS/", "Orca"),
         // Desktop binary path; do not use a bare `/Claude.app/` — that would
         // also hit the lowercase `claude.app` helper on case-insensitive FS
         // when compared carefully, and the nested helper is not the focus target.

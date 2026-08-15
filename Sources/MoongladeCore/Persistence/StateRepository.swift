@@ -79,6 +79,7 @@ private struct SessionEnrichmentDocument: Codable, Equatable {
 
 private struct TerminalEnrichmentDocument: Codable, Equatable {
     let termProgram: String?
+    let orcaTerminalHandle: String?
     let ghosttyTerminalID: String?
     let herdrPaneID: String?
     let herdrSocketPath: String?
@@ -88,6 +89,7 @@ private struct TerminalEnrichmentDocument: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case termProgram = "term_program"
+        case orcaTerminalHandle = "orca_terminal_handle"
         case ghosttyTerminalID = "ghostty_terminal_id"
         case herdrPaneID = "herdr_pane_id"
         case herdrSocketPath = "herdr_socket_path"
@@ -582,6 +584,7 @@ public struct StateRepository: Sendable {
         let existingSessions = session.source == .reaper ? [] : snapshot.lifecycleSessions
         var session = preservingProcessIdentity(in: session, from: existingSessions)
         session = preservingHerdrBinding(in: session, from: existingSessions)
+        session = preservingOrcaTerminalHandle(in: session, from: existingSessions)
         if session.source != .reaper {
             let supersededSessions = existingSessions.filter {
                 let isFallback = $0.source == .reaper
@@ -685,8 +688,19 @@ public struct StateRepository: Sendable {
                     guard enrichment.processIdentity == processIdentity else { return nil }
                     return enrichment.terminal.flatMap { herdrBinding(in: $0) }
                 }
+            let lifecycleOrcaHandle = verifiedOrcaTerminalHandle(
+                in: lifecycle,
+                matching: processIdentity
+            )
+            let orcaTerminalHandle = lifecycleOrcaHandle
+                ?? terminal.orcaTerminalHandle
+                ?? existingEnrichment.flatMap { enrichment -> String? in
+                    guard enrichment.processIdentity == processIdentity else { return nil }
+                    return enrichment.terminal?.orcaTerminalHandle
+                }
             terminalEnrichment = TerminalEnrichmentDocument(
                 termProgram: terminal.termProgram,
+                orcaTerminalHandle: orcaTerminalHandle,
                 ghosttyTerminalID: terminal.ghosttyTerminalID,
                 herdrPaneID: herdr?.paneID,
                 herdrSocketPath: herdr?.socketPath,
@@ -770,6 +784,7 @@ public struct StateRepository: Sendable {
         guard current == nil, let previous else { return session }
         let terminal = TerminalContext(
             termProgram: session.terminal.termProgram,
+            orcaTerminalHandle: session.terminal.orcaTerminalHandle,
             ghosttyTerminalID: session.terminal.ghosttyTerminalID,
             cmuxSurfaceID: session.terminal.cmuxSurfaceID,
             herdrPaneID: previous.paneID,
@@ -780,6 +795,67 @@ public struct StateRepository: Sendable {
             windowTitleHint: session.terminal.windowTitleHint
         )
         return session.replacingTerminal(terminal)
+    }
+
+    /// Orca's handle is a process-owned observation. An omitted later value
+    /// may retain a known handle only when the lifecycle document names the
+    /// same verified process generation; a rollout with no terminal context
+    /// preserves the Orca host too. A recycled PID must not inherit a terminal
+    /// target from its predecessor.
+    private func preservingOrcaTerminalHandle(
+        in session: AgentSession,
+        from existingSessions: [AgentSession]
+    ) -> AgentSession {
+        guard session.terminal.orcaTerminalHandle == nil,
+              session.terminal.termProgram == nil
+                || session.terminal.termProgram?.lowercased() == "orca",
+              let existing = existingSessions.first(where: {
+                  $0.tool == session.tool
+                      && $0.sessionID == session.sessionID
+                      && $0.pid == session.pid
+              }),
+              let processIdentity = session.processIdentity,
+              existing.processIdentity == processIdentity,
+              existing.terminal.termProgram?.lowercased() == "orca",
+              let handle = existing.terminal.orcaTerminalHandle else {
+            return session
+        }
+        let terminal = TerminalContext(
+            termProgram: session.terminal.termProgram ?? existing.terminal.termProgram,
+            orcaTerminalHandle: handle,
+            ghosttyTerminalID: session.terminal.ghosttyTerminalID,
+            cmuxSurfaceID: session.terminal.cmuxSurfaceID,
+            herdrPaneID: session.terminal.herdrPaneID,
+            herdrSocketPath: session.terminal.herdrSocketPath,
+            itermSessionID: session.terminal.itermSessionID,
+            tmuxPane: session.terminal.tmuxPane,
+            tty: session.terminal.tty,
+            windowTitleHint: session.terminal.windowTitleHint
+        )
+        return session.replacingTerminal(terminal)
+    }
+
+    /// A lifecycle document that predates process identity can still replace a
+    /// verified overlay when its PID names the live overlay generation. This
+    /// is the only identity-less path: an unverified or recycled PID never
+    /// supplies an Orca target.
+    private func verifiedOrcaTerminalHandle(
+        in lifecycle: AgentSession,
+        matching processIdentity: ProcessIdentity
+    ) -> String? {
+        guard lifecycle.terminal.termProgram?.lowercased() == "orca",
+              let handle = lifecycle.terminal.orcaTerminalHandle,
+              lifecycle.pid == processIdentity.processID else {
+            return nil
+        }
+        if lifecycle.processIdentity == processIdentity {
+            return handle
+        }
+        guard lifecycle.processIdentity == nil,
+              SystemProcessScanner.processIdentity(of: lifecycle.pid) == processIdentity else {
+            return nil
+        }
+        return handle
     }
 
     private struct HerdrBinding {
@@ -914,8 +990,13 @@ public struct StateRepository: Sendable {
         if let enriched = enrichment.terminal {
             let herdr = herdrBinding(in: lifecycle.terminal)
                 ?? herdrBinding(in: enriched)
+            let orcaTerminalHandle = verifiedOrcaTerminalHandle(
+                in: lifecycle,
+                matching: enrichment.processIdentity
+            )
             terminal = TerminalContext(
                 termProgram: enriched.termProgram ?? lifecycle.terminal.termProgram,
+                orcaTerminalHandle: orcaTerminalHandle ?? enriched.orcaTerminalHandle,
                 ghosttyTerminalID: enriched.ghosttyTerminalID
                     ?? lifecycle.terminal.ghosttyTerminalID,
                 // Only the hook observes CMUX_SURFACE_ID; the scanner reads
