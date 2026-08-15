@@ -98,38 +98,21 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         case windowTitleHint = "window_title_hint"
     }
 
-    /// Applies identifiers exported by the current integration without
-    /// allowing an observation that omitted an environment variable to erase
-    /// a binding captured by an earlier lifecycle event.
+    /// Applies identifiers exported by the current integration. Herdr's pane
+    /// and socket are intentionally not carried forward here: the repository
+    /// preserves a complete binding only when the lifecycle process matches.
     public func mergingEnvironment(_ environment: [String: String]) -> TerminalContext {
         func value(_ key: String) -> String? {
             guard let candidate = environment[key], !candidate.isEmpty else { return nil }
             return candidate
         }
 
-        let herdrPane = value("HERDR_PANE_ID")
-        let herdrSocket = value("HERDR_SOCKET_PATH")
-        let herdrBinding: (pane: String?, socket: String?)
-        if let herdrPane, let herdrSocket {
-            // The two values identify one endpoint and must come from the
-            // same observation. A partial update cannot create a hybrid.
-            herdrBinding = (herdrPane, herdrSocket)
-        } else if self.herdrPaneID != nil, self.herdrSocketPath != nil {
-            herdrBinding = (self.herdrPaneID, self.herdrSocketPath)
-        } else if let herdrPane {
-            herdrBinding = (herdrPane, nil)
-        } else if let herdrSocket {
-            herdrBinding = (nil, herdrSocket)
-        } else {
-            herdrBinding = (herdrPaneID, herdrSocketPath)
-        }
-
         return TerminalContext(
             termProgram: value("TERM_PROGRAM") ?? termProgram,
             ghosttyTerminalID: ghosttyTerminalID,
             cmuxSurfaceID: value("CMUX_SURFACE_ID") ?? cmuxSurfaceID,
-            herdrPaneID: herdrBinding.pane,
-            herdrSocketPath: herdrBinding.socket,
+            herdrPaneID: value("HERDR_PANE_ID"),
+            herdrSocketPath: value("HERDR_SOCKET_PATH"),
             itermSessionID: value("ITERM_SESSION_ID") ?? itermSessionID,
             tmuxPane: value("TMUX_PANE") ?? tmuxPane,
             tty: value("MOONGLADE_TTY") ?? tty,

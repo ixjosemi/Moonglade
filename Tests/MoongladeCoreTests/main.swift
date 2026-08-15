@@ -972,7 +972,7 @@ func testClaudeLifecycleUpdatePreservesOnlyMatchingProcessIdentity() throws {
     )
 
     let recycled = try repository.loadSessions().first.unwrap(or: "recycled session was not saved")
-    try expect(recycled.processIdentity, equals: nil, "stale identity for recycled PID")
+    try expect(recycled.processIdentity, equals: identity, "current identity for recycled PID")
 }
 
 func testClaudePermissionNotificationRequestsAttention() throws {
@@ -3240,6 +3240,7 @@ func testClaudeHookCapturesAndPreservesHerdrBinding() throws {
     defer { try? FileManager.default.removeItem(at: directory) }
     let processor = ClaudeHookProcessor(repository: StateRepository(directoryURL: directory))
     let payload = Data(#"{"session_id":"herdr-claude","cwd":"/tmp/project"}"#.utf8)
+    let processID = Int32(getpid())
 
     try processor.process(
         event: "SessionStart",
@@ -3248,14 +3249,14 @@ func testClaudeHookCapturesAndPreservesHerdrBinding() throws {
             "HERDR_PANE_ID": "pane-17",
             "HERDR_SOCKET_PATH": "/tmp/herdr.sock",
         ],
-        processID: 123,
+        processID: processID,
         now: Date(timeIntervalSince1970: 1_000)
     )
     try processor.process(
         event: "Stop",
         payload: payload,
         environment: ["HERDR_PANE_ID": "pane-new"],
-        processID: 123,
+        processID: processID,
         now: Date(timeIntervalSince1970: 2_000)
     )
     let preserved = try StateRepository(directoryURL: directory).loadSessions().first
@@ -3269,14 +3270,14 @@ func testClaudeHookCapturesAndPreservesHerdrBinding() throws {
             "HERDR_PANE_ID": "pane-new",
             "HERDR_SOCKET_PATH": "/tmp/herdr-new.sock",
         ],
-        processID: 123,
+        processID: processID,
         now: Date(timeIntervalSince1970: 3_000)
     )
     try processor.process(
         event: "Stop",
         payload: payload,
         environment: ["HERDR_PANE_ID": "", "HERDR_SOCKET_PATH": ""],
-        processID: 123,
+        processID: processID,
         now: Date(timeIntervalSince1970: 4_000)
     )
 
@@ -8741,18 +8742,19 @@ func testCodexRolloutSavePreservesNotifyCapturedHerdrBinding() throws {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let repository = StateRepository(directoryURL: directory)
+    let processID = Int32(getpid())
     try CodexNotifyProcessor(repository: repository).process(
         payload: Data(
             #"{"type":"agent-turn-complete","thread-id":"codex-herdr","cwd":"/tmp/project"}"#.utf8
         ),
-        processID: 4242,
+        processID: processID,
         environment: [
             "HERDR_PANE_ID": "pane-17",
             "HERDR_SOCKET_PATH": "/tmp/herdr.sock",
         ],
         now: Date(timeIntervalSince1970: 1_799_971_230)
     )
-    var parser = CodexRolloutParser(processID: 4242)
+    var parser = CodexRolloutParser(processID: processID)
     let rolloutSession = try parser.consume(
         line: Data(
             #"{"timestamp":"2027-01-15T00:02:00Z","type":"session_meta","payload":{"id":"codex-herdr","cwd":"/tmp/project","timestamp":"2027-01-15T00:00:00Z"}}"#.utf8
@@ -8773,6 +8775,107 @@ func testCodexRolloutSavePreservesNotifyCapturedHerdrBinding() throws {
         equals: "/tmp/herdr.sock",
         "rollout save preserves the notify-captured Herdr socket"
     )
+}
+
+func testSavingNewProcessDoesNotKeepPriorHerdrBinding() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processor = ClaudeHookProcessor(repository: repository)
+    let payload = Data(#"{"session_id":"resumed-herdr-session","cwd":"/tmp/project"}"#.utf8)
+    try processor.process(
+        event: "SessionStart",
+        payload: payload,
+        environment: [
+            "TERM_PROGRAM": "ghostty",
+            "HERDR_PANE_ID": "pane-17",
+            "HERDR_SOCKET_PATH": "/tmp/herdr.sock",
+        ],
+        processID: 4242,
+        now: Date(timeIntervalSince1970: 1_000)
+    )
+    try processor.process(
+        event: "SessionStart",
+        payload: payload,
+        environment: ["TERM_PROGRAM": "ghostty"],
+        processID: 4343,
+        now: Date(timeIntervalSince1970: 2_000)
+    )
+
+    let session = try repository.loadSessions().first
+        .unwrap(or: "resumed session was not saved")
+    try expect(session.terminal.herdrPaneID, equals: nil, "new process does not retain a stale Herdr pane")
+    try expect(session.terminal.herdrSocketPath, equals: nil, "new process does not retain a stale Herdr socket")
+}
+
+func testUnverifiedHerdrBindingIsNotPreservedAcrossProcessGeneration() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let processID = Int32(getpid())
+    let repository = StateRepository(directoryURL: directory)
+    try repository.save(AgentSession(
+        tool: .claude,
+        sessionID: "identityless-herdr-session",
+        pid: processID,
+        status: .idle,
+        cwd: "/tmp/project",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(
+            herdrPaneID: "pane-17",
+            herdrSocketPath: "/tmp/herdr.sock"
+        )
+    ))
+    try ClaudeHookProcessor(repository: repository).process(
+        event: "SessionStart",
+        payload: Data(#"{"session_id":"identityless-herdr-session","cwd":"/tmp/project"}"#.utf8),
+        environment: [:],
+        processID: processID,
+        now: Date(timeIntervalSince1970: 2_000)
+    )
+
+    let session = try repository.loadSessions().first
+        .unwrap(or: "session from the current process generation was not saved")
+    try expect(session.terminal.herdrPaneID, equals: nil, "unverified Herdr pane is not retained")
+    try expect(session.terminal.herdrSocketPath, equals: nil, "unverified Herdr socket is not retained")
+}
+
+func testCodexNotifyFromNewProcessDoesNotKeepPriorHerdrBinding() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    try repository.save(AgentSession(
+        tool: .codex,
+        sessionID: "resumed-codex-herdr-session",
+        pid: 4242,
+        status: .idle,
+        cwd: "/tmp/project",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(
+            herdrPaneID: "pane-17",
+            herdrSocketPath: "/tmp/herdr.sock"
+        )
+    ))
+    try CodexNotifyProcessor(repository: repository).process(
+        payload: Data(
+            #"{"type":"agent-turn-complete","thread-id":"resumed-codex-herdr-session","cwd":"/tmp/project"}"#.utf8
+        ),
+        processID: 4343,
+        now: Date(timeIntervalSince1970: 2_000)
+    )
+
+    let session = try repository.loadSessions().first
+        .unwrap(or: "resumed Codex session was not saved")
+    try expect(session.pid, equals: 4343, "notify records the current Codex process")
+    try expect(session.terminal.herdrPaneID, equals: nil, "new Codex process does not retain a stale Herdr pane")
+    try expect(session.terminal.herdrSocketPath, equals: nil, "new Codex process does not retain a stale Herdr socket")
 }
 
 func testSessionNameOverridesRenameAndPrune() throws {
@@ -10383,6 +10486,9 @@ let tests: [(String, () throws -> Void)] = [
     ("hook input rejects oversized payloads", testHookInputRejectsOversizedPayloads),
     ("Codex notify marks turn complete", testCodexNotifyMarksTurnComplete),
     ("Codex rollout save preserves a notify-captured Herdr binding", testCodexRolloutSavePreservesNotifyCapturedHerdrBinding),
+    ("saving a new process does not keep a prior Herdr binding", testSavingNewProcessDoesNotKeepPriorHerdrBinding),
+    ("unverified Herdr binding is not preserved across a process generation", testUnverifiedHerdrBindingIsNotPreservedAcrossProcessGeneration),
+    ("Codex notify from a new process does not keep a prior Herdr binding", testCodexNotifyFromNewProcessDoesNotKeepPriorHerdrBinding),
     ("session name overrides rename and prune", testSessionNameOverridesRenameAndPrune),
     ("state store rename persists across restarts and prunes", testStateStoreRenamePersistsAcrossRestartsAndPrunesWithSessions),
     ("termination planner closes only exact containers", testTerminationPlannerClosesOnlyExactContainers),

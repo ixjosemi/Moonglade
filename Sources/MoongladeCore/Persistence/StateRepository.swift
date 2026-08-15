@@ -748,10 +748,11 @@ public struct StateRepository: Sendable {
     /// Herdr's pane and socket form one binding. A complete observation is
     /// allowed to replace the previous pair, while a partial or empty later
     /// observation cannot turn a known target into a malformed one. The match
-    /// key is the document identity (tool + session ID): Codex's notify hook
-    /// timestamps `startedAt` with its receipt time while the rollout watcher
-    /// uses the session_meta timestamp, so a `startedAt` condition would drop
-    /// a notify-captured binding on the watcher's next save.
+    /// key is the document identity plus a verified process generation:
+    /// Codex's notify hook timestamps `startedAt` with its receipt time while
+    /// the rollout watcher uses the session_meta timestamp, so a `startedAt`
+    /// condition would drop a notify-captured binding on the watcher's next
+    /// save.
     private func preservingHerdrBinding(
         in session: AgentSession,
         from existingSessions: [AgentSession]
@@ -759,7 +760,9 @@ public struct StateRepository: Sendable {
         guard let existing = existingSessions.first(where: {
             $0.tool == session.tool
                 && $0.sessionID == session.sessionID
-        }) else {
+                && $0.pid == session.pid
+        }), let processIdentity = session.processIdentity,
+           existing.processIdentity == processIdentity else {
             return session
         }
         let current = herdrBinding(in: session.terminal)

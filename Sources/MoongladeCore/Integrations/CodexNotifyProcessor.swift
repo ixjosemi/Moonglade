@@ -51,7 +51,8 @@ public struct CodexNotifyProcessor: Sendable {
         let session = AgentSession(
             tool: .codex,
             sessionID: event.threadID,
-            pid: existing?.pid ?? processID,
+            pid: processID,
+            processIdentity: SystemProcessScanner.processIdentity(of: processID),
             status: .idle,
             attentionReason: .turnComplete,
             cwd: cwd,

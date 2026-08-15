@@ -44,6 +44,7 @@ public struct ClaudeHookProcessor: Sendable {
             tool: .claude,
             sessionID: input.sessionID,
             pid: processID,
+            processIdentity: SystemProcessScanner.processIdentity(of: processID),
             status: state.status,
             attentionReason: state.reason,
             cwd: cwd,
