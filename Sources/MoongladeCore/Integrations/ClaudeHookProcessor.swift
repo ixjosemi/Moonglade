@@ -49,7 +49,8 @@ public struct ClaudeHookProcessor: Sendable {
             cwd: cwd,
             startedAt: existing?.startedAt ?? now,
             updatedAt: now,
-            terminal: existing?.terminal ?? terminalContext(for: input.cwd, environment: environment)
+            terminal: existing?.terminal.mergingEnvironment(environment)
+                ?? terminalContext(for: input.cwd, environment: environment)
         )
         try repository.save(session)
     }
@@ -98,13 +99,24 @@ public struct ClaudeHookProcessor: Sendable {
         for cwd: String,
         environment: [String: String]
     ) -> TerminalContext {
-        TerminalContext(
-            termProgram: environment["TERM_PROGRAM"],
-            cmuxSurfaceID: environment["CMUX_SURFACE_ID"],
-            itermSessionID: environment["ITERM_SESSION_ID"],
-            tmuxPane: environment["TMUX_PANE"],
-            tty: environment["MOONGLADE_TTY"],
+        TerminalContext().mergingEnvironment(environment).replacing(
             windowTitleHint: "\(URL(fileURLWithPath: cwd).lastPathComponent) — claude"
+        )
+    }
+}
+
+private extension TerminalContext {
+    func replacing(windowTitleHint: String) -> TerminalContext {
+        TerminalContext(
+            termProgram: termProgram,
+            ghosttyTerminalID: ghosttyTerminalID,
+            cmuxSurfaceID: cmuxSurfaceID,
+            herdrPaneID: herdrPaneID,
+            herdrSocketPath: herdrSocketPath,
+            itermSessionID: itermSessionID,
+            tmuxPane: tmuxPane,
+            tty: tty,
+            windowTitleHint: windowTitleHint
         )
     }
 }

@@ -2,12 +2,23 @@ import Foundation
 import Darwin
 
 public enum FocusAction: Equatable, Sendable {
-    case run(executable: String, arguments: [String])
+    case run(
+        executable: String,
+        arguments: [String],
+        environment: [String: String]
+    )
     case appleScript(String)
+
+    /// Source-compatible construction helper for existing tmux and
+    /// process-close plans; those actions carry no environment overrides.
+    public static func run(executable: String, arguments: [String]) -> FocusAction {
+        .run(executable: executable, arguments: arguments, environment: [:])
+    }
 }
 
 public enum FocusError: Error, Equatable, Sendable {
     case invalidTmuxPane(String)
+    case invalidHerdrBinding
     case missingTerminalTarget
     case sessionUnavailable
     case commandFailed(String, Int32)
@@ -15,6 +26,14 @@ public enum FocusError: Error, Equatable, Sendable {
 
 public enum FocusPlanner {
     public static func actions(for session: AgentSession) throws -> [FocusAction] {
+        if let herdrAction = try herdrAction(for: session) {
+            var actions = [herdrAction]
+            if let activation = outerTerminalActivationAction(for: session) {
+                actions.append(activation)
+            }
+            return actions
+        }
+
         var actions: [FocusAction] = []
         if let pane = session.terminal.tmuxPane {
             guard pane.range(of: #"^%[0-9]+$"#, options: .regularExpression) != nil else {
@@ -25,6 +44,72 @@ public enum FocusPlanner {
         }
         actions.append(try terminalAction(for: session))
         return actions
+    }
+
+    private static func herdrAction(for session: AgentSession) throws -> FocusAction? {
+        let paneID = session.terminal.herdrPaneID
+        let socketPath = session.terminal.herdrSocketPath
+        guard paneID != nil || socketPath != nil else { return nil }
+        guard let paneID, let socketPath,
+              validHerdrPaneID(paneID), validHerdrSocketPath(socketPath) else {
+            throw FocusError.invalidHerdrBinding
+        }
+        return .run(
+            executable: "herdr",
+            arguments: ["agent", "focus", paneID],
+            environment: ["HERDR_SOCKET_PATH": socketPath]
+        )
+    }
+
+    private static func validHerdrPaneID(_ value: String) -> Bool {
+        guard !value.isEmpty,
+              value.utf8.count <= 256,
+              !value.hasPrefix("-"),
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return value.rangeOfCharacter(from: .controlCharacters) == nil
+            && value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+    }
+
+    private static func validHerdrSocketPath(_ value: String) -> Bool {
+        guard !value.isEmpty,
+              value.utf8.count <= 4_096,
+              value.hasPrefix("/"),
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return value.rangeOfCharacter(from: .controlCharacters) == nil
+    }
+
+    /// Herdr owns exact pane selection. Once it has done that work, only raise
+    /// the host application; using the inherited PTY or cwd here would select
+    /// an inner Herdr endpoint as though it were an outer terminal session.
+    private static func outerTerminalActivationAction(for session: AgentSession) -> FocusAction? {
+        if let surfaceID = session.terminal.cmuxSurfaceID, !surfaceID.isEmpty {
+            return .appleScript(applicationActivationScript("cmux"))
+        }
+        switch session.terminal.termProgram?.lowercased() {
+        case "ghostty":
+            return .appleScript(applicationActivationScript("Ghostty"))
+        case "iterm.app":
+            return .appleScript(applicationActivationScript("iTerm2"))
+        case "apple_terminal":
+            return .appleScript(applicationActivationScript("Terminal"))
+        case "claude_desktop":
+            return .appleScript(claudeDesktopActivateScript())
+        default:
+            return nil
+        }
+    }
+
+    private static func applicationActivationScript(_ application: String) -> String {
+        let escaped = appleScriptString(application)
+        return """
+        tell application "\(escaped)"
+          activate
+        end tell
+        """
     }
 
     private static func terminalAction(for session: AgentSession) throws -> FocusAction {
@@ -229,24 +314,28 @@ public enum FocusService {
 /// focusing and terminating sessions. Every action runs even after an
 /// earlier one fails, so a dead tmux binding never blocks the terminal
 /// action behind it; the first failure is still reported.
-enum FocusActionRunner {
-    static func run(_ actions: [FocusAction]) throws {
+package enum FocusActionRunner {
+    package static func run(_ actions: [FocusAction]) throws {
         var firstError: Error?
         for action in actions {
-            let resolvedExecutableURL: URL
-            let arguments: [String]
-            switch action {
-            case let .run(executable, actionArguments):
-                resolvedExecutableURL = try executableURL(named: executable)
-                arguments = actionArguments
-            case let .appleScript(script):
-                resolvedExecutableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                arguments = ["-e", script]
-            }
             do {
+                let resolvedExecutableURL: URL
+                let arguments: [String]
+                let environment: [String: String]
+                switch action {
+                case let .run(executable, actionArguments, overrides):
+                    resolvedExecutableURL = try executableURL(named: executable)
+                    arguments = actionArguments
+                    environment = overrides
+                case let .appleScript(script):
+                    resolvedExecutableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    arguments = ["-e", script]
+                    environment = [:]
+                }
                 let result = try BoundedProcessRunner.run(
                     executableURL: resolvedExecutableURL,
                     arguments: arguments,
+                    environment: environment,
                     timeout: 10
                 )
                 if result.status != 0, firstError == nil {
@@ -266,8 +355,7 @@ enum FocusActionRunner {
         if executable.hasPrefix("/") {
             return URL(fileURLWithPath: executable)
         }
-        let trustedDirectories = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-        for directory in trustedDirectories {
+        for directory in trustedDirectories(for: executable) {
             let candidate = URL(fileURLWithPath: directory)
                 .appendingPathComponent(executable)
                 .resolvingSymlinksInPath()
@@ -282,5 +370,23 @@ enum FocusActionRunner {
             return candidate
         }
         throw CocoaError(.fileNoSuchFile)
+    }
+
+    /// Herdr documents user-local installation paths. Keep those mutable
+    /// locations out of lookup for established commands such as tmux so this
+    /// integration cannot silently broaden unrelated command execution.
+    package static func trustedDirectories(for executable: String) -> [String] {
+        let systemDirectories = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+        ]
+        guard executable == "herdr" else { return systemDirectories }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return systemDirectories + [
+            "\(home)/.local/bin",
+            "\(home)/.local/share/mise/shims",
+            "\(home)/.nix-profile/bin",
+        ]
     }
 }
