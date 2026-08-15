@@ -343,6 +343,8 @@ public struct ReaperService: Sendable {
         let scannedTerminalID = process.terminal.ghosttyTerminalID
         let adoptsIdentifier = scannedTerminalID != nil
             && current.terminal.ghosttyTerminalID != scannedTerminalID
+        let adoptsOrcaHandle = process.terminal.orcaTerminalHandle != nil
+            && current.terminal.orcaTerminalHandle != process.terminal.orcaTerminalHandle
         let adoptsProgram = current.terminal.termProgram == nil
             && process.terminal.termProgram != nil
         let adoptsTmuxPane = current.terminal.tmuxPane == nil
@@ -353,7 +355,7 @@ public struct ReaperService: Sendable {
             scanned: process.terminal.windowTitleHint,
             current: current.terminal.windowTitleHint
         )
-        guard adoptsIdentifier || adoptsProgram || adoptsTmuxPane || adoptsTTY || adoptsTitle else {
+        guard adoptsIdentifier || adoptsOrcaHandle || adoptsProgram || adoptsTmuxPane || adoptsTTY || adoptsTitle else {
             return
         }
         guard let session = try repository.reload(current, updating: &snapshot),
@@ -364,6 +366,8 @@ public struct ReaperService: Sendable {
             process: process,
             terminal: TerminalContext(
                 termProgram: process.terminal.termProgram ?? session.terminal.termProgram,
+                orcaTerminalHandle: process.terminal.orcaTerminalHandle
+                    ?? session.terminal.orcaTerminalHandle,
                 ghosttyTerminalID: scannedTerminalID ?? session.terminal.ghosttyTerminalID,
                 itermSessionID: session.terminal.itermSessionID,
                 tmuxPane: session.terminal.tmuxPane ?? process.terminal.tmuxPane,
@@ -471,6 +475,16 @@ public struct ReaperService: Sendable {
     ) -> TerminalRelationship {
         if let leftHerdr = herdrIdentity(lhs), let rightHerdr = herdrIdentity(rhs) {
             return leftHerdr == rightHerdr ? .match : .conflict
+        }
+        if lhs.termProgram?.lowercased() == "orca"
+            || rhs.termProgram?.lowercased() == "orca"
+            || lhs.orcaTerminalHandle != nil
+            || rhs.orcaTerminalHandle != nil {
+            guard let leftOrca = lhs.orcaTerminalHandle,
+                  let rightOrca = rhs.orcaTerminalHandle else {
+                return .conflict
+            }
+            return leftOrca == rightOrca ? .match : .conflict
         }
         let identities: [(String?, String?)] = [
             (lhs.ghosttyTerminalID, rhs.ghosttyTerminalID),

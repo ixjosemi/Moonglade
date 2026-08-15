@@ -110,6 +110,7 @@ private extension TerminalContext {
     func replacing(windowTitleHint: String) -> TerminalContext {
         TerminalContext(
             termProgram: termProgram,
+            orcaTerminalHandle: orcaTerminalHandle,
             ghosttyTerminalID: ghosttyTerminalID,
             cmuxSurfaceID: cmuxSurfaceID,
             herdrPaneID: herdrPaneID,

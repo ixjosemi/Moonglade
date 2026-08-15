@@ -114,6 +114,57 @@ func testTerminalContextRoundTripsHerdrIdentityWithoutChangingSchemaVersion() th
     try expect(decoded.terminal.herdrSocketPath, equals: "/tmp/herdr.sock", "Herdr socket path")
 }
 
+func testTerminalContextCapturesOrcaHandleWithoutChangingSchemaVersion() throws {
+    let context = TerminalContext().mergingEnvironment([
+        "TERM_PROGRAM": "Orca",
+        "ORCA_TERMINAL_HANDLE": "orca-terminal-17",
+    ])
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "orca-state",
+        pid: 123,
+        status: .working,
+        cwd: "/tmp/project",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: context
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let decoded = try AgentSession.decode(from: try encoder.encode(session))
+
+    try expect(decoded.schemaVersion, equals: 1, "Orca keeps schema version one")
+    try expect(decoded.terminal.termProgram, equals: "Orca", "Orca terminal program")
+    try expect(
+        decoded.terminal.orcaTerminalHandle,
+        equals: "orca-terminal-17",
+        "Orca terminal handle"
+    )
+}
+
+func testTerminalContextTreatsOrcaEnvironmentCaseInsensitivelyAndDropsInheritedHandles() throws {
+    let mixedCase = TerminalContext().mergingEnvironment([
+        "TERM_PROGRAM": "oRcA",
+        "ORCA_TERMINAL_HANDLE": "mixed-case-handle",
+    ])
+    try expect(mixedCase.orcaTerminalHandle, equals: "mixed-case-handle", "Orca matching is case-insensitive")
+
+    let nonOrca = TerminalContext(
+        termProgram: "Orca",
+        orcaTerminalHandle: "old-handle"
+    ).mergingEnvironment([
+        "TERM_PROGRAM": "Ghostty",
+        "ORCA_TERMINAL_HANDLE": "inherited-handle",
+    ])
+    try expect(nonOrca.orcaTerminalHandle, equals: nil, "a non-Orca environment drops inherited identity")
+
+    let emptyHandle = TerminalContext().mergingEnvironment([
+        "TERM_PROGRAM": "Orca",
+        "ORCA_TERMINAL_HANDLE": "",
+    ])
+    try expect(emptyHandle.orcaTerminalHandle, equals: nil, "an empty Orca handle is absent")
+}
+
 func testConvoySessionDecodesCurrentStep() throws {
     let data = Data(
         """
@@ -736,9 +787,11 @@ func testBoundedProcessRunnerMergesEnvironmentOverrides() throws {
     try expect(output.contains("PATH="), equals: true, "base environment is preserved")
 }
 
-func testUserLocalExecutableDirectoriesAreScopedToHerdr() throws {
+func testUserLocalExecutableDirectoriesAreScopedToFocusIntegrations() throws {
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let userLocal = "\(home)/.local/bin"
+    let miseShim = "\(home)/.local/share/mise/shims"
+    let nixProfile = "\(home)/.nix-profile/bin"
 
     try expect(
         FocusActionRunner.trustedDirectories(for: "herdr").contains(userLocal),
@@ -749,6 +802,21 @@ func testUserLocalExecutableDirectoriesAreScopedToHerdr() throws {
         FocusActionRunner.trustedDirectories(for: "tmux").contains(userLocal),
         equals: false,
         "tmux lookup is not broadened to user-local directories"
+    )
+    try expect(
+        FocusActionRunner.trustedDirectories(for: "orca").contains(userLocal),
+        equals: true,
+        "Orca supports its documented user-local install"
+    )
+    try expect(
+        FocusActionRunner.trustedDirectories(for: "orca").contains(miseShim),
+        equals: false,
+        "Orca lookup excludes Herdr-only mise shims"
+    )
+    try expect(
+        FocusActionRunner.trustedDirectories(for: "orca").contains(nixProfile),
+        equals: false,
+        "Orca lookup excludes Herdr-only Nix profiles"
     )
 }
 
@@ -937,16 +1005,17 @@ func testClaudeLifecycleUpdatePreservesOnlyMatchingProcessIdentity() throws {
     try expect(updated.status, equals: .idle, "lifecycle status")
     try expect(updated.processIdentity, equals: identity, "same-process identity")
 
+    let reboundProcessID = Int32.max
     try processor.process(
         event: "UserPromptSubmit",
         payload: payload,
         environment: [:],
-        processID: 5432,
+        processID: reboundProcessID,
         now: Date(timeIntervalSince1970: 300)
     )
 
     let rebound = try repository.loadSessions().first.unwrap(or: "rebound session was not saved")
-    try expect(rebound.pid, equals: 5432, "rebound process ID")
+    try expect(rebound.pid, equals: reboundProcessID, "rebound process ID")
     try expect(rebound.processIdentity, equals: nil, "stale identity after process change")
 
     let staleIdentity = ProcessIdentity(
@@ -1267,6 +1336,45 @@ func testReaperDoesNotRebindAcrossConflictingTerminalIdentities() throws {
         $0.sessionID == "stale-terminal"
     }.unwrap(or: "native session was rebound across conflicting terminal identities")
     try expect(original.pid, equals: 1, "different tty must not be treated as the same session")
+}
+
+func testReaperDoesNotRebindOrcaByWorkingDirectoryWhenHandleDiffers() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let now = Date(timeIntervalSince1970: 10_000)
+    try repository.save(AgentSession(
+        tool: .opencode,
+        sessionID: "stale-orca-terminal",
+        pid: 1,
+        status: .needsAttention,
+        cwd: "/tmp/shared-project",
+        startedAt: now.addingTimeInterval(-120),
+        updatedAt: now.addingTimeInterval(-30),
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "orca-old"
+        )
+    ))
+    let differentOrcaTerminal = DetectedAgentProcess(
+        tool: .opencode,
+        processID: Int32(getpid()),
+        cwd: "/tmp/shared-project",
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "orca-new"
+        )
+    )
+
+    _ = try ReaperService(repository: repository, now: { now }).reap(
+        detected: [differentOrcaTerminal]
+    )
+
+    let original = try repository.loadSessions().first {
+        $0.sessionID == "stale-orca-terminal"
+    }.unwrap(or: "Orca session was rebound across conflicting handles")
+    try expect(original.pid, equals: 1, "Orca cwd must not replace a conflicting handle")
 }
 
 func testReaperTreatsHerdrPaneAndSocketAsOneIdentity() throws {
@@ -2015,6 +2123,211 @@ func testTerminalEnrichmentPreservesHerdrBinding() throws {
         merged.terminal.windowTitleHint,
         equals: "new live title",
         "unrelated enrichment still applies"
+    )
+}
+
+func testTerminalEnrichmentPreservesOrcaHandleForTheSameProcess() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processID = Int32(getpid())
+    let processIdentity = try SystemProcessScanner.processIdentity(of: processID)
+        .unwrap(or: "test process identity unavailable")
+    let lifecycle = AgentSession(
+        tool: .claude,
+        sessionID: "orca-enrichment",
+        pid: processID,
+        processIdentity: processIdentity,
+        status: .working,
+        cwd: "/tmp/orca-enrichment",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "orca-same-process",
+            tty: "/dev/ttys010"
+        )
+    )
+    try repository.save(lifecycle)
+    var snapshot = try repository.loadSnapshot()
+    let process = DetectedAgentProcess(
+        tool: lifecycle.tool,
+        processID: processID,
+        processIdentity: processIdentity,
+        cwd: lifecycle.cwd,
+        terminal: TerminalContext(termProgram: "Orca", tty: "/dev/ttys010")
+    )
+
+    try ReaperService(repository: repository).applyTerminalEnrichment(
+        basic: [process],
+        enriched: [process],
+        snapshot: &snapshot
+    )
+
+    let merged = try repository.loadSessions().first
+        .unwrap(or: "Orca session disappeared during enrichment")
+    try expect(
+        merged.terminal.orcaTerminalHandle,
+        equals: "orca-same-process",
+        "same-process enrichment preserves the Orca handle"
+    )
+}
+
+/// The OpenCode and Pi integrations cannot compute a kernel process identity,
+/// so their lifecycle documents carry a nil identity until enrichment supplies
+/// one. The handle they observed from their own environment must survive that
+/// first enrichment merge — the scanner can never re-observe it.
+func testTerminalEnrichmentPreservesOrcaHandleWhenLifecycleIdentityIsPending() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processID = Int32(getpid())
+    let processIdentity = try SystemProcessScanner.processIdentity(of: processID)
+        .unwrap(or: "test process identity unavailable")
+    let lifecycle = AgentSession(
+        tool: .opencode,
+        sessionID: "orca-enrichment-pending-identity",
+        pid: processID,
+        processIdentity: nil,
+        status: .working,
+        cwd: "/tmp/orca-enrichment-pending",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "orca-pending-identity"
+        )
+    )
+    try repository.save(lifecycle)
+    var snapshot = try repository.loadSnapshot()
+    let process = DetectedAgentProcess(
+        tool: lifecycle.tool,
+        processID: processID,
+        processIdentity: processIdentity,
+        cwd: lifecycle.cwd,
+        terminal: TerminalContext(termProgram: "Orca", tty: "/dev/ttys010")
+    )
+
+    try ReaperService(repository: repository).applyTerminalEnrichment(
+        basic: [process],
+        enriched: [process],
+        snapshot: &snapshot
+    )
+
+    let merged = try repository.loadSessions().first
+        .unwrap(or: "Orca session disappeared during enrichment")
+    try expect(
+        merged.terminal.orcaTerminalHandle,
+        equals: "orca-pending-identity",
+        "a plugin document without process identity keeps its Orca handle"
+    )
+}
+
+func testOrcaLifecycleHandleReplacesPendingIdentityEnrichment() throws {
+    // An OpenCode or Pi document can be enriched before an updated plugin
+    // write first observes Orca's handle. The verified overlay must not mask
+    // that newer lifecycle-owned identity indefinitely.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processID = Int32(getpid())
+    let processIdentity = try SystemProcessScanner.processIdentity(of: processID)
+        .unwrap(or: "test process identity unavailable")
+    let initial = AgentSession(
+        tool: .opencode,
+        sessionID: "orca-handle-after-enrichment",
+        pid: processID,
+        status: .working,
+        cwd: "/tmp/orca-handle-after-enrichment",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(termProgram: "Orca")
+    )
+    try repository.save(initial)
+    var snapshot = try repository.loadSnapshot()
+    let process = DetectedAgentProcess(
+        tool: initial.tool,
+        processID: processID,
+        processIdentity: processIdentity,
+        cwd: initial.cwd,
+        terminal: TerminalContext(termProgram: "Orca", tty: "/dev/ttys010")
+    )
+    _ = try repository.saveEnrichment(
+        for: initial,
+        process: process,
+        terminal: process.terminal,
+        updating: &snapshot
+    )
+    let updated = AgentSession(
+        tool: initial.tool,
+        sessionID: initial.sessionID,
+        pid: initial.pid,
+        status: initial.status,
+        cwd: initial.cwd,
+        startedAt: initial.startedAt,
+        updatedAt: Date(timeIntervalSince1970: 2_000),
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "orca-after-enrichment"
+        )
+    )
+
+    try repository.save(updated)
+
+    let session = try repository.loadSessions().first
+        .unwrap(or: "updated Orca session was not saved")
+    try expect(
+        session.terminal.orcaTerminalHandle,
+        equals: "orca-after-enrichment",
+        "verified enrichment does not mask a newly captured Orca handle"
+    )
+}
+
+func testSavingANewProcessDoesNotKeepPriorOrcaHandle() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processID = Int32(getpid())
+    let currentIdentity = try SystemProcessScanner.processIdentity(of: processID)
+        .unwrap(or: "test process identity unavailable")
+    let old = AgentSession(
+        tool: .claude,
+        sessionID: "orca-recycled",
+        pid: processID,
+        processIdentity: currentIdentity,
+        status: .working,
+        cwd: "/tmp/orca-recycled",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(termProgram: "Orca", orcaTerminalHandle: "stale-handle")
+    )
+    try repository.save(old)
+    let replacement = AgentSession(
+        tool: old.tool,
+        sessionID: old.sessionID,
+        pid: processID,
+        processIdentity: ProcessIdentity(
+            processID: processID,
+            kernelStartTimeMicroseconds: currentIdentity.kernelStartTimeMicroseconds + 1
+        ),
+        status: .idle,
+        cwd: old.cwd,
+        startedAt: old.startedAt,
+        updatedAt: Date(timeIntervalSince1970: 2_000),
+        terminal: TerminalContext(termProgram: "Orca")
+    )
+
+    try repository.save(replacement)
+
+    let saved = try repository.loadSessions().first.unwrap(or: "replacement session missing")
+    try expect(
+        saved.terminal.orcaTerminalHandle,
+        equals: nil,
+        "a recycled process does not inherit the prior Orca handle"
     )
 }
 
@@ -3189,6 +3502,7 @@ func testCaptureContextEmitsTerminalJSON() throws {
     process.environment = [
         "PATH": "/usr/bin:/bin",
         "TERM_PROGRAM": "ghostty",
+        "ORCA_TERMINAL_HANDLE": "inherited-non-orca-handle",
         "TMUX_PANE": "%8",
     ]
     let output = Pipe()
@@ -3199,6 +3513,11 @@ func testCaptureContextEmitsTerminalJSON() throws {
     let data = output.fileHandleForReading.readDataToEndOfFile()
     let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     try expect(json?["term_program"] as? String, equals: "ghostty", "terminal program")
+    try expect(
+        json?["orca_terminal_handle"] as? NSNull,
+        equals: NSNull(),
+        "non-Orca capture does not retain an inherited Orca handle"
+    )
     try expect(json?["tmux_pane"] as? String, equals: "%8", "tmux pane")
     try expect(
         json?["window_title_hint"] as? String,
@@ -3231,6 +3550,36 @@ func testCaptureContextEmitsHerdrIdentityAndNullsEmptyValues() throws {
     ) as? [String: Any]
     try expect(json?["herdr_pane_id"] as? String, equals: "pane-17", "Herdr pane ID")
     try expect(json?["herdr_socket_path"] as? NSNull, equals: NSNull(), "empty Herdr socket")
+}
+
+func testCaptureContextEmitsOrcaHandle() throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [
+        try BundledResources.captureContextScriptURL.path,
+        "/tmp/my-project",
+        "claude",
+        "1",
+    ]
+    process.environment = [
+        "PATH": "/usr/bin:/bin",
+        "TERM_PROGRAM": "Orca",
+        "ORCA_TERMINAL_HANDLE": "orca-terminal-17",
+    ]
+    let output = Pipe()
+    process.standardOutput = output
+    try process.run()
+    process.waitUntilExit()
+    try expect(process.terminationStatus, equals: 0, "capture-context Orca exit status")
+    let json = try JSONSerialization.jsonObject(
+        with: output.fileHandleForReading.readDataToEndOfFile()
+    ) as? [String: Any]
+    try expect(json?["term_program"] as? String, equals: "Orca", "Orca terminal program")
+    try expect(
+        json?["orca_terminal_handle"] as? String,
+        equals: "orca-terminal-17",
+        "Orca terminal handle"
+    )
 }
 
 func testClaudeHookCapturesAndPreservesHerdrBinding() throws {
@@ -3285,6 +3634,34 @@ func testClaudeHookCapturesAndPreservesHerdrBinding() throws {
         .unwrap(or: "Claude Herdr session was not saved")
     try expect(session.terminal.herdrPaneID, equals: "pane-new", "complete pane observation replaces binding")
     try expect(session.terminal.herdrSocketPath, equals: "/tmp/herdr-new.sock", "complete socket observation replaces binding")
+}
+
+func testClaudeHookCapturesOrcaHandle() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let processor = ClaudeHookProcessor(repository: StateRepository(directoryURL: directory))
+
+    try processor.process(
+        event: "SessionStart",
+        payload: Data(#"{"session_id":"orca-claude","cwd":"/tmp/project"}"#.utf8),
+        environment: [
+            "TERM_PROGRAM": "Orca",
+            "ORCA_TERMINAL_HANDLE": "orca-claude-terminal",
+        ],
+        processID: Int32(getpid()),
+        now: Date(timeIntervalSince1970: 1_000)
+    )
+
+    let session = try StateRepository(directoryURL: directory).loadSessions().first
+        .unwrap(or: "Orca Claude session was not saved")
+    try expect(session.terminal.termProgram, equals: "Orca", "Claude Orca terminal program")
+    try expect(
+        session.terminal.orcaTerminalHandle,
+        equals: "orca-claude-terminal",
+        "Claude Orca terminal handle"
+    )
 }
 
 func testClaudeHookWrapperForwardsPayloadAndEvent() throws {
@@ -5125,7 +5502,8 @@ func testOpenCodePluginWritesSessionState() throws {
     process.environment = [
         "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
         "MOONGLADE_HOME": directory.path,
-        "TERM_PROGRAM": "ghostty",
+        "TERM_PROGRAM": "Orca",
+        "ORCA_TERMINAL_HANDLE": "orca-open-1",
         "HERDR_PANE_ID": "pane-open-1",
         "HERDR_SOCKET_PATH": "/tmp/herdr-open.sock",
     ]
@@ -5144,7 +5522,12 @@ func testOpenCodePluginWritesSessionState() throws {
         .loadSessions().first.unwrap(or: "opencode state was not saved; files: \(stateFiles)")
     try expect(session.tool, equals: .opencode, "tool")
     try expect(session.status, equals: .working, "status")
-    try expect(session.terminal.termProgram, equals: "ghostty", "terminal program")
+    try expect(session.terminal.termProgram, equals: "Orca", "terminal program")
+    try expect(
+        session.terminal.orcaTerminalHandle,
+        equals: "orca-open-1",
+        "OpenCode Orca terminal handle"
+    )
     try expect(session.terminal.herdrPaneID, equals: "pane-open-1", "OpenCode Herdr pane")
     try expect(session.terminal.herdrSocketPath, equals: "/tmp/herdr-open.sock", "OpenCode Herdr socket")
 }
@@ -5241,7 +5624,8 @@ func testPiExtensionWritesSessionState() throws {
     process.environment = [
         "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
         "MOONGLADE_HOME": directory.path,
-        "TERM_PROGRAM": "ghostty",
+        "TERM_PROGRAM": "Orca",
+        "ORCA_TERMINAL_HANDLE": "orca-pi-1",
         "HERDR_PANE_ID": "pane-pi-1",
         "HERDR_SOCKET_PATH": "/tmp/herdr-pi.sock",
     ]
@@ -5259,7 +5643,12 @@ func testPiExtensionWritesSessionState() throws {
     try expect(session.tool, equals: .pi, "tool")
     try expect(session.status, equals: .working, "status")
     try expect(session.cwd, equals: "/tmp/pi-project", "cwd")
-    try expect(session.terminal.termProgram, equals: "ghostty", "terminal program")
+    try expect(session.terminal.termProgram, equals: "Orca", "terminal program")
+    try expect(
+        session.terminal.orcaTerminalHandle,
+        equals: "orca-pi-1",
+        "Pi Orca terminal handle"
+    )
     try expect(session.terminal.herdrPaneID, equals: "pane-pi-1", "Pi Herdr pane")
     try expect(session.terminal.herdrSocketPath, equals: "/tmp/herdr-pi.sock", "Pi Herdr socket")
 }
@@ -6902,6 +7291,201 @@ func testFocusPlannerPrioritizesTmuxThenTerminal() throws {
     }
 }
 
+func testFocusPlannerTargetsOrcaBeforeTmux() throws {
+    let session = AgentSession(
+        tool: .codex,
+        sessionID: "orca-focus",
+        pid: 42,
+        status: .working,
+        cwd: "/tmp/project",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "orca-terminal-42",
+            tmuxPane: "%42"
+        )
+    )
+
+    let actions = try FocusPlanner.actions(for: session)
+
+    try expect(
+        actions,
+        equals: [.run(
+            executable: "orca",
+            arguments: ["terminal", "switch", "--terminal", "orca-terminal-42", "--json"]
+        )],
+        "Orca exact focus wins before tmux"
+    )
+}
+
+func testFocusPlannerKeepsHerdrPriorityOverOrca() throws {
+    let session = AgentSession(
+        tool: .opencode,
+        sessionID: "herdr-over-orca",
+        pid: 42,
+        status: .working,
+        cwd: "/tmp/project",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "orca-terminal-42",
+            herdrPaneID: "pane-42",
+            herdrSocketPath: "/tmp/herdr.sock"
+        )
+    )
+
+    let actions = try FocusPlanner.actions(for: session)
+
+    guard case let .run(executable, arguments, environment) = actions.first else {
+        throw TestFailure.expectation("Herdr did not keep priority over Orca")
+    }
+    try expect(executable, equals: "herdr", "Herdr remains the first focus strategy")
+    try expect(arguments, equals: ["agent", "focus", "pane-42"], "Herdr pane target")
+    try expect(environment, equals: ["HERDR_SOCKET_PATH": "/tmp/herdr.sock"], "Herdr socket")
+    try expect(
+        actions,
+        equals: [
+            .run(
+                executable: "herdr",
+                arguments: ["agent", "focus", "pane-42"],
+                environment: ["HERDR_SOCKET_PATH": "/tmp/herdr.sock"]
+            ),
+            .run(
+                executable: "orca",
+                arguments: ["terminal", "switch", "--terminal", "orca-terminal-42", "--json"],
+                environment: [:]
+            ),
+        ],
+        "Herdr focuses first, then raises its exact Orca host"
+    )
+}
+
+func testFocusPlannerKeepsSameProjectOrcaSessionsOnDistinctHandles() throws {
+    func session(_ id: String, handle: String) -> AgentSession {
+        AgentSession(
+            tool: .opencode,
+            sessionID: id,
+            pid: 42,
+            status: .working,
+            cwd: "/tmp/shared-project",
+            startedAt: Date(),
+            updatedAt: Date(),
+            terminal: TerminalContext(termProgram: "Orca", orcaTerminalHandle: handle)
+        )
+    }
+
+    let first = try FocusPlanner.actions(for: session("first", handle: "orca-a"))
+    let second = try FocusPlanner.actions(for: session("second", handle: "orca-b"))
+
+    guard case let .run(_, firstArguments, _) = first[0],
+          case let .run(_, secondArguments, _) = second[0] else {
+        throw TestFailure.expectation("same-project Orca sessions did not produce focus commands")
+    }
+    try expect(firstArguments[3], equals: "orca-a", "first session keeps its Orca handle")
+    try expect(secondArguments[3], equals: "orca-b", "second session keeps its Orca handle")
+    try expect(firstArguments == secondArguments, equals: false, "same-project sessions must not share a target")
+}
+
+func testFocusPlannerRejectsMissingAndMalformedOrcaHandles() throws {
+    let handles: [String?] = [nil, "", "-orca", "orca handle", String(repeating: "x", count: 257)]
+    for handle in handles {
+        let session = AgentSession(
+            tool: .pi,
+            sessionID: "orca-invalid-\(handle ?? "missing")",
+            pid: 42,
+            status: .idle,
+            cwd: "/tmp/project",
+            startedAt: Date(),
+            updatedAt: Date(),
+            terminal: TerminalContext(
+                termProgram: "Orca",
+                orcaTerminalHandle: handle,
+                herdrPaneID: "pane-42",
+                herdrSocketPath: "/tmp/herdr.sock",
+                tmuxPane: "%42"
+            )
+        )
+
+        do {
+            _ = try FocusPlanner.actions(for: session)
+            throw TestFailure.expectation("invalid Orca handle produced a fallback: \(handle ?? "missing")")
+        } catch let error as FocusError {
+            switch handle {
+            case nil:
+                try expect(error, equals: .missingTerminalTarget, "missing Orca handle fails closed")
+            default:
+                try expect(error, equals: .invalidOrcaHandle, "malformed Orca handle fails closed")
+            }
+        }
+    }
+}
+
+func testFocusPlannerEnforcesOrcaHandleByteLimit() throws {
+    func session(handle: String) -> AgentSession {
+        AgentSession(
+            tool: .claude,
+            sessionID: "orca-byte-limit",
+            pid: 42,
+            status: .working,
+            cwd: "/tmp/project",
+            startedAt: Date(),
+            updatedAt: Date(),
+            terminal: TerminalContext(termProgram: "Orca", orcaTerminalHandle: handle)
+        )
+    }
+
+    let exactly256Bytes = String(repeating: "é", count: 128)
+    let actions = try FocusPlanner.actions(for: session(handle: exactly256Bytes))
+    try expect(actions.count, equals: 1, "a handle at the byte limit remains usable")
+
+    do {
+        _ = try FocusPlanner.actions(for: session(handle: String(repeating: "é", count: 129)))
+        throw TestFailure.expectation("a multibyte handle over the byte limit was accepted")
+    } catch let error as FocusError {
+        try expect(error, equals: .invalidOrcaHandle, "the Orca limit is measured in UTF-8 bytes")
+    }
+}
+
+func testOrcaCommandFailureDoesNotFallBackToAnotherTerminal() throws {
+    let session = AgentSession(
+        tool: .codex,
+        sessionID: "orca-stale-focus",
+        pid: 42,
+        status: .working,
+        cwd: "/tmp/project",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: TerminalContext(
+            termProgram: "Orca",
+            orcaTerminalHandle: "stale-handle",
+            tmuxPane: "%42"
+        )
+    )
+    let planned = try FocusPlanner.actions(for: session)
+    guard case let .run(_, arguments, environment) = planned.first else {
+        throw TestFailure.expectation("Orca session did not produce its exact command")
+    }
+
+    // Replace the unavailable registered Orca CLI with a deterministic failing
+    // executable while retaining the real planned arguments. A stale handle is
+    // a visible focus error; the tmux identity must never become a fallback.
+    do {
+        try FocusActionRunner.run([
+            .run(executable: "/usr/bin/false", arguments: arguments, environment: environment),
+            .run(executable: "/usr/bin/true", arguments: []),
+        ])
+        throw TestFailure.expectation("a failed Orca switch was hidden by a fallback action")
+    } catch let error as FocusError {
+        try expect(
+            error,
+            equals: .commandFailed("/usr/bin/false", 1),
+            "a stale Orca handle remains a visible focus failure"
+        )
+    }
+}
+
 func testFocusPlannerTargetsHerdrPaneBeforeOuterApplication() throws {
     let session = AgentSession(
         tool: .opencode,
@@ -8136,6 +8720,32 @@ func testProcessScannerIdentifiesHostTerminalFromAncestors() throws {
     try expect(match.terminal.termProgram, equals: "ghostty", "host terminal program")
 }
 
+func testProcessScannerIdentifiesOrcaHostFromAncestors() throws {
+    let agent = try spawnFakeAgent(named: "codex", underFakeTerminalApp: "Orca.app")
+    defer { agent.tearDown() }
+
+    let scanner = SystemProcessScanner(ghosttyTerminalSource: { nil })
+    var match: DetectedAgentProcess?
+    let deadline = Date().addingTimeInterval(2)
+    repeat {
+        match = try scanner.activeProcesses().first {
+            $0.tool == .codex && $0.cwd == agent.expectedWorkingDirectory
+        }
+        if match == nil { usleep(50_000) }
+    } while match == nil && Date() < deadline
+    guard let match else {
+        throw TestFailure.expectation("agent under the fake Orca terminal was not detected")
+    }
+    defer { kill(match.processID, SIGTERM) }
+
+    try expect(match.terminal.termProgram, equals: "Orca", "Orca host terminal program")
+    try expect(
+        SystemProcessScanner.hostTerminalProgram(of: match.processID),
+        equals: "Orca",
+        "static ancestry helper identifies Orca"
+    )
+}
+
 func testClaudeSettingsMergePreservesHooksAndIsIdempotent() throws {
     let existing = Data(
         #"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"existing-hook"}]}]}}"#.utf8
@@ -8718,6 +9328,8 @@ func testCodexNotifyMarksTurnComplete() throws {
         payload: payload,
         processID: Int32(getpid()),
         environment: [
+            "TERM_PROGRAM": "Orca",
+            "ORCA_TERMINAL_HANDLE": "orca-codex-1",
             "HERDR_PANE_ID": "pane-codex-1",
             "HERDR_SOCKET_PATH": "/tmp/herdr-codex.sock",
         ],
@@ -8727,6 +9339,12 @@ func testCodexNotifyMarksTurnComplete() throws {
     let session = try repository.loadSessions().first.unwrap(or: "Codex state was not saved")
     try expect(session.status, equals: .idle, "notify status")
     try expect(session.attentionReason, equals: .turnComplete, "notify reason")
+    try expect(session.terminal.termProgram, equals: "Orca", "Codex Orca terminal program")
+    try expect(
+        session.terminal.orcaTerminalHandle,
+        equals: "orca-codex-1",
+        "Codex Orca terminal handle"
+    )
     try expect(session.terminal.herdrPaneID, equals: "pane-codex-1", "Codex Herdr pane")
     try expect(session.terminal.herdrSocketPath, equals: "/tmp/herdr-codex.sock", "Codex Herdr socket")
 }
@@ -8774,6 +9392,46 @@ func testCodexRolloutSavePreservesNotifyCapturedHerdrBinding() throws {
         session.terminal.herdrSocketPath,
         equals: "/tmp/herdr.sock",
         "rollout save preserves the notify-captured Herdr socket"
+    )
+}
+
+func testCodexRolloutSavePreservesNotifyCapturedOrcaHandle() throws {
+    // Rollout records lack terminal context, while notify sees the terminal
+    // environment. A verified same-generation rollout must keep that exact
+    // Orca identity rather than replacing it with an empty context.
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processID = Int32(getpid())
+    try CodexNotifyProcessor(repository: repository).process(
+        payload: Data(
+            #"{"type":"agent-turn-complete","thread-id":"codex-orca","cwd":"/tmp/project"}"#.utf8
+        ),
+        processID: processID,
+        environment: [
+            "TERM_PROGRAM": "Orca",
+            "ORCA_TERMINAL_HANDLE": "orca-codex-rollout",
+        ],
+        now: Date(timeIntervalSince1970: 1_799_971_230)
+    )
+    var parser = CodexRolloutParser(processID: processID)
+    let rolloutSession = try parser.consume(
+        line: Data(
+            #"{"timestamp":"2027-01-15T00:02:00Z","type":"session_meta","payload":{"id":"codex-orca","cwd":"/tmp/project","timestamp":"2027-01-15T00:00:00Z"}}"#.utf8
+        )
+    ).unwrap(or: "rollout session_meta was not parsed")
+
+    try repository.save(rolloutSession)
+
+    let session = try repository.loadSessions().first
+        .unwrap(or: "Codex session disappeared after the rollout save")
+    try expect(session.terminal.termProgram, equals: "Orca", "rollout save preserves the Orca host")
+    try expect(
+        session.terminal.orcaTerminalHandle,
+        equals: "orca-codex-rollout",
+        "rollout save preserves the notify-captured Orca handle"
     )
 }
 
@@ -10240,6 +10898,8 @@ let tests: [(String, () throws -> Void)] = [
     ("compact status dot rides each wing's outer screen edge", testCompactStatusDotRidesEachWingsOuterScreenEdge),
     ("version 1 state document reconstructs session", testVersionOneStateDocumentReconstructsSession),
     ("terminal context round trips Herdr identity without changing schema version", testTerminalContextRoundTripsHerdrIdentityWithoutChangingSchemaVersion),
+    ("terminal context captures Orca handle without changing schema version", testTerminalContextCapturesOrcaHandleWithoutChangingSchemaVersion),
+    ("terminal context handles Orca casing and inherited values", testTerminalContextTreatsOrcaEnvironmentCaseInsensitivelyAndDropsInheritedHandles),
     ("convoy session decodes current step", testConvoySessionDecodesCurrentStep),
     ("unsupported schema version is rejected", testUnsupportedSchemaVersionIsRejected),
     ("state repository reconstructs sessions from disk", testStateRepositoryReconstructsSessionsFromDisk),
@@ -10273,7 +10933,7 @@ let tests: [(String, () throws -> Void)] = [
     ("a subprocess that overfills its pipe still completes", testASubprocessThatOverfillsItsPipeStillCompletes),
     ("an orphan holding the pipe does not turn success into a timeout", testAnOrphanHoldingThePipeDoesNotTurnSuccessIntoATimeout),
     ("bounded process runner merges environment overrides", testBoundedProcessRunnerMergesEnvironmentOverrides),
-    ("user-local executable directories are scoped to Herdr", testUserLocalExecutableDirectoriesAreScopedToHerdr),
+    ("user-local executable directories are scoped to focus integrations", testUserLocalExecutableDirectoriesAreScopedToFocusIntegrations),
     ("the heartbeat backs off after a scan finds no agents", testTheHeartbeatBacksOffAfterAScanFindsNoAgents),
     ("the heartbeat returns to five seconds as soon as an agent appears", testTheHeartbeatReturnsToFiveSecondsAsSoonAsAnAgentAppears),
     ("pointer monitors are unnecessary with one display", testPointerMonitorsAreUnnecessaryWithOneDisplay),
@@ -10294,6 +10954,7 @@ let tests: [(String, () throws -> Void)] = [
     ("reaper drops stale native state when agent is no longer detected", testReaperDropsStaleNativeStateWhenTheAgentIsNoLongerDetected),
     ("reaper rebinds by terminal when several processes share a directory", testReaperRebindsByTerminalWhenSeveralProcessesShareADirectory),
     ("reaper does not rebind across conflicting terminal identities", testReaperDoesNotRebindAcrossConflictingTerminalIdentities),
+    ("reaper does not rebind Orca by working directory when handle differs", testReaperDoesNotRebindOrcaByWorkingDirectoryWhenHandleDiffers),
     ("reaper treats Herdr pane and socket as one identity", testReaperTreatsHerdrPaneAndSocketAsOneIdentity),
     ("reaper does not treat partial Herdr identity as visible terminal evidence", testReaperDoesNotTreatPartialHerdrIdentityAsVisibleTerminalEvidence),
     ("reaper rejects recycled process identity", testReaperRejectsRecycledProcessIdentity),
@@ -10311,6 +10972,10 @@ let tests: [(String, () throws -> Void)] = [
     ("terminal context persists cmux surface identity under canonical key", testTerminalContextPersistsCmuxSurfaceIdentityUnderCanonicalKey),
     ("terminal enrichment preserves cmux surface identity", testTerminalEnrichmentPreservesCmuxSurfaceIdentity),
     ("terminal enrichment preserves Herdr binding", testTerminalEnrichmentPreservesHerdrBinding),
+    ("terminal enrichment preserves Orca handle for the same process", testTerminalEnrichmentPreservesOrcaHandleForTheSameProcess),
+    ("terminal enrichment preserves Orca handle when lifecycle identity is pending", testTerminalEnrichmentPreservesOrcaHandleWhenLifecycleIdentityIsPending),
+    ("Orca lifecycle handle replaces pending-identity enrichment", testOrcaLifecycleHandleReplacesPendingIdentityEnrichment),
+    ("saving a new process does not keep prior Orca handle", testSavingANewProcessDoesNotKeepPriorOrcaHandle),
     ("terminal enrichment does not replace lifecycle write after reload", testTerminalEnrichmentDoesNotReplaceLifecycleWriteAfterReload),
     ("terminal enrichment rejects concurrent process generation change", testTerminalEnrichmentRejectsConcurrentProcessGenerationChange),
     ("state repository validates and prunes enrichment overlays", testStateRepositoryValidatesAndPrunesEnrichmentOverlays),
@@ -10346,6 +11011,8 @@ let tests: [(String, () throws -> Void)] = [
     ("CLI parses Codex notify command", testCLIParsesCodexNotifyCommand),
     ("capture context emits terminal JSON", testCaptureContextEmitsTerminalJSON),
     ("capture context emits Herdr identity and nulls empty values", testCaptureContextEmitsHerdrIdentityAndNullsEmptyValues),
+    ("capture context emits Orca handle", testCaptureContextEmitsOrcaHandle),
+    ("Claude hook captures Orca handle", testClaudeHookCapturesOrcaHandle),
     ("Claude hook wrapper forwards payload and event", testClaudeHookWrapperForwardsPayloadAndEvent),
     ("state store reload filters ended sessions without writing", testStateStoreReloadFiltersEndedSessionsWithoutWriting),
     ("state store arms notifications before startup baseline mutation", testStateStoreArmsNotificationsBeforeStartupBaselineMutation),
@@ -10406,6 +11073,7 @@ let tests: [(String, () throws -> Void)] = [
     ("pi extension maps lifecycle events", testPiExtensionMapsLifecycleEvents),
     ("Codex rollout parser maps session and turn events", testCodexRolloutParserMapsSessionAndTurnEvents),
     ("Codex rollout parser ignores malformed and unknown lines", testCodexRolloutParserIgnoresMalformedAndUnknownLines),
+    ("Codex rollout save preserves notify-captured Orca handle", testCodexRolloutSavePreservesNotifyCapturedOrcaHandle),
     ("Codex sessions watcher processes appended lines incrementally", testCodexSessionsWatcherProcessesAppendedLinesIncrementally),
     ("Codex sessions watcher resaves when process appears later", testCodexSessionsWatcherResavesWhenProcessAppearsLater),
     ("Codex sessions watcher skips date directories outside window", testCodexSessionsWatcherSkipsDateDirectoriesOutsideWindow),
@@ -10433,6 +11101,12 @@ let tests: [(String, () throws -> Void)] = [
     ("initial baseline waits for concurrent Convoy metadata", testInitialBaselineWaitsForConcurrentConvoyMetadata),
     ("convoy watcher suppresses embedded server reaper fallback by directory", testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory),
     ("focus planner prioritizes tmux then terminal", testFocusPlannerPrioritizesTmuxThenTerminal),
+    ("focus planner targets Orca before tmux", testFocusPlannerTargetsOrcaBeforeTmux),
+    ("focus planner keeps Herdr priority over Orca", testFocusPlannerKeepsHerdrPriorityOverOrca),
+    ("focus planner keeps same-project Orca sessions on distinct handles", testFocusPlannerKeepsSameProjectOrcaSessionsOnDistinctHandles),
+    ("focus planner rejects missing and malformed Orca handles", testFocusPlannerRejectsMissingAndMalformedOrcaHandles),
+    ("focus planner enforces Orca handle byte limit", testFocusPlannerEnforcesOrcaHandleByteLimit),
+    ("Orca command failure does not fall back to another terminal", testOrcaCommandFailureDoesNotFallBackToAnotherTerminal),
     ("focus planner targets Herdr pane before outer application", testFocusPlannerTargetsHerdrPaneBeforeOuterApplication),
     ("focus planner rejects incomplete Herdr binding before fallback", testFocusPlannerRejectsIncompleteHerdrBindingBeforeFallback),
     ("focus planner rejects untrusted Herdr identifiers", testFocusPlannerRejectsUntrustedHerdrIdentifiers),
@@ -10463,6 +11137,7 @@ let tests: [(String, () throws -> Void)] = [
     ("process scanner collapses runtime launcher onto native child", testProcessScannerCollapsesRuntimeLauncherOntoNativeChild),
     ("process scanner resolves parent of root-owned processes", testProcessScannerResolvesParentOfRootOwnedProcesses),
     ("process scanner identifies host terminal from ancestors", testProcessScannerIdentifiesHostTerminalFromAncestors),
+    ("process scanner identifies Orca host from ancestors", testProcessScannerIdentifiesOrcaHostFromAncestors),
     ("process scanner identifies Claude Desktop host from ancestors", testProcessScannerIdentifiesClaudeDesktopHostFromAncestors),
     ("Claude settings merge preserves hooks and is idempotent", testClaudeSettingsMergePreservesHooksAndIsIdempotent),
     ("Claude settings removal preserves user hooks", testClaudeSettingsRemovalPreservesUserHooks),

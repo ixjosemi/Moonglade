@@ -4,6 +4,11 @@ cwd=${1:-"$PWD"}
 tool=${2:-agent}
 process_id=${3:-"$PPID"}
 term_program=${TERM_PROGRAM:-}
+orca_terminal_handle=${ORCA_TERMINAL_HANDLE:-}
+case "$term_program" in
+    [Oo][Rr][Cc][Aa]) ;;
+    *) orca_terminal_handle="" ;;
+esac
 iterm_session_id=${ITERM_SESSION_ID:-}
 tmux_pane=${TMUX_PANE:-}
 # cmux reports TERM_PROGRAM=ghostty; its surface ID is the only way to tell the
@@ -21,6 +26,7 @@ project_name=${cwd##*/}
 
 /usr/bin/osascript -l JavaScript - \
     "$term_program" \
+    "$orca_terminal_handle" \
     "$iterm_session_id" \
     "$tmux_pane" \
     "$tty_path" \
@@ -35,13 +41,14 @@ function optional(value) {
 function run(arguments) {
     return JSON.stringify({
         term_program: optional(arguments[0]),
-        iterm_session_id: optional(arguments[1]),
-        tmux_pane: optional(arguments[2]),
-        tty: optional(arguments[3]),
-        window_title_hint: optional(arguments[4]),
-        cmux_surface_id: optional(arguments[5]),
-        herdr_pane_id: optional(arguments[6]),
-        herdr_socket_path: optional(arguments[7])
+        orca_terminal_handle: optional(arguments[1]),
+        iterm_session_id: optional(arguments[2]),
+        tmux_pane: optional(arguments[3]),
+        tty: optional(arguments[4]),
+        window_title_hint: optional(arguments[5]),
+        cmux_surface_id: optional(arguments[6]),
+        herdr_pane_id: optional(arguments[7]),
+        herdr_socket_path: optional(arguments[8])
     });
 }
 JAVASCRIPT

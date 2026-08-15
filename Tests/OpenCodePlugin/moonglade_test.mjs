@@ -17,6 +17,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const home = await mkdtemp(join(tmpdir(), "moonglade-opencode-"));
 process.env.MOONGLADE_HOME = home;
+process.env.TERM_PROGRAM = "ghostty";
+process.env.ORCA_TERMINAL_HANDLE = "not-an-orca-terminal";
 
 const originalOpen = fs.promises.open.bind(fs.promises);
 let stateReadBarrier;
@@ -159,6 +161,11 @@ try {
 
   const state = await readState("regression");
   assert.equal(state.status, "idle", "busy -> idle -> message.updated must remain idle");
+  assert.equal(
+    state.terminal.orca_terminal_handle,
+    null,
+    "a non-Orca OpenCode host must not persist an Orca handle",
+  );
 
   for (const [sessionID, idleType, idleProperties] of [
     ["permission-session-idle", "session.idle", {}],
@@ -687,6 +694,11 @@ try {
   );
   await piHandlers.get("session_start")({}, piContext);
   const piAttackerState = JSON.parse(await readFile(piDestination, "utf8"));
+  assert.equal(
+    piAttackerState.terminal.orca_terminal_handle,
+    null,
+    "a non-Orca Pi host must not persist an Orca handle",
+  );
   piAttackerState.process_identity = {
     pid: piAttackerState.pid,
     kernel_start_time_us: 987654321,

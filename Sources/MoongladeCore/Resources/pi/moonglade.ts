@@ -26,6 +26,7 @@ function sessionID(ctx) {
 
 function createState(id, cwd) {
   const now = timestamp();
+  const termProgram = process.env.TERM_PROGRAM || null;
   return {
     schema_version: 1,
     tool: "pi",
@@ -37,7 +38,10 @@ function createState(id, cwd) {
     started_at: now,
     updated_at: now,
     terminal: {
-      term_program: process.env.TERM_PROGRAM || null,
+      term_program: termProgram,
+      orca_terminal_handle: termProgram?.toLowerCase() === "orca"
+        ? process.env.ORCA_TERMINAL_HANDLE || null
+        : null,
       cmux_surface_id: process.env.CMUX_SURFACE_ID || null,
       herdr_pane_id: process.env.HERDR_PANE_ID || null,
       herdr_socket_path: process.env.HERDR_SOCKET_PATH || null,
