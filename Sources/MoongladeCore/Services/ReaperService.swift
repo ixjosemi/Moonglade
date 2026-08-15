@@ -391,7 +391,9 @@ public struct ReaperService: Sendable {
     /// ancestor (Ghostty, cmux, iTerm), or a surface identifier from
     /// enrichment. Any single signal suffices.
     private static func hasUserVisibleTerminal(_ terminal: TerminalContext) -> Bool {
-        [
+        let hasHerdrBinding = terminal.herdrPaneID?.isEmpty == false
+            && terminal.herdrSocketPath?.isEmpty == false
+        return hasHerdrBinding || [
             terminal.tty,
             terminal.termProgram,
             terminal.ghosttyTerminalID,
@@ -467,6 +469,9 @@ public struct ReaperService: Sendable {
         _ lhs: TerminalContext,
         _ rhs: TerminalContext
     ) -> TerminalRelationship {
+        if let leftHerdr = herdrIdentity(lhs), let rightHerdr = herdrIdentity(rhs) {
+            return leftHerdr == rightHerdr ? .match : .conflict
+        }
         let identities: [(String?, String?)] = [
             (lhs.ghosttyTerminalID, rhs.ghosttyTerminalID),
             (lhs.itermSessionID, rhs.itermSessionID),
@@ -478,6 +483,14 @@ public struct ReaperService: Sendable {
             return left == right ? .match : .conflict
         }
         return .unavailable
+    }
+
+    private func herdrIdentity(_ terminal: TerminalContext) -> [String]? {
+        guard let paneID = terminal.herdrPaneID, !paneID.isEmpty,
+              let socketPath = terminal.herdrSocketPath, !socketPath.isEmpty else {
+            return nil
+        }
+        return [paneID, socketPath]
     }
 }
 

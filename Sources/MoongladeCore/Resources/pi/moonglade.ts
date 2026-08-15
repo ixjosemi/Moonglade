@@ -39,6 +39,8 @@ function createState(id, cwd) {
     terminal: {
       term_program: process.env.TERM_PROGRAM || null,
       cmux_surface_id: process.env.CMUX_SURFACE_ID || null,
+      herdr_pane_id: process.env.HERDR_PANE_ID || null,
+      herdr_socket_path: process.env.HERDR_SOCKET_PATH || null,
       iterm_session_id: process.env.ITERM_SESSION_ID || null,
       tmux_pane: process.env.TMUX_PANE || null,
       tty: null,

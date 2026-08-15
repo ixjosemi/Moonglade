@@ -65,7 +65,8 @@ do {
     case let .codexNotify(processID):
         try CodexNotifyProcessor(repository: repository).process(
             payload: try BoundedInput.read(from: .standardInput),
-            processID: processID
+            processID: processID,
+            environment: environment
         )
     }
 } catch {

@@ -24,7 +24,12 @@ public struct CodexNotifyProcessor: Sendable {
         self.repository = repository
     }
 
-    public func process(payload: Data, processID: Int32, now: Date = Date()) throws {
+    public func process(
+        payload: Data,
+        processID: Int32,
+        environment: [String: String] = [:],
+        now: Date = Date()
+    ) throws {
         let event = try JSONDecoder().decode(Payload.self, from: payload)
         guard event.type == "agent-turn-complete" else {
             throw CodexNotifyError.unsupportedEvent(event.type)
@@ -46,13 +51,14 @@ public struct CodexNotifyProcessor: Sendable {
         let session = AgentSession(
             tool: .codex,
             sessionID: event.threadID,
-            pid: existing?.pid ?? processID,
+            pid: processID,
+            processIdentity: SystemProcessScanner.processIdentity(of: processID),
             status: .idle,
             attentionReason: .turnComplete,
             cwd: cwd,
             startedAt: existing?.startedAt ?? now,
             updatedAt: now,
-            terminal: existing?.terminal ?? TerminalContext()
+            terminal: (existing?.terminal ?? TerminalContext()).mergingEnvironment(environment)
         )
         try repository.save(session)
     }

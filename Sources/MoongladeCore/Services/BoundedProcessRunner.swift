@@ -17,12 +17,16 @@ package enum BoundedProcessRunner {
     package static func run(
         executableURL: URL,
         arguments: [String],
+        environment: [String: String] = [:],
         timeout: TimeInterval,
         maximumOutputBytes: Int = defaultMaximumOutputBytes
     ) throws -> BoundedProcessResult {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) {
+            _, override in override
+        }
         process.standardError = FileHandle.nullDevice
         let outputPipe = Pipe()
         process.standardOutput = outputPipe

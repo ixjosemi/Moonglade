@@ -55,6 +55,10 @@ public struct TerminalContext: Codable, Equatable, Sendable {
     /// this value as the legacy `CMUX_PANEL_ID`; Moonglade reads only the
     /// canonical name.
     public let cmuxSurfaceID: String?
+    /// Herdr's exact pane identity. It is meaningful only together with the
+    /// socket path below; neither value is used as a fallback terminal hint.
+    public let herdrPaneID: String?
+    public let herdrSocketPath: String?
     public let itermSessionID: String?
     public let tmuxPane: String?
     public let tty: String?
@@ -64,6 +68,8 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         termProgram: String? = nil,
         ghosttyTerminalID: String? = nil,
         cmuxSurfaceID: String? = nil,
+        herdrPaneID: String? = nil,
+        herdrSocketPath: String? = nil,
         itermSessionID: String? = nil,
         tmuxPane: String? = nil,
         tty: String? = nil,
@@ -72,6 +78,8 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         self.termProgram = termProgram
         self.ghosttyTerminalID = ghosttyTerminalID
         self.cmuxSurfaceID = cmuxSurfaceID
+        self.herdrPaneID = herdrPaneID
+        self.herdrSocketPath = herdrSocketPath
         self.itermSessionID = itermSessionID
         self.tmuxPane = tmuxPane
         self.tty = tty
@@ -82,10 +90,34 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         case termProgram = "term_program"
         case ghosttyTerminalID = "ghostty_terminal_id"
         case cmuxSurfaceID = "cmux_surface_id"
+        case herdrPaneID = "herdr_pane_id"
+        case herdrSocketPath = "herdr_socket_path"
         case itermSessionID = "iterm_session_id"
         case tmuxPane = "tmux_pane"
         case tty
         case windowTitleHint = "window_title_hint"
+    }
+
+    /// Applies identifiers exported by the current integration. Herdr's pane
+    /// and socket are intentionally not carried forward here: the repository
+    /// preserves a complete binding only when the lifecycle process matches.
+    public func mergingEnvironment(_ environment: [String: String]) -> TerminalContext {
+        func value(_ key: String) -> String? {
+            guard let candidate = environment[key], !candidate.isEmpty else { return nil }
+            return candidate
+        }
+
+        return TerminalContext(
+            termProgram: value("TERM_PROGRAM") ?? termProgram,
+            ghosttyTerminalID: ghosttyTerminalID,
+            cmuxSurfaceID: value("CMUX_SURFACE_ID") ?? cmuxSurfaceID,
+            herdrPaneID: value("HERDR_PANE_ID"),
+            herdrSocketPath: value("HERDR_SOCKET_PATH"),
+            itermSessionID: value("ITERM_SESSION_ID") ?? itermSessionID,
+            tmuxPane: value("TMUX_PANE") ?? tmuxPane,
+            tty: value("MOONGLADE_TTY") ?? tty,
+            windowTitleHint: windowTitleHint
+        )
     }
 }
 
@@ -121,6 +153,25 @@ public struct AgentSession: Codable, Identifiable, Equatable, Sendable {
             sessionID: sessionID,
             pid: processID,
             processIdentity: nil,
+            status: status,
+            attentionReason: attentionReason,
+            cwd: cwd,
+            startedAt: startedAt,
+            updatedAt: updatedAt,
+            terminal: terminal,
+            source: source,
+            currentStep: currentStep,
+            sessionTitle: sessionTitle
+        )
+    }
+
+    public func replacingTerminal(_ terminal: TerminalContext) -> AgentSession {
+        AgentSession(
+            schemaVersion: schemaVersion,
+            tool: tool,
+            sessionID: sessionID,
+            pid: pid,
+            processIdentity: processIdentity,
             status: status,
             attentionReason: attentionReason,
             cwd: cwd,

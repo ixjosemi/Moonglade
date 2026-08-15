@@ -80,6 +80,8 @@ private struct SessionEnrichmentDocument: Codable, Equatable {
 private struct TerminalEnrichmentDocument: Codable, Equatable {
     let termProgram: String?
     let ghosttyTerminalID: String?
+    let herdrPaneID: String?
+    let herdrSocketPath: String?
     let tmuxPane: String?
     let tty: String?
     let windowTitleHint: String?
@@ -87,6 +89,8 @@ private struct TerminalEnrichmentDocument: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case termProgram = "term_program"
         case ghosttyTerminalID = "ghostty_terminal_id"
+        case herdrPaneID = "herdr_pane_id"
+        case herdrSocketPath = "herdr_socket_path"
         case tmuxPane = "tmux_pane"
         case tty
         case windowTitleHint = "window_title_hint"
@@ -576,7 +580,8 @@ public struct StateRepository: Sendable {
 
     private func saveLocked(_ session: AgentSession, updating snapshot: inout StateSnapshot) throws {
         let existingSessions = session.source == .reaper ? [] : snapshot.lifecycleSessions
-        let session = preservingProcessIdentity(in: session, from: existingSessions)
+        var session = preservingProcessIdentity(in: session, from: existingSessions)
+        session = preservingHerdrBinding(in: session, from: existingSessions)
         if session.source != .reaper {
             let supersededSessions = existingSessions.filter {
                 let isFallback = $0.source == .reaper
@@ -673,9 +678,18 @@ public struct StateRepository: Sendable {
 
         let terminalEnrichment: TerminalEnrichmentDocument?
         if let terminal {
+            let herdr = herdrBinding(
+                in: lifecycle.terminal
+            ) ?? herdrBinding(in: terminal)
+                ?? existingEnrichment.flatMap { enrichment -> HerdrBinding? in
+                    guard enrichment.processIdentity == processIdentity else { return nil }
+                    return enrichment.terminal.flatMap { herdrBinding(in: $0) }
+                }
             terminalEnrichment = TerminalEnrichmentDocument(
                 termProgram: terminal.termProgram,
                 ghosttyTerminalID: terminal.ghosttyTerminalID,
+                herdrPaneID: herdr?.paneID,
+                herdrSocketPath: herdr?.socketPath,
                 tmuxPane: lifecycle.terminal.tmuxPane == nil ? terminal.tmuxPane : nil,
                 tty: lifecycle.terminal.tty == nil ? terminal.tty : nil,
                 windowTitleHint: terminal.windowTitleHint
@@ -729,6 +743,64 @@ public struct StateRepository: Sendable {
             return session
         }
         return session.replacingProcessIdentity(identity)
+    }
+
+    /// Herdr's pane and socket form one binding. A complete observation is
+    /// allowed to replace the previous pair, while a partial or empty later
+    /// observation cannot turn a known target into a malformed one. The match
+    /// key is the document identity plus a verified process generation:
+    /// Codex's notify hook timestamps `startedAt` with its receipt time while
+    /// the rollout watcher uses the session_meta timestamp, so a `startedAt`
+    /// condition would drop a notify-captured binding on the watcher's next
+    /// save.
+    private func preservingHerdrBinding(
+        in session: AgentSession,
+        from existingSessions: [AgentSession]
+    ) -> AgentSession {
+        guard let existing = existingSessions.first(where: {
+            $0.tool == session.tool
+                && $0.sessionID == session.sessionID
+                && $0.pid == session.pid
+        }), let processIdentity = session.processIdentity,
+           existing.processIdentity == processIdentity else {
+            return session
+        }
+        let current = herdrBinding(in: session.terminal)
+        let previous = herdrBinding(in: existing.terminal)
+        guard current == nil, let previous else { return session }
+        let terminal = TerminalContext(
+            termProgram: session.terminal.termProgram,
+            ghosttyTerminalID: session.terminal.ghosttyTerminalID,
+            cmuxSurfaceID: session.terminal.cmuxSurfaceID,
+            herdrPaneID: previous.paneID,
+            herdrSocketPath: previous.socketPath,
+            itermSessionID: session.terminal.itermSessionID,
+            tmuxPane: session.terminal.tmuxPane,
+            tty: session.terminal.tty,
+            windowTitleHint: session.terminal.windowTitleHint
+        )
+        return session.replacingTerminal(terminal)
+    }
+
+    private struct HerdrBinding {
+        let paneID: String
+        let socketPath: String
+    }
+
+    private func herdrBinding(in terminal: TerminalContext) -> HerdrBinding? {
+        guard let paneID = terminal.herdrPaneID, !paneID.isEmpty,
+              let socketPath = terminal.herdrSocketPath, !socketPath.isEmpty else {
+            return nil
+        }
+        return HerdrBinding(paneID: paneID, socketPath: socketPath)
+    }
+
+    private func herdrBinding(in enrichment: TerminalEnrichmentDocument) -> HerdrBinding? {
+        guard let paneID = enrichment.herdrPaneID, !paneID.isEmpty,
+              let socketPath = enrichment.herdrSocketPath, !socketPath.isEmpty else {
+            return nil
+        }
+        return HerdrBinding(paneID: paneID, socketPath: socketPath)
     }
 
     public func remove(_ session: AgentSession) throws {
@@ -840,6 +912,8 @@ public struct StateRepository: Sendable {
     ) -> AgentSession {
         let terminal: TerminalContext
         if let enriched = enrichment.terminal {
+            let herdr = herdrBinding(in: lifecycle.terminal)
+                ?? herdrBinding(in: enriched)
             terminal = TerminalContext(
                 termProgram: enriched.termProgram ?? lifecycle.terminal.termProgram,
                 ghosttyTerminalID: enriched.ghosttyTerminalID
@@ -848,6 +922,8 @@ public struct StateRepository: Sendable {
                 // proc_pidinfo and can never recover it, so enrichment must
                 // carry the lifecycle value forward rather than drop it.
                 cmuxSurfaceID: lifecycle.terminal.cmuxSurfaceID,
+                herdrPaneID: herdr?.paneID,
+                herdrSocketPath: herdr?.socketPath,
                 itermSessionID: lifecycle.terminal.itermSessionID,
                 tmuxPane: lifecycle.terminal.tmuxPane ?? enriched.tmuxPane,
                 tty: lifecycle.terminal.tty ?? enriched.tty,
