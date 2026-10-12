@@ -94,18 +94,19 @@ async function runFIFORegression(kind) {
     if (fifo.status !== 0) process.exit(10);
     let update;
     if (${JSON.stringify(kind)} === "opencode") {
-      const { MoongladePlugin } = await import(${JSON.stringify(resourceURL)});
-      const plugin = await MoongladePlugin({
+      const { createSessionTracker } = await import(${JSON.stringify(resourceURL)});
+      const tracker = createSessionTracker({
         directory: "/tmp/project",
-        client: {
-          session: { get: async () => ({ data: {} }) },
-          app: { log: async () => {} },
+        lookupSession: async () => undefined,
+        reportError: () => {},
+      });
+      update = tracker.receive({
+        type: "session.created",
+        data: {
+          sessionID: ${JSON.stringify(sessionID)},
+          location: { directory: "/tmp/project" },
         },
       });
-      update = plugin.event({ event: {
-        type: "session.created",
-        properties: { info: { id: ${JSON.stringify(sessionID)}, directory: "/tmp/project" } },
-      }});
     } else {
       const { default: moonglade } = await import(${JSON.stringify(resourceURL)});
       const handlers = new Map();
@@ -126,56 +127,145 @@ async function runFIFORegression(kind) {
 }
 
 try {
-  const { MoongladePlugin } = await import(
+  const pluginModule = await import(
     "../../Sources/MoongladeCore/Resources/opencode/moonglade.js"
   );
-  const childSessionIDs = new Set();
-  const plugin = await MoongladePlugin({
-    directory: "/tmp/project",
-    client: {
-      session: {
-        get: async ({ path }) => ({
-          data: childSessionIDs.has(path.id) ? { parentID: "root" } : {},
-        }),
+  const { createSessionTracker } = pluginModule;
+
+  // OpenCode 2 never calls a V1 plugin: it loads only a default export that
+  // carries an id and a setup(ctx) entry point.
+  assert.equal(
+    pluginModule.MoongladePlugin,
+    undefined,
+    "the V1 named plugin export must be gone",
+  );
+  assert.equal(pluginModule.default?.id, "moonglade.opencode", "V2 plugin id");
+  assert.equal(typeof pluginModule.default?.setup, "function", "V2 plugin setup");
+
+  const project = { directory: "/tmp/project" };
+  const sessionInfo = (sessionID, extra = {}) => ({
+    id: sessionID,
+    projectID: "global",
+    location: project,
+    ...extra,
+  });
+  const created = (sessionID, extra = {}) => ({
+    type: "session.created",
+    data: { sessionID, projectID: "global", location: project, slug: sessionID, ...extra },
+  });
+
+  // setup(ctx) subscribes to the server event stream and stops on cleanup.
+  const setupHome = "/tmp/setup-project";
+  let releaseStream;
+  let subscribedSignal;
+  const setupCleanup = await pluginModule.default.setup({
+    location: { directory: setupHome },
+    session: { get: async ({ sessionID }) => sessionInfo(sessionID) },
+    event: {
+      subscribe: async function* ({ signal }) {
+        subscribedSignal = signal;
+        yield {
+          type: "session.created",
+          data: { sessionID: "setup-session", location: { directory: setupHome }, slug: "s" },
+        };
+        await new Promise((resolve) => { releaseStream = resolve; });
       },
-      app: { log: async ({ body }) => { throw new Error(body.message); } },
     },
   });
-  const event = (type, properties) => plugin.event({ event: { type, properties } });
+  assert.equal(typeof setupCleanup, "function", "setup must return a cleanup function");
+  const setupStatePath = join(
+    home,
+    "state",
+    `opencode-${Buffer.from("setup-session").toString("base64url")}.json`,
+  );
+  let setupState;
+  for (let attempt = 0; attempt < 50 && !setupState; attempt += 1) {
+    try {
+      setupState = JSON.parse(await readFile(setupStatePath, "utf8"));
+    } catch {
+      await delay(10);
+    }
+  }
+  assert.equal(setupState?.status, "working", "a streamed session.created must write state");
+  assert.equal(setupState.cwd, setupHome);
+  setupCleanup();
+  assert.equal(subscribedSignal?.aborted, true, "cleanup must abort the event subscription");
+  releaseStream();
+
+  // A stream the service closes on its own leaves the plugin deaf; say so.
+  const streamFailures = [];
+  pluginModule.default.setup({
+    location: { directory: setupHome },
+    session: { get: async ({ sessionID }) => sessionInfo(sessionID) },
+    event: { subscribe: async function* () {} },
+  }, (error) => streamFailures.push(String(error)));
+  pluginModule.default.setup({
+    location: { directory: setupHome },
+    session: { get: async ({ sessionID }) => sessionInfo(sessionID) },
+    event: { subscribe: async function* () { throw new Error("stream broke"); } },
+  }, (error) => streamFailures.push(String(error)));
+  await delay(20);
+  assert.deepEqual(
+    streamFailures.sort(),
+    ["Error: OpenCode event stream ended", "Error: stream broke"],
+    "an ended or failed event stream must be reported",
+  );
+
+  const childSessionIDs = new Set();
+  const tracker = createSessionTracker({
+    directory: "/tmp/project",
+    lookupSession: async (sessionID) => sessionInfo(
+      sessionID,
+      childSessionIDs.has(sessionID) ? { parentID: "root" } : {},
+    ),
+    reportError: (error) => { throw error; },
+  });
+  const event = (type, data) => tracker.receive({ type, data });
+  const create = (sessionID, extra) => tracker.receive(created(sessionID, extra));
   const readState = async (sessionID) => JSON.parse(await readFile(
     join(home, "state", `opencode-${Buffer.from(sessionID).toString("base64url")}.json`),
     "utf8",
   ));
+  const hasState = async (sessionID) => (await readdir(join(home, "state"))).includes(
+    `opencode-${Buffer.from(sessionID).toString("base64url")}.json`,
+  );
   // OpenCode can deliver a burst without awaiting previous plugin handlers.
-  // The creation event must also be ordered ahead of its status events;
-  // message.updated describes persisted message data, not active generation,
-  // and must never resurrect a turn after the authoritative idle signal.
+  // The creation event must also be ordered ahead of its execution events;
+  // streamed text describes output, not active generation, and must never
+  // resurrect a turn after the authoritative end-of-execution signal.
   await Promise.all([
-    event("session.created", {
-      info: { id: "regression", directory: "/tmp/project" },
-    }),
-    event("session.status", { sessionID: "regression", status: { type: "busy" } }),
-    event("session.status", { sessionID: "regression", status: { type: "idle" } }),
-    event("message.updated", { sessionID: "regression" }),
+    create("regression"),
+    event("session.execution.started", { sessionID: "regression" }),
+    event("session.execution.succeeded", { sessionID: "regression" }),
+    event("session.text.delta", { sessionID: "regression", delta: "OK" }),
   ]);
 
   const state = await readState("regression");
-  assert.equal(state.status, "idle", "busy -> idle -> message.updated must remain idle");
+  assert.equal(state.status, "idle", "started -> succeeded -> text delta must remain idle");
+  assert.equal(state.schema_version, 1);
+  assert.equal(state.tool, "opencode");
+  assert.equal(state.cwd, "/tmp/project");
   assert.equal(
     state.terminal.orca_terminal_handle,
     null,
     "a non-Orca OpenCode host must not persist an Orca handle",
   );
 
-  for (const [sessionID, idleType, idleProperties] of [
-    ["permission-session-idle", "session.idle", {}],
-    ["permission-status-idle", "session.status", { status: { type: "idle" } }],
+  for (const endType of ["session.execution.failed", "session.execution.interrupted"]) {
+    const sessionID = `ended-by-${endType}`;
+    await create(sessionID);
+    await event("session.execution.started", { sessionID });
+    await event(endType, { sessionID });
+    assert.equal((await readState(sessionID)).status, "idle", `${endType} must end the turn`);
+  }
+
+  for (const [sessionID, idleType] of [
+    ["permission-succeeded", "session.execution.succeeded"],
+    ["permission-interrupted", "session.execution.interrupted"],
   ]) {
-    await event("session.created", {
-      info: { id: sessionID, directory: "/tmp/project" },
-    });
-    await event("permission.asked", { sessionID });
-    await event(idleType, { sessionID, ...idleProperties });
+    await create(sessionID);
+    await event("permission.asked", { sessionID, id: `${sessionID}-ask` });
+    await event(idleType, { sessionID });
 
     const pendingState = await readState(sessionID);
     assert.equal(
@@ -185,64 +275,51 @@ try {
     );
     assert.equal(pendingState.attention_reason, "permission");
 
-    await event("permission.replied", { sessionID });
+    await event("permission.replied", { sessionID, requestID: `${sessionID}-ask` });
     const repliedState = await readState(sessionID);
     assert.equal(repliedState.status, "working", "permission.replied must clear the alert");
     assert.equal(repliedState.attention_reason, null);
 
-    await event(idleType, { sessionID, ...idleProperties });
+    await event(idleType, { sessionID });
     const idleState = await readState(sessionID);
     assert.equal(idleState.status, "idle", `${idleType} must apply after the permission reply`);
   }
 
-  // OpenCode's AskUserQuestion flow mirrors permissions: question.asked
-  // blocks the turn until the user answers (question.replied) or dismisses
-  // the prompt (question.rejected), and idle noise for the paused turn must
-  // not hide the alert.
+  // OpenCode 2 asks the user questions through forms: form.created blocks
+  // the turn until the user answers (form.replied) or dismisses it
+  // (form.cancelled), and end-of-turn noise must not hide the alert.
   for (const [sessionID, resolutionType] of [
-    ["question-replied", "question.replied"],
-    ["question-rejected", "question.rejected"],
+    ["form-replied", "form.replied"],
+    ["form-cancelled", "form.cancelled"],
   ]) {
-    await event("session.created", {
-      info: { id: sessionID, directory: "/tmp/project" },
-    });
-    await event("question.asked", { sessionID });
-    await event("session.status", { sessionID, status: { type: "idle" } });
+    await create(sessionID);
+    await event("form.created", { form: { id: `${sessionID}-form`, sessionID, title: "Q" } });
+    await event("session.execution.succeeded", { sessionID });
 
     const pendingState = await readState(sessionID);
     assert.equal(
       pendingState.status,
       "needs_attention",
-      "idle noise must not clear a pending question",
+      "end-of-turn noise must not clear a pending form",
     );
     assert.equal(pendingState.attention_reason, "permission");
 
-    await event(resolutionType, { sessionID });
+    await event(resolutionType, { sessionID, id: `${sessionID}-form` });
     const resolvedState = await readState(sessionID);
     assert.equal(resolvedState.status, "working", `${resolutionType} must clear the alert`);
     assert.equal(resolvedState.attention_reason, null);
 
-    await event("session.status", { sessionID, status: { type: "idle" } });
+    await event("session.execution.succeeded", { sessionID });
     const idleState = await readState(sessionID);
-    assert.equal(
-      idleState.status,
-      "idle",
-      `session.status idle must apply after ${resolutionType}`,
-    );
+    assert.equal(idleState.status, "idle", `the turn end must apply after ${resolutionType}`);
   }
 
-  // Subagents run as child sessions, but their permission and question
-  // prompts surface in the root session's terminal: the root must turn red
-  // and stay red until every outstanding prompt is answered.
-  await event("session.created", {
-    info: { id: "orchestrator", directory: "/tmp/project" },
-  });
-  await event("session.created", {
-    info: { id: "worker-a", parentID: "orchestrator", directory: "/tmp/project" },
-  });
-  await event("session.created", {
-    info: { id: "worker-b", parentID: "orchestrator", directory: "/tmp/project" },
-  });
+  // Subagents run as child sessions, but their permission and form prompts
+  // surface in the root session's terminal: the root must turn red and stay
+  // red until every outstanding prompt is answered.
+  await create("orchestrator");
+  await create("worker-a", { parentID: "orchestrator" });
+  await create("worker-b", { parentID: "orchestrator" });
   await event("permission.asked", { sessionID: "worker-a", id: "ask-a" });
   const childAskState = await readState("orchestrator");
   assert.equal(
@@ -252,8 +329,8 @@ try {
   );
   assert.equal(childAskState.attention_reason, "permission");
 
-  await event("question.asked", { sessionID: "worker-b", id: "ask-b" });
-  await event("session.status", { sessionID: "orchestrator", status: { type: "busy" } });
+  await event("form.created", { form: { id: "ask-b", sessionID: "worker-b", title: "Q" } });
+  await event("session.execution.started", { sessionID: "orchestrator" });
   await event("permission.replied", { sessionID: "worker-a", requestID: "ask-a" });
   const outstandingAskState = await readState("orchestrator");
   assert.equal(
@@ -262,7 +339,7 @@ try {
     "answering one prompt must not clear another child's pending prompt",
   );
 
-  await event("question.replied", { sessionID: "worker-b", requestID: "ask-b" });
+  await event("form.replied", { sessionID: "worker-b", id: "ask-b" });
   const answeredAsksState = await readState("orchestrator");
   assert.equal(
     answeredAsksState.status,
@@ -271,19 +348,12 @@ try {
   );
   assert.equal(answeredAsksState.attention_reason, null);
 
-  const childDocuments = (await readdir(join(home, "state"))).filter((name) => (
-    name.includes(Buffer.from("worker-a").toString("base64url"))
-      || name.includes(Buffer.from("worker-b").toString("base64url"))
-  ));
-  assert.deepEqual(
-    childDocuments,
-    [],
-    "child sessions must never receive their own state documents",
-  );
+  assert.equal(await hasState("worker-a"), false, "child sessions never get documents");
+  assert.equal(await hasState("worker-b"), false, "child sessions never get documents");
 
   await event("permission.asked", { sessionID: "worker-a", id: "ask-c" });
   await event("session.deleted", { sessionID: "worker-a" });
-  await event("session.status", { sessionID: "orchestrator", status: { type: "idle" } });
+  await event("session.execution.succeeded", { sessionID: "orchestrator" });
   const abortedChildState = await readState("orchestrator");
   assert.equal(
     abortedChildState.status,
@@ -291,11 +361,10 @@ try {
     "a deleted child must release its pending prompts",
   );
 
-  // Daemon restart recovery: a prompt from a child session the plugin has
-  // never seen must be re-targeted at its root after the parent lookup.
-  await event("session.created", {
-    info: { id: "root", directory: "/tmp/project" },
-  });
+  // The shared OpenCode service can start this plugin after a session began,
+  // so its session.created never arrives. A prompt from a child session the
+  // plugin has never seen must be re-targeted at its root after the lookup.
+  await create("root");
   childSessionIDs.add("restart-child");
   await event("permission.asked", { sessionID: "restart-child", id: "ask-r" });
   const recoveredAskState = await readState("root");
@@ -312,13 +381,30 @@ try {
     "the recovered child's reply must clear the root alert",
   );
 
+  // An unknown root session is rebuilt from the server's session record:
+  // its title and working directory come from the lookup, not guesses.
+  const lateTracker = createSessionTracker({
+    directory: "/tmp/project",
+    lookupSession: async (sessionID) => sessionInfo(sessionID, {
+      title: "Sesión ya empezada",
+      subpath: "packages/app",
+    }),
+    reportError: (error) => { throw error; },
+  });
+  await lateTracker.receive({
+    type: "session.execution.started",
+    data: { sessionID: "late-root" },
+  });
+  const lateState = await readState("late-root");
+  assert.equal(lateState.status, "working", "an unknown root's turn start must write state");
+  assert.equal(lateState.session_title, "Sesión ya empezada");
+  assert.equal(lateState.cwd, "/tmp/project/packages/app");
+
   // OpenCode names a session once its first turn is summarized. That title is
   // the only signal that identifies which terminal pane hosts the session, so
   // it has to reach the state document — the app must never have to guess it
   // back from a tab title it shares with unrelated panes.
-  await event("session.created", {
-    info: { id: "titled", directory: "/tmp/project", title: "Implementar tarea 769" },
-  });
+  await create("titled", { title: "Implementar tarea 769" });
   const createdTitleState = await readState("titled");
   assert.equal(
     createdTitleState.session_title,
@@ -326,29 +412,19 @@ try {
     "session.created must persist the session title",
   );
 
-  await event("session.updated", {
-    sessionID: "titled",
-    info: { id: "titled", directory: "/tmp/project", title: "Revisar matriz de pruebas" },
-  });
+  await event("session.renamed", { sessionID: "titled", title: "Revisar matriz de pruebas" });
   const retitledState = await readState("titled");
   assert.equal(
     retitledState.session_title,
     "Revisar matriz de pruebas",
-    "session.updated must persist a retitle",
+    "session.renamed must persist a retitle",
   );
-  assert.equal(
-    retitledState.status,
-    "working",
-    "a retitle must not move the session status",
-  );
+  assert.equal(retitledState.status, "working", "a retitle must not move the session status");
 
   // A retitle arriving while the turn is blocked must reach the document
   // without answering the prompt on the user's behalf.
   await event("permission.asked", { sessionID: "titled", id: "ask-titled" });
-  await event("session.updated", {
-    sessionID: "titled",
-    info: { id: "titled", directory: "/tmp/project", title: "Título durante el permiso" },
-  });
+  await event("session.renamed", { sessionID: "titled", title: "Título durante el permiso" });
   const blockedRetitleState = await readState("titled");
   assert.equal(
     blockedRetitleState.session_title,
@@ -364,24 +440,101 @@ try {
 
   // Subagents are titled too. Their titles belong to no terminal pane, so a
   // child retitle must not fabricate a state document.
-  await event("session.created", {
-    info: { id: "titled-child", parentID: "titled", directory: "/tmp/project" },
-  });
-  await event("session.updated", {
-    sessionID: "titled-child",
-    info: { id: "titled-child", directory: "/tmp/project", title: "Subagente" },
-  });
+  await create("titled-child", { parentID: "titled" });
+  await event("session.renamed", { sessionID: "titled-child", title: "Subagente" });
   assert.equal(
-    (await readdir(join(home, "state"))).includes(
-      `opencode-${Buffer.from("titled-child").toString("base64url")}.json`,
-    ),
+    await hasState("titled-child"),
     false,
     "a child session retitle must not create a state document",
   );
 
-  await event("session.created", {
-    info: { id: "permission-deleted", directory: "/tmp/project" },
+  // A retitle is metadata, not evidence anyone is running the session.
+  await event("session.renamed", { sessionID: "archived-unknown", title: "Archivada" });
+  assert.equal(
+    await hasState("archived-unknown"),
+    false,
+    "a retitle of an untracked session must not create a state document",
+  );
+
+  // OpenCode 2 runs one plugin instance per project location inside a shared
+  // service, and every instance sees every location's events. Only the
+  // instance for the session's own location may write its document.
+  let foreignLookups = 0;
+  const foreignTracker = createSessionTracker({
+    directory: "/tmp/other-project",
+    lookupSession: async (sessionID) => {
+      foreignLookups += 1;
+      return sessionInfo(sessionID);
+    },
+    reportError: (error) => { throw error; },
   });
+  await foreignTracker.receive(created("foreign-created"));
+  await foreignTracker.receive({
+    type: "session.execution.started",
+    data: { sessionID: "foreign-created" },
+  });
+  assert.equal(
+    await hasState("foreign-created"),
+    false,
+    "another location's session must not get a document from this instance",
+  );
+  for (const type of ["session.execution.started", "permission.asked", "session.execution.succeeded"]) {
+    await foreignTracker.receive({ type, data: { sessionID: "foreign-unknown", id: "x" } });
+  }
+  assert.equal(await hasState("foreign-unknown"), false);
+  assert.equal(foreignLookups, 1, "a session found foreign must not be looked up again");
+
+  // A foreign subagent is ignored outright, never mapped to a root here.
+  await foreignTracker.receive(created("foreign-child", { parentID: "foreign-parent" }));
+  await foreignTracker.receive({
+    type: "permission.asked",
+    data: { sessionID: "foreign-child", id: "fc" },
+  });
+  assert.equal(await hasState("foreign-parent"), false);
+  assert.equal(foreignLookups, 1, "a foreign child must not trigger a lookup");
+
+  // A prompt from an unknown child whose lookup reports another location.
+  const childLookupTracker = createSessionTracker({
+    directory: "/tmp/other-project",
+    lookupSession: async (sessionID) => sessionInfo(sessionID, { parentID: "foreign-root" }),
+    reportError: (error) => { throw error; },
+  });
+  await childLookupTracker.receive({
+    type: "permission.asked",
+    data: { sessionID: "foreign-unknown-child", id: "fuc" },
+  });
+  assert.equal(await hasState("foreign-root"), false);
+  assert.equal(await hasState("foreign-unknown-child"), false);
+
+  // When the lookup fails, no instance can prove ownership, so none writes;
+  // once it answers, only the owner does.
+  let lookupWorks = false;
+  const flakyLookup = async (sessionID) => {
+    if (!lookupWorks) throw new Error("service busy");
+    return sessionInfo(sessionID, { title: "Recuperada" });
+  };
+  const ownerTracker = createSessionTracker({
+    directory: "/tmp/project",
+    lookupSession: flakyLookup,
+    reportError: (error) => { throw error; },
+  });
+  const bystanderTracker = createSessionTracker({
+    directory: "/tmp/other-project",
+    lookupSession: flakyLookup,
+    reportError: (error) => { throw error; },
+  });
+  const unowned = { type: "session.execution.started", data: { sessionID: "flaky-lookup" } };
+  await Promise.all([ownerTracker.receive(unowned), bystanderTracker.receive(unowned)]);
+  assert.equal(await hasState("flaky-lookup"), false, "a failed lookup must write nothing");
+  lookupWorks = true;
+  await bystanderTracker.receive(unowned);
+  assert.equal(await hasState("flaky-lookup"), false, "the bystander must never write");
+  await ownerTracker.receive(unowned);
+  const recoveredState = await readState("flaky-lookup");
+  assert.equal(recoveredState.status, "working", "the owner must write once the lookup answers");
+  assert.equal(recoveredState.cwd, "/tmp/project");
+
+  await create("permission-deleted");
   await event("permission.asked", { sessionID: "permission-deleted" });
   await event("session.deleted", { sessionID: "permission-deleted" });
   const deletedState = await readState("permission-deleted");
@@ -389,25 +542,20 @@ try {
   assert.equal(deletedState.attention_reason, null);
 
   const tombstonedSessionID = "deleted-with-trailing-status";
-  await event("session.created", {
-    info: { id: tombstonedSessionID, directory: "/tmp/project" },
-  });
+  await create(tombstonedSessionID);
   await Promise.all([
     event("session.deleted", { sessionID: tombstonedSessionID }),
-    event("session.status", { sessionID: tombstonedSessionID, status: { type: "busy" } }),
+    event("session.execution.started", { sessionID: tombstonedSessionID }),
   ]);
   const tombstonedState = await readState(tombstonedSessionID);
   assert.equal(
     tombstonedState.status,
     "ended",
-    "a status queued behind deletion must not resurrect the session",
+    "an execution event queued behind deletion must not resurrect the session",
   );
 
   await event("permission.asked", { sessionID: tombstonedSessionID });
-  await event("session.status", {
-    sessionID: tombstonedSessionID,
-    status: { type: "idle" },
-  });
+  await event("session.execution.succeeded", { sessionID: tombstonedSessionID });
   const ignoredNoiseState = await readState(tombstonedSessionID);
   assert.equal(
     ignoredNoiseState.status,
@@ -415,12 +563,10 @@ try {
     "later non-created events must remain ignored after deletion",
   );
 
-  await event("session.created", {
-    info: { id: tombstonedSessionID, directory: "/tmp/reused-project" },
-  });
+  await create(tombstonedSessionID, { subpath: "reused" });
   const reusedState = await readState(tombstonedSessionID);
   assert.equal(reusedState.status, "working", "explicit creation must permit session ID reuse");
-  assert.equal(reusedState.cwd, "/tmp/reused-project");
+  assert.equal(reusedState.cwd, "/tmp/project/reused");
 
   const failedEndSessionID = "failed-end-retry";
   const failedEndDestination = join(
@@ -429,27 +575,18 @@ try {
     `opencode-${Buffer.from(failedEndSessionID).toString("base64url")}.json`,
   );
   const failedEndWrites = [];
-  const failedEndPlugin = await MoongladePlugin({
+  const failedEndTracker = createSessionTracker({
     directory: "/tmp/project",
-    client: {
-      session: { get: async () => ({ data: {} }) },
-      app: { log: async ({ body }) => { failedEndWrites.push(body.message); } },
-    },
+    lookupSession: async (sessionID) => sessionInfo(sessionID),
+    reportError: (error) => { failedEndWrites.push(String(error)); },
   });
-  const failedEndEvent = (type, properties) => failedEndPlugin.event({
-    event: { type, properties },
-  });
-  await failedEndEvent("session.created", {
-    info: { id: failedEndSessionID, directory: "/tmp/project" },
-  });
+  const failedEndEvent = (type, data) => failedEndTracker.receive({ type, data });
+  await failedEndTracker.receive(created(failedEndSessionID));
   await rm(failedEndDestination);
   await mkdir(failedEndDestination);
   await Promise.all([
     failedEndEvent("session.deleted", { sessionID: failedEndSessionID }),
-    failedEndEvent("session.status", {
-      sessionID: failedEndSessionID,
-      status: { type: "busy" },
-    }),
+    failedEndEvent("session.execution.started", { sessionID: failedEndSessionID }),
   ]);
   assert.equal(
     failedEndWrites.length,
@@ -461,9 +598,7 @@ try {
   const retriedEndState = await readState(failedEndSessionID);
   assert.equal(retriedEndState.status, "ended", "session deletion must retry a failed end write");
 
-  await event("session.created", {
-    info: { id: "reclassified-root", directory: "/tmp/project" },
-  });
+  await create("reclassified-root");
   await event("session.deleted", { sessionID: "reclassified-root" });
   childSessionIDs.add("reclassified-root");
   await event("permission.asked", { sessionID: "reclassified-root" });
@@ -474,13 +609,9 @@ try {
     "a deleted root ID reused by a child must not retain root registry state",
   );
 
-  await event("session.created", {
-    info: { id: "reclassified-child", parentID: "root", directory: "/tmp/project" },
-  });
+  await create("reclassified-child", { parentID: "root" });
   await event("session.deleted", { sessionID: "reclassified-child" });
-  await event("session.created", {
-    info: { id: "reclassified-child", directory: "/tmp/project" },
-  });
+  await create("reclassified-child");
   const reclassifiedChildState = await readState("reclassified-child");
   assert.equal(
     reclassifiedChildState.status,
@@ -492,33 +623,27 @@ try {
     let releaseLookup;
     const stalledLookup = new Promise((resolve) => { releaseLookup = resolve; });
     let lookupCount = 0;
-    let stalledSignal;
-    const stalledPlugin = await MoongladePlugin({
+    const stalledTracker = createSessionTracker({
       directory: "/tmp/project",
-      client: {
-        session: {
-          get: async (options) => {
-            lookupCount += 1;
-            if (lookupCount === 1) {
-              stalledSignal = options.signal;
-              return stalledLookup;
-            }
-            return { data: {} };
-          },
-        },
-        app: { log: async () => {} },
+      lookupSession: async (id) => {
+        lookupCount += 1;
+        if (lookupCount === 1) return stalledLookup;
+        return sessionInfo(id);
       },
+      reportError: () => {},
     });
-    const stalledEvent = (type, properties) => stalledPlugin.event({
-      event: { type, properties },
-    });
+    // Expire only the stalled lookup's deadline at once; later lookups get
+    // their real deadline so a prompt answer can still prove ownership.
     const originalSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = (callback, _milliseconds, ...arguments_) => {
+    let expiredDeadlines = 0;
+    globalThis.setTimeout = (callback, milliseconds, ...arguments_) => {
+      if (expiredDeadlines > 0) return originalSetTimeout(callback, milliseconds, ...arguments_);
+      expiredDeadlines += 1;
       queueMicrotask(() => callback(...arguments_));
       return undefined;
     };
-    const stalledHandlers = events.map(({ type, properties }) => (
-      stalledEvent(type, { sessionID, ...properties })
+    const stalledHandlers = events.map(({ type, data }) => (
+      stalledTracker.receive({ type, data: { sessionID, ...data } })
     ));
     let handlersCompleted;
     try {
@@ -528,16 +653,18 @@ try {
       ]);
     } finally {
       globalThis.setTimeout = originalSetTimeout;
-      releaseLookup({ data: {} });
+      releaseLookup(sessionInfo(sessionID));
       await Promise.all(stalledHandlers);
     }
-    return { handlersCompleted, lookupCount, stalledSignal };
+    return { handlersCompleted, lookupCount };
   };
 
+  const textDelta = { type: "session.text.delta", data: { delta: "…" } };
+  const turnEnd = { type: "session.execution.succeeded", data: {} };
   const stalledBurst = await runStalledBurst("stalled-burst", [
-    { type: "message.updated", properties: {} },
-    ...Array.from({ length: 32 }, () => ({ type: "message.updated", properties: {} })),
-    { type: "session.status", properties: { status: { type: "idle" } } },
+    textDelta,
+    ...Array.from({ length: 32 }, () => textDelta),
+    turnEnd,
   ]);
   assert.equal(
     stalledBurst.handlersCompleted,
@@ -549,88 +676,69 @@ try {
     2,
     "a burst must retain only one active update plus the latest pending update",
   );
-  assert.equal(
-    stalledBurst.stalledSignal?.aborted,
-    true,
-    "the stalled lookup must be cancelled at its deadline",
-  );
   const stalledState = await readState("stalled-burst");
   assert.equal(stalledState.status, "idle", "the latest coalesced update must be applied");
 
-  const unansweredPermission = await runStalledBurst("stalled-permission-asked", [
-    { type: "message.updated", properties: {} },
-    { type: "permission.asked", properties: {} },
-    { type: "session.status", properties: { status: { type: "idle" } } },
-  ]);
-  assert.equal(unansweredPermission.handlersCompleted, true);
-  assert.equal(unansweredPermission.lookupCount, 2);
-  const unansweredPermissionState = await readState("stalled-permission-asked");
-  assert.equal(
-    unansweredPermissionState.status,
-    "needs_attention",
-    "coalescing must not replace an unanswered permission with idle noise",
-  );
+  for (const [sessionID, ask, resolution, label] of [
+    [
+      "stalled-permission",
+      { type: "permission.asked", data: { id: "p" } },
+      { type: "permission.replied", data: { requestID: "p" } },
+      "permission",
+    ],
+    [
+      "stalled-form",
+      { type: "form.created", data: { form: { id: "f", sessionID: "stalled-form" } } },
+      { type: "form.replied", data: { id: "f" } },
+      "form",
+    ],
+  ]) {
+    const unanswered = await runStalledBurst(`${sessionID}-asked`, [
+      textDelta,
+      ask.type === "form.created"
+        ? { type: ask.type, data: { form: { ...ask.data.form, sessionID: `${sessionID}-asked` } } }
+        : ask,
+      turnEnd,
+    ]);
+    assert.equal(unanswered.handlersCompleted, true);
+    assert.equal(unanswered.lookupCount, 2);
+    assert.equal(
+      (await readState(`${sessionID}-asked`)).status,
+      "needs_attention",
+      `coalescing must not replace an unanswered ${label} with turn-end noise`,
+    );
 
-  const repliedPermission = await runStalledBurst("stalled-permission-replied", [
-    { type: "permission.asked", properties: {} },
-    { type: "permission.replied", properties: {} },
-    { type: "session.status", properties: { status: { type: "idle" } } },
-  ]);
-  assert.equal(repliedPermission.handlersCompleted, true);
-  assert.equal(repliedPermission.lookupCount, 1);
-  const repliedPermissionState = await readState("stalled-permission-replied");
-  assert.equal(
-    repliedPermissionState.status,
-    "idle",
-    "a coalesced permission reply must allow the later idle transition",
-  );
-
-  const unansweredQuestion = await runStalledBurst("stalled-question-asked", [
-    { type: "message.updated", properties: {} },
-    { type: "question.asked", properties: {} },
-    { type: "session.status", properties: { status: { type: "idle" } } },
-  ]);
-  assert.equal(unansweredQuestion.handlersCompleted, true);
-  const unansweredQuestionState = await readState("stalled-question-asked");
-  assert.equal(
-    unansweredQuestionState.status,
-    "needs_attention",
-    "coalescing must not replace an unanswered question with idle noise",
-  );
-
-  const repliedQuestion = await runStalledBurst("stalled-question-replied", [
-    { type: "question.asked", properties: {} },
-    { type: "question.replied", properties: {} },
-    { type: "session.status", properties: { status: { type: "idle" } } },
-  ]);
-  assert.equal(repliedQuestion.handlersCompleted, true);
-  const repliedQuestionState = await readState("stalled-question-replied");
-  assert.equal(
-    repliedQuestionState.status,
-    "idle",
-    "a coalesced question reply must allow the later idle transition",
-  );
+    const replied = await runStalledBurst(`${sessionID}-replied`, [
+      ask.type === "form.created"
+        ? { type: ask.type, data: { form: { ...ask.data.form, sessionID: `${sessionID}-replied` } } }
+        : ask,
+      resolution,
+      turnEnd,
+    ]);
+    assert.equal(replied.handlersCompleted, true);
+    assert.equal(
+      replied.lookupCount,
+      2,
+      "a stalled lookup writes nothing, so the coalesced follow-up must retry it",
+    );
+    assert.equal(
+      (await readState(`${sessionID}-replied`)).status,
+      "idle",
+      `a coalesced ${label} reply must allow the later turn end`,
+    );
+  }
 
   const failedWriteSessionID = "failed-write-cleanup";
   const failedWriteSafeID = Buffer.from(failedWriteSessionID).toString("base64url");
   const failedWriteDestination = join(home, "state", `opencode-${failedWriteSafeID}.json`);
   await mkdir(failedWriteDestination);
   const writeFailures = [];
-  const failedWritePlugin = await MoongladePlugin({
+  const failedWriteTracker = createSessionTracker({
     directory: "/tmp/project",
-    client: {
-      session: { get: async () => ({ data: {} }) },
-      app: { log: async ({ body }) => { writeFailures.push(body.message); } },
-    },
+    lookupSession: async (sessionID) => sessionInfo(sessionID),
+    reportError: (error) => { writeFailures.push(String(error)); },
   });
-  await failedWritePlugin.event({
-    event: {
-      type: "session.created",
-      properties: {
-        info: { id: failedWriteSessionID, directory: "/tmp/project" },
-      },
-    },
-  });
+  await failedWriteTracker.receive(created(failedWriteSessionID));
   assert.equal(writeFailures.length, 1, "the destination directory must make rename fail");
   assert.match(writeFailures[0], /rename/, "the original rename failure must be reported");
   const leakedTemporaryFiles = (await readdir(join(home, "state"))).filter((name) => (
@@ -649,9 +757,7 @@ try {
     "state",
     `opencode-${Buffer.from(growingSessionID).toString("base64url")}.json`,
   );
-  await event("session.created", {
-    info: { id: growingSessionID, directory: "/tmp/project" },
-  });
+  await create(growingSessionID);
   const attackerState = await readState(growingSessionID);
   attackerState.process_identity = {
     pid: attackerState.pid,
@@ -659,7 +765,9 @@ try {
   };
   await writeFile(growingDestination, `${JSON.stringify(attackerState)}\n`, { mode: 0o600 });
   const barrier = pauseStateReadAfterStat(growingDestination);
-  const growingUpdate = event("session.idle", { sessionID: growingSessionID });
+  const growingUpdate = event("session.execution.succeeded", {
+    sessionID: growingSessionID,
+  });
   const reachedStat = await Promise.race([
     barrier.reached.then(() => true),
     delay(500).then(() => false),

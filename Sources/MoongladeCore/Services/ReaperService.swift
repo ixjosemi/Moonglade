@@ -241,8 +241,8 @@ public struct ReaperService: Sendable {
         return nativeMisses.recordMiss(sessionID: session.id) >= 2
     }
 
-    /// Sessions written by a plugin hosted in a shared daemon (OpenCode's
-    /// `opencode2 serve`) record the daemon PID, which no scan ever
+    /// Sessions written by a plugin hosted in a shared daemon (OpenCode 2's
+    /// background service) record the daemon PID, which no scan ever
     /// contains. When exactly one visible same-tool process shares the
     /// session's directory, the session adopts that PID, so fallback dedup
     /// and process liveness track the terminal the user actually sees.

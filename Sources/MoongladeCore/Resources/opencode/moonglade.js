@@ -6,98 +6,59 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { spawn } from "node:child_process";
 
+// OpenCode 2 hosts this plugin in its shared background service, one
+// instance per project location. Every instance sees every location's
+// events, so each one tracks only the sessions of its own location.
+
 const stateDirectory = join(
   process.env.MOONGLADE_HOME || join(homedir(), ".moonglade"),
   "state",
 );
-const sessions = new Map();
-// Child sessions (subagents, title generation) mapped to the root session
-// whose terminal they run in. Their prompts alert the root; every other
-// child event is dropped so phantom sessions never get state documents.
-const childRootSessionIDs = new Map();
-const updateQueues = new Map();
-const terminalSessions = new Map();
 const terminalSessionLimit = 1_024;
 const sessionLookupDeadlineMilliseconds = 1_000;
 const maximumStateFileSize = 1_048_576;
 // Events that pause a turn on the user (red alert) and the events that
-// resolve that pause. Permissions and AskUserQuestion prompts share the
-// same blocked-until-answered lifecycle.
-const attentionAsks = new Set(["permission.asked", "question.asked"]);
+// resolve that pause. Permissions and forms (OpenCode 2's questions) share
+// the same blocked-until-answered lifecycle.
+const attentionAsks = new Set(["permission.asked", "form.created"]);
 const attentionResolutions = new Set([
   "permission.replied",
-  "question.replied",
-  "question.rejected",
+  "form.replied",
+  "form.cancelled",
 ]);
-// Outstanding prompts per root session, keyed by the asking session so a
-// dying subagent releases exactly its own prompts. Several subagents can
-// prompt concurrently; answering one must not silence the others, so the
-// root stays needs_attention until this ledger drains.
-const pendingAsksByRoot = new Map();
 const pendingAskLimit = 64;
-
-function rootSessionID(sessionID) {
-  return childRootSessionIDs.get(sessionID) ?? sessionID;
-}
+const transitions = {
+  "session.execution.started": ["working", null],
+  "session.execution.succeeded": ["idle", null],
+  "session.execution.failed": ["idle", null],
+  "session.execution.interrupted": ["idle", null],
+  "permission.asked": ["needs_attention", "permission"],
+  "permission.replied": ["working", null],
+  // A form blocks the turn exactly like a permission prompt, and Claude Code
+  // already reports its questions as one — reuse the "permission" reason so
+  // the state schema keeps a single "agent waits on an answer" value.
+  "form.created": ["needs_attention", "permission"],
+  "form.replied": ["working", null],
+  "form.cancelled": ["working", null],
+  "session.deleted": ["ended", null],
+};
 
 function isAttentionEvent(event) {
   return attentionAsks.has(event.type) || attentionResolutions.has(event.type);
 }
 
+function eventSessionID(event) {
+  const sessionID = event.data?.sessionID ?? event.data?.form?.sessionID;
+  return typeof sessionID === "string" && sessionID !== "" ? sessionID : undefined;
+}
+
 function askRequestKey(event) {
-  const requestID = attentionAsks.has(event.type)
-    ? event.properties.id
-    : event.properties.requestID;
+  const requestID = event.type === "form.created"
+    ? event.data.form?.id
+    : event.type === "permission.replied"
+      ? event.data.requestID
+      : event.data.id;
   return typeof requestID === "string" && requestID !== "" ? requestID : "unkeyed";
-}
-
-function recordPendingAsk(root, asker, key) {
-  let asksBySession = pendingAsksByRoot.get(root);
-  if (!asksBySession) {
-    asksBySession = new Map();
-    pendingAsksByRoot.set(root, asksBySession);
-  }
-  let keys = asksBySession.get(asker);
-  if (!keys) {
-    if (asksBySession.size >= pendingAskLimit) {
-      asksBySession.delete(asksBySession.keys().next().value);
-    }
-    keys = new Set();
-    asksBySession.set(asker, keys);
-  }
-  keys.add(key);
-  if (keys.size > pendingAskLimit) keys.delete(keys.values().next().value);
-}
-
-function resolvePendingAsk(root, asker, key) {
-  const asksBySession = pendingAsksByRoot.get(root);
-  const keys = asksBySession?.get(asker);
-  if (!keys) return;
-  // A reply that no longer matches its recorded ask (schema drift, daemon
-  // restart) still means the user answered something: retire the oldest.
-  if (!keys.delete(key)) keys.delete(keys.values().next().value);
-  if (keys.size === 0) asksBySession.delete(asker);
-  if (asksBySession.size === 0) pendingAsksByRoot.delete(root);
-}
-
-function hasPendingAsks(root) {
-  return pendingAsksByRoot.has(root);
-}
-
-function releasePendingAsks(asker) {
-  const asksBySession = pendingAsksByRoot.get(rootSessionID(asker));
-  if (!asksBySession) return;
-  asksBySession.delete(asker);
-  if (asksBySession.size === 0) pendingAsksByRoot.delete(rootSessionID(asker));
-}
-
-function migratePendingAsks(fromRoot, toRoot) {
-  const stranded = pendingAsksByRoot.get(fromRoot);
-  if (!stranded) return;
-  pendingAsksByRoot.delete(fromRoot);
-  for (const [asker, keys] of stranded) {
-    for (const key of keys) recordPendingAsk(toRoot, asker, key);
-  }
 }
 
 function timestamp() {
@@ -107,23 +68,29 @@ function timestamp() {
 /// The name OpenCode gives a session once its first turn is summarized. It is
 /// the only value that tells the app which terminal pane hosts this session,
 /// so it is normalized here rather than anywhere downstream.
-function sessionTitle(info) {
-  const title = info?.title;
+function sessionTitle(title) {
   return typeof title === "string" && title.trim() !== "" ? title.trim() : null;
 }
 
-function createState(session, directory) {
+/// Where a session runs: its location plus the subdirectory it was opened in.
+function sessionDirectory(location, subpath) {
+  const directory = location?.directory;
+  if (typeof directory !== "string" || directory === "") return undefined;
+  return typeof subpath === "string" && subpath !== "" ? join(directory, subpath) : directory;
+}
+
+function createState({ id, title, cwd }) {
   const now = timestamp();
   const termProgram = process.env.TERM_PROGRAM || null;
   return {
     schema_version: 1,
     tool: "opencode",
-    session_id: session.id,
-    session_title: sessionTitle(session),
+    session_id: id,
+    session_title: sessionTitle(title),
     pid: process.pid,
     status: "working",
     attention_reason: null,
-    cwd: session.directory || directory,
+    cwd,
     started_at: now,
     updated_at: now,
     terminal: {
@@ -137,7 +104,7 @@ function createState(session, directory) {
       iterm_session_id: process.env.ITERM_SESSION_ID || null,
       tmux_pane: process.env.TMUX_PANE || null,
       tty: null,
-      window_title_hint: `${basename(session.directory || directory)} — opencode`,
+      window_title_hint: `${basename(cwd)} — opencode`,
     },
   };
 }
@@ -258,198 +225,31 @@ async function writeState(state) {
   notifier.unref();
 }
 
-function eventSessionID(event) {
-  return event.properties.sessionID
-    || event.properties.session_id
-    || event.properties.info?.id;
-}
-
-function rememberTerminalSession(sessionID, phase) {
-  // Bound tombstones against hostile IDs in a long-lived daemon. FIFO
-  // eviction means noise arriving after more than 1,024 later deletions can
-  // be reclassified, while normal trailing bursts stay suppressed.
-  terminalSessions.delete(sessionID);
-  terminalSessions.set(sessionID, phase);
-  if (terminalSessions.size > terminalSessionLimit) {
-    terminalSessions.delete(terminalSessions.keys().next().value);
-  }
-}
-
-async function lookupParentSessionID(client, sessionID) {
-  const controller = new AbortController();
+async function findSession(lookupSession, sessionID) {
   let timeout;
   try {
     const deadline = new Promise((resolve) => {
-      timeout = setTimeout(() => {
-        controller.abort();
-        resolve(undefined);
-      }, sessionLookupDeadlineMilliseconds);
+      timeout = setTimeout(() => resolve(undefined), sessionLookupDeadlineMilliseconds);
     });
-    const response = await Promise.race([
-      client.session.get({ path: { id: sessionID }, signal: controller.signal }),
+    return await Promise.race([
+      Promise.resolve().then(() => lookupSession(sessionID)),
       deadline,
     ]);
-    return response?.data?.parentID;
   } catch {
-    // Fail open: a lookup hiccup must not blind the app to a real root
-    // session, and the app's reaper prunes any duplicate that slips through.
+    // Every location's instance sees this session, so an unanswered lookup
+    // cannot tell whose it is. Treat it as unknown; the next event retries.
     return undefined;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function updateState(client, event, directory) {
-  const eventSession = eventSessionID(event);
-  if (!eventSession) return;
-  // A prompt raised inside a subagent blocks the user in the root session's
-  // terminal, so its lifecycle is applied to the root's document.
-  const sessionID = isAttentionEvent(event)
-    ? rootSessionID(eventSession)
-    : eventSession;
-  const terminalPhase = terminalSessions.get(sessionID);
-  if (event.type === "session.created") {
-    terminalSessions.delete(sessionID);
-  } else if (
-    terminalPhase === "ended"
-    || (terminalPhase === "ending" && event.type !== "session.deleted")
-  ) {
-    return;
-  }
-  if (childRootSessionIDs.has(sessionID)) {
-    if (event.type === "session.deleted") {
-      releasePendingAsks(sessionID);
-      childRootSessionIDs.delete(sessionID);
-      rememberTerminalSession(sessionID, "ended");
-    }
-    return;
-  }
-  if (event.type === "session.created") {
-    if (event.properties.info?.parentID) {
-      childRootSessionIDs.set(
-        sessionID,
-        rootSessionID(event.properties.info.parentID),
-      );
-      return;
-    }
-    const state = createState(event.properties.info, directory);
-    sessions.set(sessionID, state);
-    await writeState(state);
-    return;
-  }
-  if (event.type === "session.deleted") {
-    // Mark deletion before its asynchronous write so queued noise cannot
-    // recreate the session. Keep "ending" on failure to allow deletion retry.
-    rememberTerminalSession(sessionID, "ending");
-  }
-  let state = sessions.get(sessionID);
-  if (!state) {
-    // A retitle is metadata about a session, not evidence that anyone is
-    // running it: OpenCode emits it for archived sessions too. Fabricating a
-    // document from one would put a row in the notch for nothing.
-    if (event.type === "session.updated") return;
-    // Unknown mid-stream session: the plugin instance is younger than the
-    // session (daemon restart). Ask the server whether it is a root
-    // session before fabricating a document for it.
-    const parentID = await lookupParentSessionID(client, sessionID);
-    const root = parentID && parentID !== sessionID
-      ? rootSessionID(parentID)
-      : sessionID;
-    if (root !== sessionID) {
-      if (event.type === "session.deleted") {
-        rememberTerminalSession(sessionID, "ended");
-        return;
-      }
-      childRootSessionIDs.set(sessionID, root);
-      migratePendingAsks(sessionID, root);
-      if (isAttentionEvent(event)) {
-        // Replay the prompt against the root, serialized on the root's own
-        // queue. A root queue never awaits a child queue and self-mapping is
-        // excluded above, so this await cannot deadlock.
-        await enqueueEvent(client, root, event, directory);
-      }
-      return;
-    }
-    state = createState({ id: sessionID }, directory);
-  }
-  const transitions = {
-    "permission.asked": ["needs_attention", "permission"],
-    "permission.replied": ["working", null],
-    // AskUserQuestion blocks the turn exactly like a permission prompt, and
-    // Claude Code already reports it as one — reuse the "permission" reason
-    // so the state schema keeps a single "agent waits on an answer" value.
-    "question.asked": ["needs_attention", "permission"],
-    "question.replied": ["working", null],
-    "question.rejected": ["working", null],
-    "session.idle": ["idle", null],
-    "session.deleted": ["ended", null],
-  };
-  // session.status carries its own idle signal (properties.status.type ===
-  // "idle") alongside the dedicated session.idle event below — OpenCode
-  // 1.18 emits this one, not the dedicated event, when a turn ends. Treating
-  // only busy/retry as meaningful and falling through to transitions[] (which
-  // has no "session.status" key) silently dropped every idle transition,
-  // leaving the spinner stuck on "working" forever.
-  const statusTransition = event.type === "session.status"
-    ? ["busy", "retry"].includes(event.properties.status?.type)
-      ? ["working", null]
-      : event.properties.status?.type === "idle"
-        ? ["idle", null]
-        : null
-    : null;
-  const transition = statusTransition ?? transitions[event.type];
-  const title = sessionTitle(event.properties.info);
-  const retitled = title !== null && title !== state.session_title;
-  if (retitled) state.session_title = title;
-  // While any permission or question is outstanding, only a resolution or
-  // session deletion may end the wait. OpenCode can emit both busy and idle
-  // noise for the paused turn, and neither may hide the alert.
-  const blockedByPendingAsks = state.status === "needs_attention"
-    && hasPendingAsks(sessionID)
-    && !attentionResolutions.has(event.type)
-    && event.type !== "session.deleted";
-  if (!transition || blockedByPendingAsks) {
-    // A retitle carries no status of its own, so it still has to be persisted
-    // when the event that delivered it moves nothing else.
-    if (retitled) {
-      state.updated_at = timestamp();
-      sessions.set(sessionID, state);
-      await writeState(state);
-    }
-    return;
-  }
-  let [status, attentionReason] = transition;
-  if (attentionResolutions.has(event.type) && hasPendingAsks(sessionID)) {
-    // The answered prompt was not the last outstanding one; the session is
-    // still blocked on the user.
-    [status, attentionReason] = ["needs_attention", "permission"];
-  }
-  state.status = status;
-  state.attention_reason = attentionReason;
-  state.updated_at = timestamp();
-  sessions.set(sessionID, state);
-  await writeState(state);
-  if (event.type === "session.deleted") {
-    sessions.delete(sessionID);
-    pendingAsksByRoot.delete(sessionID);
-    rememberTerminalSession(sessionID, "ended");
-  }
-}
-
 function changesState(event) {
-  return [
-    "session.created",
-    "session.deleted",
-    "session.idle",
-    // Carries the session title; it moves no status but must not be coalesced
-    // away behind unrelated noise.
-    "session.updated",
-    ...attentionAsks,
-    ...attentionResolutions,
-  ].includes(event.type) || (
-    event.type === "session.status"
-    && ["busy", "retry", "idle"].includes(event.properties.status?.type)
-  );
+  // session.renamed carries the session title; it moves no status but must
+  // not be coalesced away behind unrelated noise.
+  return event.type === "session.created"
+    || event.type === "session.renamed"
+    || Object.hasOwn(transitions, event.type);
 }
 
 function coalesceWork(work, event) {
@@ -486,73 +286,291 @@ function coalesceWork(work, event) {
   };
 }
 
-function reportUpdateError(client, error) {
-  try {
-    Promise.resolve(client.app.log({
-      body: {
-        service: "moonglade",
-        level: "warn",
-        message: `State update failed: ${String(error)}`,
-      },
-    })).catch(() => {});
-  } catch {
-    // Logging must not reject an OpenCode event or block later state updates.
-  }
-}
+/// Tracks the sessions of one OpenCode location and mirrors them into
+/// Moonglade state documents. `lookupSession` resolves a session ID to the
+/// server's session record; `reportError` receives failed state writes.
+export function createSessionTracker({ directory, lookupSession, reportError }) {
+  const sessions = new Map();
+  // Child sessions (subagents, title generation) mapped to the root session
+  // whose terminal they run in. Their prompts alert the root; every other
+  // child event is dropped so phantom sessions never get state documents.
+  const childRootSessionIDs = new Map();
+  const updateQueues = new Map();
+  // Sessions whose events are ignored until they are created again: deleted
+  // ones ("ending", "ended") and ones another location owns ("foreign").
+  const terminalSessions = new Map();
+  // Outstanding prompts per root session, keyed by the asking session so a
+  // dying subagent releases exactly its own prompts. Several subagents can
+  // prompt concurrently; answering one must not silence the others, so the
+  // root stays needs_attention until this ledger drains.
+  const pendingAsksByRoot = new Map();
 
-async function processWork(client, work, directory) {
-  const sessionID = eventSessionID(work.createdEvent || work.event);
-  if (work.resetSession && sessionID) {
-    sessions.delete(sessionID);
-    childRootSessionIDs.delete(sessionID);
+  function rootSessionID(sessionID) {
+    return childRootSessionIDs.get(sessionID) ?? sessionID;
   }
-  if (work.createdEvent) {
-    await updateState(client, work.createdEvent, directory);
-  }
-  await updateState(client, work.event, directory);
-}
 
-async function drainQueue(client, queue, directory) {
-  while (queue.pending) {
-    const work = queue.pending;
-    queue.pending = undefined;
-    try {
-      await processWork(client, work, directory);
-    } catch (error) {
-      reportUpdateError(client, error);
+  function recordPendingAsk(root, asker, key) {
+    let asksBySession = pendingAsksByRoot.get(root);
+    if (!asksBySession) {
+      asksBySession = new Map();
+      pendingAsksByRoot.set(root, asksBySession);
+    }
+    let keys = asksBySession.get(asker);
+    if (!keys) {
+      if (asksBySession.size >= pendingAskLimit) {
+        asksBySession.delete(asksBySession.keys().next().value);
+      }
+      keys = new Set();
+      asksBySession.set(asker, keys);
+    }
+    keys.add(key);
+    if (keys.size > pendingAskLimit) keys.delete(keys.values().next().value);
+  }
+
+  function resolvePendingAsk(root, asker, key) {
+    const asksBySession = pendingAsksByRoot.get(root);
+    const keys = asksBySession?.get(asker);
+    if (!keys) return;
+    // A reply that no longer matches its recorded ask (schema drift, service
+    // restart) still means the user answered something: retire the oldest.
+    if (!keys.delete(key)) keys.delete(keys.values().next().value);
+    if (keys.size === 0) asksBySession.delete(asker);
+    if (asksBySession.size === 0) pendingAsksByRoot.delete(root);
+  }
+
+  function hasPendingAsks(root) {
+    return pendingAsksByRoot.has(root);
+  }
+
+  function releasePendingAsks(asker) {
+    const asksBySession = pendingAsksByRoot.get(rootSessionID(asker));
+    if (!asksBySession) return;
+    asksBySession.delete(asker);
+    if (asksBySession.size === 0) pendingAsksByRoot.delete(rootSessionID(asker));
+  }
+
+  function migratePendingAsks(fromRoot, toRoot) {
+    const stranded = pendingAsksByRoot.get(fromRoot);
+    if (!stranded) return;
+    pendingAsksByRoot.delete(fromRoot);
+    for (const [asker, keys] of stranded) {
+      for (const key of keys) recordPendingAsk(toRoot, asker, key);
     }
   }
-}
 
-function enqueueEvent(client, queueSessionID, event, directory) {
-  let queue = updateQueues.get(queueSessionID);
-  if (queue) {
-    // A burst shares this drain promise and only mutates one pending work
-    // item, so neither promises nor event closures form an unbounded chain.
-    queue.pending = coalesceWork(queue.pending, event);
-  } else {
-    queue = {
-      pending: coalesceWork(undefined, event),
-      promise: undefined,
-    };
-    updateQueues.set(queueSessionID, queue);
-    queue.promise = drainQueue(client, queue, directory).finally(() => {
-      if (updateQueues.get(queueSessionID) === queue) {
-        updateQueues.delete(queueSessionID);
-      }
-    });
+  function rememberTerminalSession(sessionID, phase) {
+    // Bound tombstones against hostile IDs in a long-lived service. FIFO
+    // eviction means noise arriving after more than 1,024 later deletions can
+    // be reclassified, while normal trailing bursts stay suppressed.
+    terminalSessions.delete(sessionID);
+    terminalSessions.set(sessionID, phase);
+    if (terminalSessions.size > terminalSessionLimit) {
+      terminalSessions.delete(terminalSessions.keys().next().value);
+    }
   }
-  return queue.promise;
-}
 
-export const MoongladePlugin = async ({ client, directory }) => ({
-  event: ({ event }) => {
-    const sessionID = eventSessionID(event);
-    if (!sessionID) {
-      return updateState(client, event, directory).catch((error) => {
-        reportUpdateError(client, error);
+  function ignoreForeignSession(sessionID) {
+    sessions.delete(sessionID);
+    pendingAsksByRoot.delete(sessionID);
+    rememberTerminalSession(sessionID, "foreign");
+  }
+
+  async function trackCreatedSession(sessionID, data) {
+    if (data.location?.directory !== directory) {
+      ignoreForeignSession(sessionID);
+      return;
+    }
+    if (data.parentID) {
+      childRootSessionIDs.set(sessionID, rootSessionID(data.parentID));
+      return;
+    }
+    const state = createState({
+      id: sessionID,
+      title: data.title,
+      cwd: sessionDirectory(data.location, data.subpath),
+    });
+    sessions.set(sessionID, state);
+    await writeState(state);
+  }
+
+  /// Rebuilds a session this instance never saw created: the service can load
+  /// the plugin after the session began. Returns the state to update, or
+  /// undefined when the event was settled elsewhere (child, foreign session).
+  async function recoverUnknownSession(sessionID, event) {
+    const info = await findSession(lookupSession, sessionID);
+    const owner = info?.location?.directory;
+    // Only the instance of the session's own location may write its document;
+    // a failed lookup proves nothing, so it writes nothing until a retry.
+    if (typeof owner !== "string") return undefined;
+    if (owner !== directory) {
+      ignoreForeignSession(sessionID);
+      return undefined;
+    }
+    const parentID = info.parentID;
+    const root = parentID && parentID !== sessionID ? rootSessionID(parentID) : sessionID;
+    if (root === sessionID) {
+      return createState({
+        id: sessionID,
+        title: info.title,
+        cwd: sessionDirectory(info.location, info.subpath),
       });
     }
+    if (event.type === "session.deleted") {
+      rememberTerminalSession(sessionID, "ended");
+      return undefined;
+    }
+    childRootSessionIDs.set(sessionID, root);
+    migratePendingAsks(sessionID, root);
+    if (isAttentionEvent(event)) {
+      // Replay the prompt against the root, serialized on the root's own
+      // queue. A root queue never awaits a child queue and self-mapping is
+      // excluded above, so this await cannot deadlock.
+      await enqueueEvent(root, event);
+    }
+    return undefined;
+  }
+
+  async function updateState(event) {
+    const eventSession = eventSessionID(event);
+    if (!eventSession) return;
+    // A prompt raised inside a subagent blocks the user in the root session's
+    // terminal, so its lifecycle is applied to the root's document.
+    const sessionID = isAttentionEvent(event)
+      ? rootSessionID(eventSession)
+      : eventSession;
+    const terminalPhase = terminalSessions.get(sessionID);
+    if (event.type === "session.created") {
+      terminalSessions.delete(sessionID);
+    } else if (
+      terminalPhase === "ended"
+      || terminalPhase === "foreign"
+      || (terminalPhase === "ending" && event.type !== "session.deleted")
+    ) {
+      return;
+    }
+    if (childRootSessionIDs.has(sessionID)) {
+      if (event.type === "session.deleted") {
+        releasePendingAsks(sessionID);
+        childRootSessionIDs.delete(sessionID);
+        rememberTerminalSession(sessionID, "ended");
+      }
+      return;
+    }
+    if (event.type === "session.created") {
+      await trackCreatedSession(sessionID, event.data);
+      return;
+    }
+    if (event.type === "session.deleted") {
+      // Mark deletion before its asynchronous write so queued noise cannot
+      // recreate the session. Keep "ending" on failure to allow deletion retry.
+      rememberTerminalSession(sessionID, "ending");
+    }
+    let state = sessions.get(sessionID);
+    if (!state) {
+      // A retitle is metadata about a session, not evidence that anyone is
+      // running it: OpenCode emits it for archived sessions too. Fabricating a
+      // document from one would put a row in the notch for nothing.
+      if (event.type === "session.renamed") return;
+      state = await recoverUnknownSession(sessionID, event);
+      if (!state) return;
+    }
+    const transition = transitions[event.type];
+    const title = event.type === "session.renamed" ? sessionTitle(event.data.title) : null;
+    const retitled = title !== null && title !== state.session_title;
+    if (retitled) state.session_title = title;
+    // While any permission or form is outstanding, only a resolution or
+    // session deletion may end the wait. OpenCode can report the paused turn
+    // as started or ended, and neither may hide the alert.
+    const blockedByPendingAsks = state.status === "needs_attention"
+      && hasPendingAsks(sessionID)
+      && !attentionResolutions.has(event.type)
+      && event.type !== "session.deleted";
+    if (!transition || blockedByPendingAsks) {
+      // A retitle carries no status of its own, so it still has to be persisted
+      // when the event that delivered it moves nothing else.
+      if (retitled) {
+        state.updated_at = timestamp();
+        sessions.set(sessionID, state);
+        await writeState(state);
+      }
+      return;
+    }
+    let [status, attentionReason] = transition;
+    if (attentionResolutions.has(event.type) && hasPendingAsks(sessionID)) {
+      // The answered prompt was not the last outstanding one; the session is
+      // still blocked on the user.
+      [status, attentionReason] = ["needs_attention", "permission"];
+    }
+    state.status = status;
+    state.attention_reason = attentionReason;
+    state.updated_at = timestamp();
+    sessions.set(sessionID, state);
+    await writeState(state);
+    if (event.type === "session.deleted") {
+      sessions.delete(sessionID);
+      pendingAsksByRoot.delete(sessionID);
+      rememberTerminalSession(sessionID, "ended");
+    }
+  }
+
+  function reportUpdateError(error) {
+    try {
+      reportError(error);
+    } catch {
+      // Reporting must not reject an OpenCode event or block later updates.
+    }
+  }
+
+  async function processWork(work) {
+    const sessionID = eventSessionID(work.createdEvent || work.event);
+    if (work.resetSession && sessionID) {
+      sessions.delete(sessionID);
+      childRootSessionIDs.delete(sessionID);
+    }
+    if (work.createdEvent) {
+      await updateState(work.createdEvent);
+    }
+    await updateState(work.event);
+  }
+
+  async function drainQueue(queue) {
+    while (queue.pending) {
+      const work = queue.pending;
+      queue.pending = undefined;
+      try {
+        await processWork(work);
+      } catch (error) {
+        reportUpdateError(error);
+      }
+    }
+  }
+
+  function enqueueEvent(queueSessionID, event) {
+    let queue = updateQueues.get(queueSessionID);
+    if (queue) {
+      // A burst shares this drain promise and only mutates one pending work
+      // item, so neither promises nor event closures form an unbounded chain.
+      queue.pending = coalesceWork(queue.pending, event);
+    } else {
+      queue = {
+        pending: coalesceWork(undefined, event),
+        promise: undefined,
+      };
+      updateQueues.set(queueSessionID, queue);
+      queue.promise = drainQueue(queue).finally(() => {
+        if (updateQueues.get(queueSessionID) === queue) {
+          updateQueues.delete(queueSessionID);
+        }
+      });
+    }
+    return queue.promise;
+  }
+
+  /// Applies one OpenCode event. The returned promise settles once the state
+  /// documents reflect it; it never rejects.
+  function receive(event) {
+    const sessionID = eventSessionID(event);
+    if (!sessionID) return Promise.resolve();
 
     let queueSessionID = sessionID;
     if (isAttentionEvent(event)) {
@@ -569,6 +587,44 @@ export const MoongladePlugin = async ({ client, directory }) => ({
       }
       queueSessionID = root;
     }
-    return enqueueEvent(client, queueSessionID, event, directory);
+    return enqueueEvent(queueSessionID, event);
+  }
+
+  return { receive };
+}
+
+async function consumeEvents(events, tracker, signal, reportError) {
+  try {
+    for await (const event of events) {
+      // Not awaited: a stalled session lookup must not hold back the events
+      // of every other session. Per-session queues keep each one ordered.
+      void tracker.receive(event);
+    }
+    if (!signal.aborted) reportError(new Error("OpenCode event stream ended"));
+  } catch (error) {
+    if (!signal.aborted) reportError(error);
+  }
+}
+
+function reportToConsole(error) {
+  console.error(`Moonglade state update failed: ${String(error)}`);
+}
+
+export default {
+  id: "moonglade.opencode",
+  setup(ctx, reportError = reportToConsole) {
+    const controller = new AbortController();
+    const tracker = createSessionTracker({
+      directory: ctx.location.directory,
+      lookupSession: (sessionID) => ctx.session.get({ sessionID }),
+      reportError,
+    });
+    void consumeEvents(
+      ctx.event.subscribe({ signal: controller.signal }),
+      tracker,
+      controller.signal,
+      reportError,
+    );
+    return () => controller.abort();
   },
-});
+};
