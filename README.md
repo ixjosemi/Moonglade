@@ -41,6 +41,7 @@ The menu always shows the real status and provider per session, using the same t
 - a MacBook with a notch for the intended UI placement;
 - Swift 6.0 or newer to build from source;
 - Node.js 20+ to run the OpenCode and Pi behavioral tests;
+- OpenCode 2 for the OpenCode integration — its plugin uses the V2 plugin API, which OpenCode 1 cannot load;
 - Ghostty 1.3+ with AppleScript enabled, cmux with AppleScript enabled, iTerm2, or Terminal.
 - Orca Terminal with its CLI registered in **Orca → Settings → General → Orca CLI** for exact Orca focus.
 
@@ -106,7 +107,7 @@ Without integrations the app still detects running agents (via a fast libproc pr
 - adds a Codex `notify` entry only when no notification command exists;
 - installs the Pi extension `~/.pi/agent/extensions/moonglade.ts` only when it can do so safely.
 
-Installation fails instead of replacing an unknown Moonglade-named plugin. Integration directories may be symlinks — common in dotfile setups — as long as they resolve to a directory you own inside your home; `~/.moonglade` itself must be symlink-free because hooks execute binaries from it. Agents started before installing need a restart to pick up the hooks. OpenCode additionally loads plugins in its detached background service, which survives TUI restarts — after installing, run `pkill -f "opencode2 serve"` once; the next `opencode` starts a fresh service with the plugin loaded.
+Installation fails instead of replacing an unknown Moonglade-named plugin. Integration directories may be symlinks — common in dotfile setups — as long as they resolve to a directory you own inside your home; `~/.moonglade` itself must be symlink-free because hooks execute binaries from it. Agents started before installing need a restart to pick up the hooks. OpenCode 2 loads plugins in its shared background service, which survives TUI restarts — if `opencode plugin list` does not show `moonglade.opencode` after installing, run `opencode service restart` once. Because that service hosts every session, OpenCode documents record the service PID and the environment the service was started with; the reaper rebinds each one to the visible `opencode` process in the same directory when exactly one such process exists.
 
 To remove integrations and local state:
 
@@ -121,7 +122,7 @@ Then quit Moonglade and delete the app bundle. Review your Claude or Codex confi
 | Host | Focus strategy | Notes |
 | --- | --- | --- |
 | Orca | exact terminal handle through `orca terminal switch --terminal <handle> --json` | Register the CLI in **Orca → Settings → General → Orca CLI**. Moonglade resolves it only from trusted standard locations or `~/.local/bin`. A missing or stale handle fails closed; it never falls back to another terminal |
-| Herdr | exact pane ID through `herdr agent focus`, then outer-app activation | Requires the captured pane ID and socket path; incomplete or stale bindings fail closed. An OpenCode session attached to a separately launched `opencode serve` daemon inherits the daemon's pane identity, not the client's |
+| Herdr | exact pane ID through `herdr agent focus`, then outer-app activation | Requires the captured pane ID and socket path; incomplete or stale bindings fail closed. OpenCode 2 sessions run in its shared background service and inherit the pane identity the service was started from, not the client's |
 | Ghostty | exact surface ID, foreground PID, or TTY; unique project/title fallback | Requires Ghostty 1.3+ |
 | cmux | exact surface ID, no fallback | Resolved before Ghostty: cmux ships Ghostty's engine and reports the same `TERM_PROGRAM`. Requires AppleScript enabled — cmux reports an empty `id` when it is off |
 | iTerm2 | exact normalized session ID, then TTY | Selects the split, tab, and window |

@@ -140,7 +140,7 @@ magick centred.png -crop 1506x1024+30+0 +repage -strip -quality 90 assets/hero-m
 
 ### `session_title`
 
-State documents carry an optional `session_title`: the name the agent gave the session, written by its own integration. It stays absent for tools that never name a session, and until the agent picks a name. The OpenCode plugin fills it from `session.created` and `session.updated`; a retitle never moves the session status, and never creates a document for a session the plugin is not already tracking.
+State documents carry an optional `session_title`: the name the agent gave the session, written by its own integration. It stays absent for tools that never name a session, and until the agent picks a name. The OpenCode plugin fills it from `session.created` and `session.renamed`; a retitle never moves the session status, and never creates a document for a session the plugin is not already tracking.
 
 It exists because a terminal pane cannot be tied to a process. Ghostty's scripting bridge reports only a surface id, name, and working directory — no PID, no TTY — so several agents running in one project directory offer nothing to tell their panes apart. `session_title` outranks the scraped `terminal.window_title_hint` for the row name, identifies the hosting pane in `GhosttySessionMatcher`, and targets `FocusService` when no surface id was resolved.
 

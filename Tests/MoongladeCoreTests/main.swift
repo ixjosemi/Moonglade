@@ -1636,7 +1636,7 @@ func testReaperReapsAgainstProvidedScan() throws {
 }
 
 func testReaperRebindsDaemonHostedSessionToVisibleProcess() throws {
-    // The OpenCode plugin runs inside the detached `opencode2 serve` daemon,
+    // The OpenCode plugin runs inside OpenCode 2's shared background service,
     // so its state documents record the daemon PID — alive forever and never
     // present in a scan. Such a session must adopt the PID of the visible
     // same-tool process in its directory: no duplicate fallback appears and
@@ -5485,15 +5485,29 @@ func testOpenCodePluginWritesSessionState() throws {
     let driver = directory.appendingPathComponent("driver.mjs")
     try Data(
         """
-        import { MoongladePlugin } from "\(pluginURL.absoluteString)";
-        const plugin = await MoongladePlugin({
-          directory: "/tmp/open-project",
-          client: { app: { log: async ({ body }) => console.error(body.message) } }
+        import { readdir } from "node:fs/promises";
+        import { setTimeout as delay } from "node:timers/promises";
+        import plugin from "\(pluginURL.absoluteString)";
+        let release;
+        const cleanup = await plugin.setup({
+          location: { directory: "/tmp/open-project" },
+          session: { get: async () => { throw new Error("unexpected session lookup"); } },
+          event: { subscribe: async function* () {
+            yield {
+              type: "session.created",
+              data: { sessionID: "open-1", location: { directory: "/tmp/open-project" } }
+            };
+            await new Promise((resolve) => { release = resolve; });
+          } }
         });
-        await plugin.event({ event: {
-          type: "session.created",
-          properties: { info: { id: "open-1", directory: "/tmp/open-project" } }
-        }});
+        const stateDirectory = `${process.env.MOONGLADE_HOME}/state`;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const names = await readdir(stateDirectory).catch(() => []);
+          if (names.includes("opencode-b3Blbi0x.json")) break;
+          await delay(10);
+        }
+        cleanup();
+        release();
         """.utf8
     ).write(to: driver)
     let process = Process()
@@ -5543,29 +5557,30 @@ func testOpenCodePluginMapsLifecycleEvents() throws {
     try Data(
         """
         import { readFile, writeFile } from "node:fs/promises";
-        import { MoongladePlugin } from "\(pluginURL.absoluteString)";
-        const plugin = await MoongladePlugin({
+        import { createSessionTracker } from "\(pluginURL.absoluteString)";
+        const tracker = createSessionTracker({
           directory: "/tmp/project",
-          client: { app: { log: async ({ body }) => console.error(body.message) } }
+          lookupSession: async () => { throw new Error("unexpected session lookup"); },
+          reportError: (error) => console.error(String(error))
         });
-        const event = async (type, properties) => plugin.event({ event: { type, properties } });
+        const event = async (type, data) => tracker.receive({ type, data });
         const statuses = [];
         const stateURL = `${process.env.MOONGLADE_HOME}/state/opencode-b3Blbi0x.json`;
         const capture = async () => statuses.push(JSON.parse(
           await readFile(stateURL, "utf8")
         ));
-        await event("session.created", { info: { id: "open-1", directory: "/tmp/project" } });
+        await event("session.created", { sessionID: "open-1", location: { directory: "/tmp/project" } });
         const reconciled = JSON.parse(await readFile(stateURL, "utf8"));
         reconciled.process_identity = { pid: reconciled.pid, kernel_start_time_us: 123456 };
         await writeFile(stateURL, JSON.stringify(reconciled));
-        await event("permission.asked", { sessionID: "open-1" }); await capture();
+        await event("permission.asked", { sessionID: "open-1", id: "per-1" }); await capture();
         const rebound = JSON.parse(await readFile(stateURL, "utf8"));
         rebound.pid += 1;
         rebound.process_identity = { pid: rebound.pid, kernel_start_time_us: 654321 };
         await writeFile(stateURL, JSON.stringify(rebound));
-        await event("permission.replied", { sessionID: "open-1" }); await capture();
-        await event("session.idle", { sessionID: "open-1" }); await capture();
-        await event("session.deleted", { info: { id: "open-1" } }); await capture();
+        await event("permission.replied", { sessionID: "open-1", requestID: "per-1" }); await capture();
+        await event("session.execution.succeeded", { sessionID: "open-1" }); await capture();
+        await event("session.deleted", { sessionID: "open-1" }); await capture();
         console.log(JSON.stringify(statuses));
         """.utf8
     ).write(to: driver)
