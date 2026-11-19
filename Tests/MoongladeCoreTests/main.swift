@@ -1665,6 +1665,41 @@ func testReaperRebindsDaemonHostedSessionToVisibleProcess() throws {
     try expect(session.pid, equals: Int32(getpid()), "session adopts the visible PID")
 }
 
+func testReaperDropsFallbackWhenDaemonHostedSessionRebinds() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let now = Date(timeIntervalSince1970: 100)
+    let terminal = TerminalContext(tty: "/dev/ttys001")
+    let identity = SystemProcessScanner.processIdentity(of: Int32(getpid()))
+    try repository.save(AgentSession(
+        tool: .opencode, sessionID: "daemon-doc", pid: 1, status: .idle,
+        cwd: "/tmp/oc-project", startedAt: now, updatedAt: now, terminal: terminal
+    ))
+    try repository.save(AgentSession(
+        tool: .opencode, sessionID: "reaper-\(getpid())", pid: Int32(getpid()),
+        processIdentity: identity, status: .idle,
+        cwd: "/tmp/oc-project", startedAt: now, updatedAt: now, terminal: terminal, source: .reaper
+    ))
+    let visibleProcess = DetectedAgentProcess(
+        tool: .opencode,
+        processID: Int32(getpid()),
+        processIdentity: identity,
+        cwd: "/tmp/oc-project",
+        terminal: terminal
+    )
+
+    _ = try ReaperService(repository: repository).reap(detected: [visibleProcess])
+
+    let sessions = try repository.loadSessions()
+    try expect(sessions.count, equals: 1, "only one session remains")
+    let session = try sessions.first.unwrap(or: "native session disappeared")
+    try expect(session.sessionID, equals: "daemon-doc", "native session survives")
+    try expect(session.source != .reaper, equals: true, "survivor is not a fallback")
+    try expect(session.pid, equals: Int32(getpid()), "native session adopts the visible PID")
+}
+
 func testReaperAdoptsScannedGhosttyTerminalForNativeSession() throws {
     // Hook- and plugin-written documents cannot know which Ghostty surface
     // hosts their process, so focusing them falls back to title heuristics
@@ -10223,6 +10258,19 @@ func testAgentToolClassifiesScriptRuntimeLauncherSkippingFlags() throws {
     )
 }
 
+func testAgentToolRejectsOpenCodeDaemon() throws {
+    let daemon = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/opt/homebrew/Cellar/opencode-v2/2.3.2/bin/opencode",
+        leadingArguments: ["opencode", "serve", "--service"]
+    ))
+    try expect(daemon == nil, equals: true, "the opencode background daemon is not an agent process")
+    let tui = SystemProcessScanner.agentTool(of: ProcessCommand(
+        executablePath: "/opt/homebrew/bin/opencode",
+        leadingArguments: ["opencode"]
+    ))
+    try expect(tui?.tool, equals: AgentTool.opencode, "a plain opencode is still the agent")
+}
+
 func testAgentToolRejectsCommandsThatNameNoTool() throws {
     let unrelated = SystemProcessScanner.agentTool(of: ProcessCommand(
         executablePath: "/bin/zsh",
@@ -10980,6 +11028,7 @@ let tests: [(String, () throws -> Void)] = [
     ("reaper creates fallback with terminal host but no tty", testReaperCreatesFallbackWithTerminalHostButNoTTY),
     ("reaper reaps against provided scan", testReaperReapsAgainstProvidedScan),
     ("reaper rebinds daemon-hosted session to visible process", testReaperRebindsDaemonHostedSessionToVisibleProcess),
+    ("reaper drops fallback when daemon-hosted session rebinds to its process", testReaperDropsFallbackWhenDaemonHostedSessionRebinds),
     ("reaper adopts scanned Ghostty terminal for native session", testReaperAdoptsScannedGhosttyTerminalForNativeSession),
     ("reaper adopts controlling TTY without Ghostty surface", testReaperAdoptsControllingTTYWithoutGhosttySurface),
     ("terminal enrichment preserves concurrent lifecycle write", testTerminalEnrichmentPreservesConcurrentLifecycleWrite),
@@ -10998,6 +11047,7 @@ let tests: [(String, () throws -> Void)] = [
     ("agent tool classifies resolved executable path", testAgentToolClassifiesResolvedExecutablePath),
     ("agent tool falls back to argument zero for versioned installs", testAgentToolFallsBackToArgumentZeroForVersionedInstalls),
     ("agent tool classifies script runtime launcher skipping flags", testAgentToolClassifiesScriptRuntimeLauncherSkippingFlags),
+    ("agent tool rejects opencode daemon", testAgentToolRejectsOpenCodeDaemon),
     ("agent tool rejects commands that name no tool", testAgentToolRejectsCommandsThatNameNoTool),
     ("agent tool takes basenames without consulting the filesystem", testAgentToolTakesBasenamesWithoutConsultingTheFilesystem),
     ("process command cache reads each process generation once", testProcessCommandCacheReadsEachProcessGenerationOnce),
