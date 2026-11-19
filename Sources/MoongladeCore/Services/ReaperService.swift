@@ -254,7 +254,8 @@ public struct ReaperService: Sendable {
         let processesByTool = Dictionary(grouping: activeProcesses, by: \.tool)
         var reserved = Set<String>()
         for session in sessions {
-            guard let process = activeProcesses.first(where: { processMatches(session, $0) }) else { continue }
+            guard session.source != .reaper,
+                  let process = activeProcesses.first(where: { processMatches(session, $0) }) else { continue }
             reserved.insert(processKey(process))
         }
         var assignments: [String: DetectedAgentProcess] = [:]

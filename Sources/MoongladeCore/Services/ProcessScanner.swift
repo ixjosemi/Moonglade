@@ -322,6 +322,9 @@ public struct SystemProcessScanner: ProcessScanning {
         of command: ProcessCommand
     ) -> (tool: AgentTool, viaRuntimeLauncher: Bool)? {
         if let tool = classify(command, classifyToolName) {
+            if tool == .opencode, isOpenCodeDaemon(command) {
+                return nil
+            }
             return (tool, false)
         }
         guard classify(command, isScriptRuntime) == true else {
@@ -332,6 +335,10 @@ public struct SystemProcessScanner: ProcessScanning {
             .first { !$0.hasPrefix("-") }
             .flatMap(classifyToolName)
             .map { ($0, true) }
+    }
+
+    private static func isOpenCodeDaemon(_ command: ProcessCommand) -> Bool {
+        command.leadingArguments.dropFirst().first { !$0.hasPrefix("-") } == "serve"
     }
 
     private static let scriptRuntimeNames: Set<String> = ["node", "bun", "deno"]
