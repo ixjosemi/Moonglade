@@ -30,8 +30,34 @@ open .build/Moonglade.app
 3. Implement the smallest complete change.
 4. Run the full build and test commands.
 5. Update documentation when behavior, permissions, privacy, or integrations change.
+6. Get the change reviewed and scored as described in [Review before merge](#review-before-merge).
 
 Use Conventional Commits, for example `fix(installer): reject symlinked config paths`. Keep pull requests focused and explain security/privacy implications.
+
+## Review before merge
+
+Every pull request gets an adversarial review and a score before it merges, the maintainer's own and agent-written ones included. Both are written by a reviewer who did not write the change, and both are recorded in the pull request or linked from it. A review by an AI agent working in a fresh context, with no access to the author's session, counts. If you cannot arrange one, leave the Review boxes in the pull request template unticked and the maintainer provides the review before merging.
+
+The review tries to break the change rather than read it. Run `swift build`, `swift run moonglade-tests` and `./scripts/build-app.sh` on the pull request's head; when the change adds tests, revert the implementation, keep the new tests, and confirm they fail; probe the edge cases the change claims to handle.
+
+The score grades the change against its contract: the linked issue, or the pull request description when there is none. Each dimension is scored from 0 to 100 with the evidence behind it, where 100 means nothing a maintainer would ask to change and 90 means ready to merge as it is. Report the weighted total alongside the table; it informs the decision, and the findings below gate it. When a change has no runtime behaviour to test, such as documentation, score Tests on the checks that do apply.
+
+| Dimension | Weight | Graded on |
+| --- | ---: | --- |
+| Acceptance | 30% | Every promise in the contract is implemented, edge cases included. |
+| Tests | 20% | Each promise has a test that fails if the change is reverted, and the suite is green. |
+| Security | 15% | Nothing exploitable, no data exposure, untrusted input validated. |
+| Maintainability | 15% | Follows the closest existing code; no unneeded abstraction. |
+| Operational | 10% | Builds, checks and failure paths are sound. |
+| Scope | 10% | Only the agreed change. |
+
+Findings carry a severity:
+
+- **critical**: fails the contract, is exploitable, loses data, or breaks the build or the main tests;
+- **major**: breaks an edge case or a secondary path, leaves a central promise without a protecting test, or breaks a pattern the repository already follows;
+- **minor**: style, consistency or an optional improvement.
+
+Critical and major findings are important: each one is fixed, or answered in the pull request with a reason, before merging.
 
 ## Pull requests
 

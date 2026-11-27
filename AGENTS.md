@@ -22,6 +22,10 @@ SwiftPM cannot compile Metal sources, so `Sources/MoongladeApp/Ripple.metal` is 
 
 It needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). The script also rewrites `Resources/default.metallib.source-sha256`, which records the source the committed library was built from; commit it alongside the library. CI compares that hash against `Ripple.metal` and fails when they disagree, so an edited shader with a stale library is caught instead of shipping silently.
 
+## Review before merge
+
+Every pull request, agent-written ones included, passes the review and score described in [CONTRIBUTING.md](CONTRIBUTING.md#review-before-merge) before it merges; that section holds the rubric and the severities. An agent that wrote a change does not review it in the same context: the review runs in a fresh one. The maintainer runs both with a personal `/review-pipeline <pr> --score` command; it is not part of this repository, and nothing here depends on it.
+
 ## Distribution
 
 There are two install paths and they converge: `scripts/install.sh` builds from source, the published build is downloaded by `scripts/install-remote.sh`, and both hand the finished bundle to `scripts/install-app.sh`. That last script ships inside the bundle at `Contents/Resources/install-app.sh` because the remote installer is fetched standalone through `curl` and cannot read this repository — one implementation, distributed with the artifact it installs. Change the install sequence there, never in two places.
