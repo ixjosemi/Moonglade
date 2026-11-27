@@ -65,4 +65,5 @@ jobs:
           codesign --verify --deep --strict .build/Moonglade.app
           test -x .build/Moonglade.app/Contents/MacOS/Moonglade
           test -x .build/Moonglade.app/Contents/Resources/bin/moonglade
-          test -f .build/Moonglade.app/Contents/Resources/Moonglade_MoongladeApp.bundle/default.metallib
+          ./scripts/verify-bundle-resource.sh \
+            .build/Moonglade.app/Contents/Resources/Moonglade_MoongladeApp.bundle default metallib

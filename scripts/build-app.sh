@@ -13,15 +13,19 @@ set -eu
 sign_identity="${MOONGLADE_SIGN_IDENTITY:--}"
 
 swift build -c release
+# Ask SwiftPM where it wrote the products rather than assuming .build/release:
+# that symlink exists only under the native build system, and Swift Build, the
+# default from Swift 6.4, writes them elsewhere.
+products="$(swift build -c release --show-bin-path)"
 bundle=".build/Moonglade.app"
 /bin/rm -rf "$bundle"
 /bin/mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources/bin"
 /bin/cp config/Info.plist "$bundle/Contents/Info.plist"
 /bin/cp config/AppIcon.icns "$bundle/Contents/Resources/AppIcon.icns"
-/bin/cp .build/release/MoongladeApp "$bundle/Contents/MacOS/Moonglade"
-/bin/cp .build/release/moonglade "$bundle/Contents/Resources/bin/moonglade"
-/bin/cp -R .build/release/Moonglade_MoongladeCore.bundle "$bundle/Contents/Resources/"
-/bin/cp -R .build/release/Moonglade_MoongladeApp.bundle "$bundle/Contents/Resources/"
+/bin/cp "$products/MoongladeApp" "$bundle/Contents/MacOS/Moonglade"
+/bin/cp "$products/moonglade" "$bundle/Contents/Resources/bin/moonglade"
+/bin/cp -R "$products/Moonglade_MoongladeCore.bundle" "$bundle/Contents/Resources/"
+/bin/cp -R "$products/Moonglade_MoongladeApp.bundle" "$bundle/Contents/Resources/"
 /bin/cp scripts/install-app.sh "$bundle/Contents/Resources/install-app.sh"
 /bin/chmod 755 "$bundle/Contents/MacOS/Moonglade" "$bundle/Contents/Resources/bin/moonglade" \
     "$bundle/Contents/Resources/install-app.sh"

@@ -9349,8 +9349,11 @@ func testInstallerShipsTheResourceBundleBesideTheInstalledBinary() throws {
     // Existing is not enough: the installed binary reads its hook scripts and
     // agent icons back out of this copy on every install and doctor run.
     try expect(
-        FileManager.default.fileExists(
-            atPath: installedBundle.appendingPathComponent("Resources/hooks/claude-hook.sh").path
+        BundledResources.containsResource(
+            named: "claude-hook",
+            withExtension: "sh",
+            subdirectory: "Resources/hooks",
+            inBundleAt: installedBundle.path
         ),
         equals: true,
         "the installed bundle carries the hook scripts"
@@ -9379,6 +9382,50 @@ func testInstallationDoctorFailsWhenTheResourceBundleIsMissing() throws {
         equals: true,
         "detail names the recovery command"
     )
+}
+
+/// SwiftPM's two build systems lay the same resource bundle out differently:
+/// the native one writes a flat directory, while Swift Build — the default
+/// from Swift 6.4 — writes a real macOS bundle with everything under
+/// Contents/Resources. The installer copies whichever one the toolchain
+/// produced, so the doctor must read the bundle the way Foundation does
+/// rather than assume one layout and report a healthy install as broken.
+func testInstallationDoctorAcceptsEitherSwiftPMBundleLayout() throws {
+    let layouts = [
+        ("native", "Resources/hooks/claude-hook.sh"),
+        ("swiftbuild", "Contents/Resources/Resources/hooks/claude-hook.sh"),
+    ]
+    for (buildSystem, hookPath) in layouts {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+        let bundle = home.appendingPathComponent(".moonglade/bin/\(BundledResources.bundleName)")
+        try FileManager.default.removeItem(at: bundle)
+        let hook = bundle.appendingPathComponent(hookPath)
+        try FileManager.default.createDirectory(
+            at: hook.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("#!/bin/sh\n".utf8).write(to: hook)
+        if buildSystem == "swiftbuild" {
+            try PropertyListSerialization.data(
+                fromPropertyList: [
+                    "CFBundleIdentifier": "Moonglade.MoongladeCore.resources",
+                    "CFBundlePackageType": "BNDL",
+                ],
+                format: .xml,
+                options: 0
+            ).write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        }
+
+        let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+        let resources = try checks.first { $0.title == "resource bundle" }
+            .unwrap(or: "missing resource bundle check")
+
+        try expect(resources.passed, equals: true, "\(buildSystem) bundle layout: \(resources.detail)")
+    }
 }
 
 func testCLIParsesDoctorCommand() throws {
@@ -10990,8 +11037,50 @@ func testInlineActionsClickGateClaimsRightAndControlClicks() throws {
     )
 }
 
+func testDemoWorkspaceSeedsOneSessionPerVisibleStateInsideItsOwnRoot() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let workspace = DemoWorkspace(rootURL: root)
+
+    let seeded = try workspace.seed(now: now)
+    let loaded = try StateRepository(directoryURL: workspace.stateDirectoryURL).loadSessions()
+
+    try expect(Set(loaded.map { $0.id }), equals: Set(seeded.map { $0.id }), "seeded sessions reload from the demo state directory")
+    try expect(loaded.filter { $0.status == .working }.count, equals: 2, "two running sessions")
+    try expect(loaded.filter { $0.status == .idle }.count, equals: 1, "one session waiting at the prompt")
+    try expect(
+        loaded.filter { $0.status == .needsAttention && $0.attentionReason == .permission }.count,
+        equals: 1,
+        "one session blocked on a permission ask"
+    )
+    try expect(loaded.allSatisfy { $0.sessionTitle != nil }, equals: true, "every demo session is named")
+    try expect(
+        loaded.allSatisfy { $0.cwd.hasPrefix(root.path + "/") },
+        equals: true,
+        "demo projects live inside the demo root, never in the user's home"
+    )
+    try expect(loaded.allSatisfy { $0.startedAt <= now }, equals: true, "elapsed times are measured back from now")
+    let claude = try loaded.first { $0.tool == .claude && $0.status == .working }
+        ?? { throw TestFailure.expectation("a running Claude session") }()
+    try expect(
+        GitWorkspaceInspector.branchName(forWorkingDirectory: claude.cwd),
+        equals: "feat/ghostty-identity",
+        "demo projects carry a real branch for the row to resolve"
+    )
+}
+
+func testDemoWorkspaceIsEnabledOnlyByExplicitFlag() throws {
+    try expect(DemoWorkspace.isEnabled(in: ["MOONGLADE_DEMO": "1"]), equals: true, "flag set")
+    try expect(DemoWorkspace.isEnabled(in: [:]), equals: false, "flag absent")
+    try expect(DemoWorkspace.isEnabled(in: ["MOONGLADE_DEMO": "0"]), equals: false, "flag off")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("notch glass scrim keeps collapsed bar solid and fades expanded", testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded),
+    ("demo workspace seeds one session per visible state inside its own root", testDemoWorkspaceSeedsOneSessionPerVisibleStateInsideItsOwnRoot),
+    ("demo workspace is enabled only by explicit flag", testDemoWorkspaceIsEnabledOnlyByExplicitFlag),
     ("compact status dot rides each wing's outer screen edge", testCompactStatusDotRidesEachWingsOuterScreenEdge),
     ("version 1 state document reconstructs session", testVersionOneStateDocumentReconstructsSession),
     ("terminal context round trips Herdr identity without changing schema version", testTerminalContextRoundTripsHerdrIdentityWithoutChangingSchemaVersion),
@@ -11256,6 +11345,7 @@ let tests: [(String, () throws -> Void)] = [
     ("app resource bundle search covers the installed app layout", testAppResourceBundleSearchCoversTheInstalledAppLayout),
     ("installer ships the resource bundle beside the installed binary", testInstallerShipsTheResourceBundleBesideTheInstalledBinary),
     ("installation doctor fails when the resource bundle is missing", testInstallationDoctorFailsWhenTheResourceBundleIsMissing),
+    ("installation doctor accepts either SwiftPM bundle layout", testInstallationDoctorAcceptsEitherSwiftPMBundleLayout),
     ("CLI parses doctor command", testCLIParsesDoctorCommand),
     ("hook input rejects oversized payloads", testHookInputRejectsOversizedPayloads),
     ("Codex notify marks turn complete", testCodexNotifyMarksTurnComplete),

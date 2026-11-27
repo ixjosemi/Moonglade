@@ -15,7 +15,8 @@
 #     near the bottom, so a centre crop would take the camera band off one and
 #     the shoulders off the other. Instead the render is fitted to 630 tall and
 #     its outermost pixel column is stretched across the 54px left over on each
-#     side. That column is smooth night gradient, so the join cannot be seen.
+#     side. The banner's vignette takes that column down to night, so the
+#     join cannot be seen.
 #
 # JPEG, not PNG: the banner carries its own grain, which leaves q92 nothing to
 # smear on the gradients, and it comes out eight times smaller. Alpha would buy

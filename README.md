@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/header.svg" alt="The Moonglade panel hanging from the MacBook notch, listing four live agent sessions with their provider mark, status, title, project, branch, and elapsed time. Below it a frosted moon throws its glade across the water, and on that water the collapsed bar carries a count per state" width="880"/>
+  <img src="assets/header.svg" alt="The Moonglade panel, captured from the running app, hanging from the MacBook notch and listing four live agent sessions with their provider tile, status, title, project, branch or pipeline step, and elapsed time. Below it the moon throws its glade across the water, and on that water the collapsed bar carries a count per state" width="880"/>
 </p>
 
 **Know when your coding agents need you—without leaving the notch.**
