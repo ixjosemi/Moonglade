@@ -4,6 +4,10 @@ cwd=${1:-"$PWD"}
 tool=${2:-agent}
 process_id=${3:-"$PPID"}
 term_program=${TERM_PROGRAM:-}
+# Goatty reports TERM_PROGRAM=ghostty too; its bundle id is what tells them apart.
+if [ "${__CFBundleIdentifier:-}" = "xyz.goatty.mac" ]; then
+    term_program=Goatty
+fi
 orca_terminal_handle=${ORCA_TERMINAL_HANDLE:-}
 case "$term_program" in
     [Oo][Rr][Cc][Aa]) ;;
@@ -16,6 +20,8 @@ tmux_pane=${TMUX_PANE:-}
 cmux_surface_id=${CMUX_SURFACE_ID:-}
 herdr_pane_id=${HERDR_PANE_ID:-}
 herdr_socket_path=${HERDR_SOCKET_PATH:-}
+herdr_core_terminal_id=${HC_TERMINAL_ID:-}
+herdr_core_socket_path=${HC_TERMINAL_SOCKET:-}
 tty_name=$(/bin/ps -o tty= -p "$process_id" 2>/dev/null | /usr/bin/tr -d ' ')
 case "$tty_name" in
     ""|"??") tty_path="" ;;
@@ -33,7 +39,9 @@ project_name=${cwd##*/}
     "$project_name — $tool" \
     "$cmux_surface_id" \
     "$herdr_pane_id" \
-    "$herdr_socket_path" <<'JAVASCRIPT' 2>/dev/null || true
+    "$herdr_socket_path" \
+    "$herdr_core_terminal_id" \
+    "$herdr_core_socket_path" <<'JAVASCRIPT' 2>/dev/null || true
 function optional(value) {
     return value === "" ? null : value;
 }
@@ -48,7 +56,9 @@ function run(arguments) {
         window_title_hint: optional(arguments[5]),
         cmux_surface_id: optional(arguments[6]),
         herdr_pane_id: optional(arguments[7]),
-        herdr_socket_path: optional(arguments[8])
+        herdr_socket_path: optional(arguments[8]),
+        herdr_core_terminal_id: optional(arguments[9]),
+        herdr_core_socket_path: optional(arguments[10])
     });
 }
 JAVASCRIPT

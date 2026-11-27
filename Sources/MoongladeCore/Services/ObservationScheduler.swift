@@ -345,12 +345,19 @@ public final class ObservationScheduler {
         // process can hold documents for several sessions — a TUI the user
         // switched between — and its pane carries the name of the one it is
         // showing, so the most recently updated session wins the process.
+        // The herdr-core binding follows the same rule: only an integration
+        // sees it, so the scanner learns it from the documents.
+        let sessionsByRecency = snapshot.sessions.sorted { $0.updatedAt < $1.updatedAt }
         let enriched = processScanner.enrichTerminalContexts(
             in: detected,
             sessionTitles: Dictionary(
-                snapshot.sessions
-                    .sorted { $0.updatedAt < $1.updatedAt }
-                    .compactMap { session in session.sessionTitle.map { (session.pid, $0) } },
+                sessionsByRecency.compactMap { session in session.sessionTitle.map { (session.pid, $0) } },
+                uniquingKeysWith: { $1 }
+            ),
+            herdrCoreBindings: Dictionary(
+                sessionsByRecency.compactMap { session in
+                    HerdrCoreTerminalBinding(session.terminal).map { (session.pid, $0) }
+                },
                 uniquingKeysWith: { $1 }
             )
         )

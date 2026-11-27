@@ -9,7 +9,7 @@ Requirements:
 - macOS 14 or newer;
 - Swift 6.0 or newer;
 - Node.js 20 or newer for OpenCode integration tests;
-- Ghostty 1.3+, cmux, iTerm2, or Terminal for manual focus testing. Ghostty and
+- Ghostty 1.3+, cmux, Goatty, iTerm2, or Terminal for manual focus testing. Ghostty and
   cmux both need AppleScript enabled.
 
 ```bash

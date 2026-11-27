@@ -62,6 +62,12 @@ public struct TerminalContext: Codable, Equatable, Sendable {
     /// socket path below; neither value is used as a fallback terminal hint.
     public let herdrPaneID: String?
     public let herdrSocketPath: String?
+    /// herdr-core's address and socket for the terminal it keeps the pane in
+    /// (`HC_TERMINAL_ID`, `HC_TERMINAL_SOCKET`). Goatty draws its panes but
+    /// leaves them in herdr-core, so this is where the pane's title is read.
+    /// Validated as one `HerdrCoreTerminalBinding` before any use.
+    public let herdrCoreTerminalID: String?
+    public let herdrCoreSocketPath: String?
     public let itermSessionID: String?
     public let tmuxPane: String?
     public let tty: String?
@@ -74,6 +80,8 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         cmuxSurfaceID: String? = nil,
         herdrPaneID: String? = nil,
         herdrSocketPath: String? = nil,
+        herdrCoreTerminalID: String? = nil,
+        herdrCoreSocketPath: String? = nil,
         itermSessionID: String? = nil,
         tmuxPane: String? = nil,
         tty: String? = nil,
@@ -85,6 +93,8 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         self.cmuxSurfaceID = cmuxSurfaceID
         self.herdrPaneID = herdrPaneID
         self.herdrSocketPath = herdrSocketPath
+        self.herdrCoreTerminalID = herdrCoreTerminalID
+        self.herdrCoreSocketPath = herdrCoreSocketPath
         self.itermSessionID = itermSessionID
         self.tmuxPane = tmuxPane
         self.tty = tty
@@ -98,23 +108,34 @@ public struct TerminalContext: Codable, Equatable, Sendable {
         case cmuxSurfaceID = "cmux_surface_id"
         case herdrPaneID = "herdr_pane_id"
         case herdrSocketPath = "herdr_socket_path"
+        case herdrCoreTerminalID = "herdr_core_terminal_id"
+        case herdrCoreSocketPath = "herdr_core_socket_path"
         case itermSessionID = "iterm_session_id"
         case tmuxPane = "tmux_pane"
         case tty
         case windowTitleHint = "window_title_hint"
     }
 
+    /// Term program recorded for sessions hosted by Goatty.
+    public static let goattyTermProgram = "Goatty"
+    /// Goatty draws its panes with Ghostty's engine, so everything it hosts
+    /// inherits `TERM_PROGRAM=ghostty`; the bundle identifier macOS exports
+    /// to the app's children is the only signal that tells the two apart.
+    public static let goattyBundleIdentifier = "xyz.goatty.mac"
+
     /// Applies identifiers exported by the current integration. Host-owned
-    /// Orca and Herdr identity is intentionally not carried forward here: the
-    /// repository preserves a known target only when the lifecycle process
-    /// matches.
+    /// Orca, Herdr and herdr-core identity is intentionally not carried
+    /// forward here: the repository preserves a known target only when the
+    /// lifecycle process matches.
     public func mergingEnvironment(_ environment: [String: String]) -> TerminalContext {
         func value(_ key: String) -> String? {
             guard let candidate = environment[key], !candidate.isEmpty else { return nil }
             return candidate
         }
 
-        let capturedTermProgram = value("TERM_PROGRAM") ?? termProgram
+        let capturedTermProgram = value("__CFBundleIdentifier") == Self.goattyBundleIdentifier
+            ? Self.goattyTermProgram
+            : value("TERM_PROGRAM") ?? termProgram
         return TerminalContext(
             termProgram: capturedTermProgram,
             orcaTerminalHandle: capturedTermProgram?.lowercased() == "orca"
@@ -124,6 +145,8 @@ public struct TerminalContext: Codable, Equatable, Sendable {
             cmuxSurfaceID: value("CMUX_SURFACE_ID") ?? cmuxSurfaceID,
             herdrPaneID: value("HERDR_PANE_ID"),
             herdrSocketPath: value("HERDR_SOCKET_PATH"),
+            herdrCoreTerminalID: value("HC_TERMINAL_ID"),
+            herdrCoreSocketPath: value("HC_TERMINAL_SOCKET"),
             itermSessionID: value("ITERM_SESSION_ID") ?? itermSessionID,
             tmuxPane: value("TMUX_PANE") ?? tmuxPane,
             tty: value("MOONGLADE_TTY") ?? tty,

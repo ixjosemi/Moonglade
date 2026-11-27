@@ -24,9 +24,17 @@ function sessionID(ctx) {
   return ctx?.sessionManager?.getSessionId?.() || `pid-${process.pid}`;
 }
 
+// Goatty draws its panes with Ghostty's engine, so they inherit
+// TERM_PROGRAM=ghostty; the bundle id macOS exports to the app's children is
+// what tells the two apart.
+function hostTermProgram() {
+  if (process.env.__CFBundleIdentifier === "xyz.goatty.mac") return "Goatty";
+  return process.env.TERM_PROGRAM || null;
+}
+
 function createState(id, cwd) {
   const now = timestamp();
-  const termProgram = process.env.TERM_PROGRAM || null;
+  const termProgram = hostTermProgram();
   return {
     schema_version: 1,
     tool: "pi",
@@ -45,6 +53,8 @@ function createState(id, cwd) {
       cmux_surface_id: process.env.CMUX_SURFACE_ID || null,
       herdr_pane_id: process.env.HERDR_PANE_ID || null,
       herdr_socket_path: process.env.HERDR_SOCKET_PATH || null,
+      herdr_core_terminal_id: process.env.HC_TERMINAL_ID || null,
+      herdr_core_socket_path: process.env.HC_TERMINAL_SOCKET || null,
       iterm_session_id: process.env.ITERM_SESSION_ID || null,
       tmux_pane: process.env.TMUX_PANE || null,
       tty: null,

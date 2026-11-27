@@ -611,6 +611,7 @@ public struct StateRepository: Sendable {
         let existingSessions = session.source == .reaper ? [] : snapshot.lifecycleSessions
         var session = preservingProcessIdentity(in: session, from: existingSessions)
         session = preservingHerdrBinding(in: session, from: existingSessions)
+        session = preservingHerdrCoreHost(in: session, from: existingSessions)
         session = preservingOrcaTerminalHandle(in: session, from: existingSessions)
         if session.source != .reaper {
             let supersededSessions = existingSessions.filter {
@@ -816,6 +817,55 @@ public struct StateRepository: Sendable {
             cmuxSurfaceID: session.terminal.cmuxSurfaceID,
             herdrPaneID: previous.paneID,
             herdrSocketPath: previous.socketPath,
+            herdrCoreTerminalID: session.terminal.herdrCoreTerminalID,
+            herdrCoreSocketPath: session.terminal.herdrCoreSocketPath,
+            itermSessionID: session.terminal.itermSessionID,
+            tmuxPane: session.terminal.tmuxPane,
+            tty: session.terminal.tty,
+            windowTitleHint: session.terminal.windowTitleHint
+        )
+        return session.replacingTerminal(terminal)
+    }
+
+    /// Goatty's host classification and herdr-core's terminal binding are
+    /// read from the agent's environment, so only integration events observe
+    /// them. A save that observed no environment — the Codex rollout
+    /// watcher's, which carries the scanner's view of a PTY owned by the
+    /// herdr-core daemon — keeps what the same verified process generation
+    /// already reported, on the Herdr binding's match rule; a save that names
+    /// a host or a binding replaces them.
+    private func preservingHerdrCoreHost(
+        in session: AgentSession,
+        from existingSessions: [AgentSession]
+    ) -> AgentSession {
+        guard let existing = existingSessions.first(where: {
+            $0.tool == session.tool
+                && $0.sessionID == session.sessionID
+                && $0.pid == session.pid
+        }), let processIdentity = session.processIdentity,
+           existing.processIdentity == processIdentity else {
+            return session
+        }
+        let keepsGoatty = session.terminal.termProgram == nil
+            && existing.terminal.termProgram == TerminalContext.goattyTermProgram
+        let keepsBinding = session.terminal.herdrCoreTerminalID == nil
+            && session.terminal.herdrCoreSocketPath == nil
+            && existing.terminal.herdrCoreTerminalID != nil
+            && existing.terminal.herdrCoreSocketPath != nil
+        guard keepsGoatty || keepsBinding else { return session }
+        let terminal = TerminalContext(
+            termProgram: keepsGoatty ? existing.terminal.termProgram : session.terminal.termProgram,
+            orcaTerminalHandle: session.terminal.orcaTerminalHandle,
+            ghosttyTerminalID: session.terminal.ghosttyTerminalID,
+            cmuxSurfaceID: session.terminal.cmuxSurfaceID,
+            herdrPaneID: session.terminal.herdrPaneID,
+            herdrSocketPath: session.terminal.herdrSocketPath,
+            herdrCoreTerminalID: keepsBinding
+                ? existing.terminal.herdrCoreTerminalID
+                : session.terminal.herdrCoreTerminalID,
+            herdrCoreSocketPath: keepsBinding
+                ? existing.terminal.herdrCoreSocketPath
+                : session.terminal.herdrCoreSocketPath,
             itermSessionID: session.terminal.itermSessionID,
             tmuxPane: session.terminal.tmuxPane,
             tty: session.terminal.tty,
@@ -854,6 +904,8 @@ public struct StateRepository: Sendable {
             cmuxSurfaceID: session.terminal.cmuxSurfaceID,
             herdrPaneID: session.terminal.herdrPaneID,
             herdrSocketPath: session.terminal.herdrSocketPath,
+            herdrCoreTerminalID: session.terminal.herdrCoreTerminalID,
+            herdrCoreSocketPath: session.terminal.herdrCoreSocketPath,
             itermSessionID: session.terminal.itermSessionID,
             tmuxPane: session.terminal.tmuxPane,
             tty: session.terminal.tty,
@@ -1032,6 +1084,10 @@ public struct StateRepository: Sendable {
                 cmuxSurfaceID: lifecycle.terminal.cmuxSurfaceID,
                 herdrPaneID: herdr?.paneID,
                 herdrSocketPath: herdr?.socketPath,
+                // Same for herdr-core's binding: HC_* exist only in the agent's
+                // environment.
+                herdrCoreTerminalID: lifecycle.terminal.herdrCoreTerminalID,
+                herdrCoreSocketPath: lifecycle.terminal.herdrCoreSocketPath,
                 itermSessionID: lifecycle.terminal.itermSessionID,
                 tmuxPane: lifecycle.terminal.tmuxPane ?? enriched.tmuxPane,
                 tty: lifecycle.terminal.tty ?? enriched.tty,
