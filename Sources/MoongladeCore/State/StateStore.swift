@@ -263,7 +263,7 @@ public final class StateStore {
             CFNotificationCenterRemoveObserver(
                 CFNotificationCenterGetDarwinNotifyCenter(),
                 observer,
-                CFNotificationName(StateChangeNotifier.notificationName as CFString),
+                CFNotificationName(repository.stateChangeNotifier.notificationName as CFString),
                 nil
             )
             darwinNotificationContext = nil
@@ -279,7 +279,7 @@ public final class StateStore {
             CFNotificationCenterGetDarwinNotifyCenter(),
             Unmanaged.passUnretained(context).toOpaque(),
             stateStoreNotificationCallback,
-            StateChangeNotifier.notificationName as CFString,
+            repository.stateChangeNotifier.notificationName as CFString,
             nil,
             .deliverImmediately
         )

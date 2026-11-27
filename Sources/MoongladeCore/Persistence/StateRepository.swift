@@ -144,12 +144,23 @@ public struct StateRepository: Sendable {
         set { decodedDocumentCounter.value = newValue }
     }
     public let directoryURL: URL
+    /// The channel this repository announces writes on and its stores observe.
+    package let stateChangeNotifier: StateChangeNotifier
     private let materializationObserver: (@Sendable () -> Void)?
     private let reloadObserver: (@Sendable () throws -> Void)?
     package var didReadDocumentForTesting: (@Sendable () -> Void)?
 
     public init(directoryURL: URL) {
         self.directoryURL = directoryURL
+        stateChangeNotifier = .standard
+        materializationObserver = nil
+        reloadObserver = nil
+        didReadDocumentForTesting = nil
+    }
+
+    package init(directoryURL: URL, stateChangeNotifier: StateChangeNotifier) {
+        self.directoryURL = directoryURL
+        self.stateChangeNotifier = stateChangeNotifier
         materializationObserver = nil
         reloadObserver = nil
         didReadDocumentForTesting = nil
@@ -157,9 +168,11 @@ public struct StateRepository: Sendable {
 
     package init(
         directoryURL: URL,
+        stateChangeNotifier: StateChangeNotifier = .standard,
         materializationObserver: @escaping @Sendable () -> Void
     ) {
         self.directoryURL = directoryURL
+        self.stateChangeNotifier = stateChangeNotifier
         self.materializationObserver = materializationObserver
         reloadObserver = nil
         didReadDocumentForTesting = nil
@@ -170,6 +183,7 @@ public struct StateRepository: Sendable {
         reloadObserver: @escaping @Sendable () throws -> Void
     ) {
         self.directoryURL = directoryURL
+        stateChangeNotifier = .standard
         materializationObserver = nil
         self.reloadObserver = reloadObserver
         didReadDocumentForTesting = nil
@@ -493,7 +507,7 @@ public struct StateRepository: Sendable {
         }
         let destinationURL = directoryURL.appendingPathComponent(Self.convoyOwnershipFileName)
         try SecureFileWriter.writeAtomically(data, to: destinationURL)
-        StateChangeNotifier.post()
+        stateChangeNotifier.post()
         return true
     }
 
@@ -618,7 +632,7 @@ public struct StateRepository: Sendable {
         }
         try SecureFileWriter.writeAtomically(data, to: destinationURL)
         snapshot.upsert(lifecycle: session, merged: mergedSession(for: session))
-        StateChangeNotifier.post()
+        stateChangeNotifier.post()
     }
 
     private func withWriteLock<Value>(_ body: () throws -> Value) throws -> Value {
@@ -739,7 +753,7 @@ public struct StateRepository: Sendable {
 
         try SecureFileWriter.writeAtomically(data, to: enrichmentURL)
         snapshot.upsert(lifecycle: lifecycle, merged: merged)
-        StateChangeNotifier.post()
+        stateChangeNotifier.post()
         return merged
     }
 
@@ -902,7 +916,7 @@ public struct StateRepository: Sendable {
                 removed = true
             }
             if removed {
-                StateChangeNotifier.post()
+                stateChangeNotifier.post()
             }
         }
     }
