@@ -55,16 +55,25 @@ public enum BundledResources {
         get throws { try locatedBundle.get().bundleURL }
     }
 
+    /// Reads through `Bundle` rather than joining paths, because the layout
+    /// depends on the SwiftPM build system that produced the bundle: the
+    /// native one writes a flat directory, Swift Build (the default from
+    /// Swift 6.4) a macOS bundle with resources under Contents/Resources.
     public static func containsResource(
         named name: String,
         withExtension fileExtension: String,
+        subdirectory: String? = nil,
         inBundleAt path: String
     ) -> Bool {
         var metadata = stat()
         guard Darwin.lstat(path, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFDIR,
               let bundle = Bundle(path: path),
-              let resourceURL = bundle.url(forResource: name, withExtension: fileExtension),
+              let resourceURL = bundle.url(
+                  forResource: name,
+                  withExtension: fileExtension,
+                  subdirectory: subdirectory
+              ),
               Darwin.lstat(resourceURL.path, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG else { return false }
         return true
