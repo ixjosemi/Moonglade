@@ -2368,6 +2368,7 @@ func testTerminalEnrichmentDoesNotReplaceLifecycleWriteAfterReload() throws {
     )
     let enrichmentRepository = StateRepository(
         directoryURL: directory,
+        stateChangeNotifier: .standard,
         reloadObserver: {
             try lifecycleRepository.save(lifecycleUpdate)
         }
@@ -2926,6 +2927,7 @@ func testObservationSchedulerMaterializesStateOncePerTick() throws {
     let scheduler = ObservationScheduler(
         repository: StateRepository(
             directoryURL: stateDirectoryURL,
+            stateChangeNotifier: .standard,
             materializationObserver: { counter.increment() }
         ),
         processScanner: TestProcessScanner([detectedConvoyProcess(), embeddedServer]),
@@ -3266,6 +3268,7 @@ func testConvoyMetadataTickReusesLastVerifiedProcessScan() throws {
     let scheduler = ObservationScheduler(
         repository: StateRepository(
             directoryURL: stateDirectoryURL,
+            stateChangeNotifier: .standard,
             materializationObserver: { materializationCounter.increment() }
         ),
         processScanner: scanner,
@@ -3731,9 +3734,14 @@ func testStateStoreReloadFiltersEndedSessionsWithoutWriting() throws {
 }
 
 final class StartupStateMutationProbe: @unchecked Sendable {
+    private let notifier: StateChangeNotifier
     private let lock = NSLock()
     private var didPublish = false
     private var failureDescription: String?
+
+    init(notifier: StateChangeNotifier) {
+        self.notifier = notifier
+    }
 
     func publishOnce(_ data: Data, to fileURL: URL) {
         lock.lock()
@@ -3746,7 +3754,7 @@ final class StartupStateMutationProbe: @unchecked Sendable {
 
         do {
             try data.writeAtomically(to: fileURL)
-            StateChangeNotifier.post()
+            notifier.post()
         } catch {
             lock.lock()
             failureDescription = String(describing: error)
@@ -3773,9 +3781,11 @@ func testStateStoreArmsNotificationsBeforeStartupBaselineMutation() throws {
         status: "working",
         pid: Int32(getpid())
     )
-    let mutation = StartupStateMutationProbe()
+    let notifier = isolatedStateChangeNotifier()
+    let mutation = StartupStateMutationProbe(notifier: notifier)
     let repository = StateRepository(
         directoryURL: directory,
+        stateChangeNotifier: notifier,
         materializationObserver: {
             mutation.publishOnce(state, to: stateURL)
         }
@@ -3838,12 +3848,16 @@ func testStateStoreDarwinNotificationObservesNewStateFiles() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let store = StateStore(repository: StateRepository(directoryURL: directory))
+    let repository = StateRepository(
+        directoryURL: directory,
+        stateChangeNotifier: isolatedStateChangeNotifier()
+    )
+    let store = StateStore(repository: repository)
     try store.startObserving(pollInterval: nil, layers: .darwinNotification)
     defer { store.stopObserving() }
     try validStateJSON(sessionID: "notified", status: "working", pid: Int32(getpid()))
         .writeAtomically(to: directory.appendingPathComponent("claude-notified.json"))
-    StateChangeNotifier.post()
+    repository.stateChangeNotifier.post()
 
     let deadline = Date().addingTimeInterval(1)
     while store.sessions.isEmpty, Date() < deadline {
@@ -3857,7 +3871,10 @@ func testStateStoreDarwinNotificationObservesRemovedStateFiles() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let repository = StateRepository(directoryURL: directory)
+    let repository = StateRepository(
+        directoryURL: directory,
+        stateChangeNotifier: isolatedStateChangeNotifier()
+    )
     let session = try AgentSession.decode(
         from: validStateJSON(sessionID: "removed", status: "working", pid: Int32(getpid()))
     )
@@ -3874,6 +3891,65 @@ func testStateStoreDarwinNotificationObservesRemovedStateFiles() throws {
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
     }
     try expect(store.sessions.isEmpty, equals: true, "removed session observed through Darwin notification")
+}
+
+/// The Darwin notify center is machine-wide: every live hook and every other
+/// test run posts the production name. A test that asserts a notification
+/// did not arrive must listen on a channel nothing else posts to.
+func isolatedStateChangeNotifier() -> StateChangeNotifier {
+    StateChangeNotifier(notificationName: "com.moonglade.stateChanged.test.\(UUID().uuidString)")
+}
+
+/// The app observes, and the CLI and the bundled plugins post, one channel
+/// by name. Nothing links the Swift constant to the plugins' literal, so this
+/// pins all three to the same string.
+func testStateChangeChannelIsSharedByAppCLIAndPlugins() throws {
+    let productionName = "com.moonglade.stateChanged"
+    try expect(
+        StateChangeNotifier.standard.notificationName,
+        equals: productionName,
+        "production state-change channel"
+    )
+    try expect(
+        StateRepository(directoryURL: FileManager.default.temporaryDirectory)
+            .stateChangeNotifier.notificationName,
+        equals: productionName,
+        "public repository initializer posts on the production channel"
+    )
+    for pluginURL in [try BundledResources.opencodePluginURL, try BundledResources.piExtensionURL] {
+        let source = try String(contentsOf: pluginURL, encoding: .utf8)
+        try expect(
+            source.contains(#"spawn("/usr/bin/notifyutil", ["-p", "\#(productionName)"]"#),
+            equals: true,
+            "\(pluginURL.lastPathComponent) posts on the production channel"
+        )
+    }
+}
+
+func testStateStoreDarwinNotificationIgnoresOtherChannels() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(
+        directoryURL: directory,
+        stateChangeNotifier: isolatedStateChangeNotifier()
+    )
+    let store = StateStore(repository: repository)
+    try store.startObserving(pollInterval: nil, layers: .darwinNotification)
+    defer { store.stopObserving() }
+    try validStateJSON(sessionID: "scoped", status: "working", pid: Int32(getpid()))
+        .writeAtomically(to: directory.appendingPathComponent("claude-scoped.json"))
+
+    isolatedStateChangeNotifier().post()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+    try expect(store.sessions.isEmpty, equals: true, "notification on another channel ignored")
+
+    repository.stateChangeNotifier.post()
+    let deadline = Date().addingTimeInterval(1)
+    while store.sessions.isEmpty, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    try expect(store.sessions.map(\.sessionID), equals: ["scoped"], "own channel observed")
 }
 
 func testSessionStatusSummaryCountsGlobalRunningWaitingAndBlockedSessions() throws {
@@ -6010,7 +6086,10 @@ func testConvoyWatcherPublishesRunningPipelineStep() throws {
 func testConvoyWatcherDoesNotRepublishUnchangedObservation() throws {
     let (stateDirectoryURL, runsDirectoryURL) = try makeConvoyTestDirectories()
     defer { try? FileManager.default.removeItem(at: stateDirectoryURL.deletingLastPathComponent()) }
-    let repository = StateRepository(directoryURL: stateDirectoryURL)
+    let repository = StateRepository(
+        directoryURL: stateDirectoryURL,
+        stateChangeNotifier: isolatedStateChangeNotifier()
+    )
     let runID = "20260722-101010-stable"
     let process = detectedConvoyProcess()
     let serverStartedAt = Date().addingTimeInterval(-300)
@@ -10435,7 +10514,10 @@ func testConcurrentStateWritersDoNotInterleave() throws {
     let inFlight = TestCounter()
     // A save materialises its snapshot while holding the lock, so overlapping
     // observer calls are overlapping critical sections.
-    let repository = StateRepository(directoryURL: directory) {
+    let repository = StateRepository(
+        directoryURL: directory,
+        stateChangeNotifier: .standard
+    ) {
         if inFlight.read() != 0 { overlap.increment() }
         inFlight.increment()
         usleep(2_000)
@@ -11124,6 +11206,8 @@ let tests: [(String, () throws -> Void)] = [
     ("state store file events observe new state files without polling", testStateStoreFileEventsObserveNewStateFilesWithoutPolling),
     ("state store Darwin notification observes new state files", testStateStoreDarwinNotificationObservesNewStateFiles),
     ("state store Darwin notification observes removed state files", testStateStoreDarwinNotificationObservesRemovedStateFiles),
+    ("state store Darwin notification ignores other channels", testStateStoreDarwinNotificationIgnoresOtherChannels),
+    ("state change channel is shared by app, CLI and plugins", testStateChangeChannelIsSharedByAppCLIAndPlugins),
     ("session status summary counts global running waiting and blocked sessions", testSessionStatusSummaryCountsGlobalRunningWaitingAndBlockedSessions),
     ("session status summary visible entries omit zero counts", testSessionStatusSummaryVisibleEntriesOmitsZeroCounts),
     ("a blocked session keeps the bar red until its status changes", testABlockedSessionKeepsTheBarRedUntilItsStatusChanges),
