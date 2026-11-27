@@ -4,10 +4,10 @@
 #   ./scripts/build-site.sh
 #   python3 -m http.server -d _site 8000    # preview at localhost:8000
 #
-# The site is five things that live elsewhere in the repo, gathered rather than
+# The site is six things that live elsewhere in the repo, gathered rather than
 # copied by hand: the page, the app icon it uses as its favicon, the social card
 # a pasted link unfurls into, the agent brand marks the app itself renders in a
-# session row, and the remote installer served at /install so the curl command
+# session row, the captures of the app it shows, and the remote installer served at /install so the curl command
 # can name this domain instead of a release asset URL. The installer has exactly
 # one source of truth, scripts/install-remote.sh, and this is where it is
 # published from.
@@ -32,6 +32,9 @@ output="_site"
 # directory, so a newly supported agent's icon is publishable without touching
 # this script.
 /bin/cp -R Sources/MoongladeCore/Resources/icons "$output/icons"
+# The panel and the bar the page shows are screenshots of the app, the same
+# files the README banner embeds; scripts/make-banner-captures.sh writes them.
+/bin/cp -R assets/captures "$output/captures"
 /bin/cp scripts/install-remote.sh "$output/install"
 
 # GitHub Pages reads the custom domain from a CNAME file at the site root.
