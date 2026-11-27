@@ -12,6 +12,8 @@ on:
       - assets/**
       - scripts/install-remote.sh
       - scripts/build-site.sh
+      # The page shows the release number build-site.sh reads out of it.
+      - config/Info.plist
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -46,6 +48,7 @@ jobs:
           /bin/sh -n _site/install
           test -s _site/index.html
           test -s _site/icon.svg
+          if grep -n __VERSION__ _site/index.html; then exit 1; fi
 
       # A page that references a file build-site.sh does not copy deploys
       # perfectly happily and renders with a hole in it. Derive the list from

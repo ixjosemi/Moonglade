@@ -19,7 +19,17 @@ output="_site"
 /bin/rm -rf "$output"
 /bin/mkdir -p "$output"
 
-/bin/cp docs/index.html "$output/index.html"
+# The page names the current release, and config/Info.plist is the only record
+# of it, so the number is written in here rather than typed into the page,
+# where it went two releases stale before anyone noticed.
+version=$(/usr/bin/sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' config/Info.plist)
+case "$version" in
+    '' | *[!0-9.]*)
+        /usr/bin/printf 'no CFBundleShortVersionString in config/Info.plist\n' >&2
+        exit 1
+        ;;
+esac
+/usr/bin/sed "s/__VERSION__/$version/g" docs/index.html > "$output/index.html"
 /bin/cp assets/icon.svg "$output/icon.svg"
 /bin/cp assets/hero-moonglade.webp "$output/hero-moonglade.webp"
 # The social card. Committed rather than rendered here, because the render

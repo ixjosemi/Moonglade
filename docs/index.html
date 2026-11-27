@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#04060d">
+<script>document.documentElement.classList.add('js');</script>
 <title>Moonglade — know when your coding agents need you</title>
 <meta name="description" content="A quiet, native macOS indicator for Claude Code, OpenCode, Codex CLI, Pi and Convoy sessions. It lives around the notch and returns you to the exact terminal pane with one click.">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -21,7 +24,7 @@
 <meta property="og:image:type" content="image/jpeg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="The Moonglade panel hanging from the top of a MacBook display, listing four live coding agent sessions, above a moon on the water and the collapsed bar carrying a count per state.">
+<meta property="og:image:alt" content="The Moonglade panel, captured from the running app, listing four live coding agent sessions over a moonlit sea, with the collapsed bar below it carrying a count per state.">
 <meta name="twitter:card" content="summary_large_image">
 <style>
 /* ---------------------------------------------------------------------------
@@ -40,7 +43,14 @@
   --frost: #dde8ff;
   --ink: #eef4ff;
   --ink-dim: #96a6cd;
-  --ink-faint: #61708f;
+  /* The faintest ink still clears 4.5:1 on the tiles as well as on the night,
+     because it sets body text: the footer, the line above the bar at rest. */
+  --ink-faint: #717f9e;
+  /* The app's own lights, sampled off the captures rather than picked: the
+     tile that explains them sits one screen below the bar that shows them. */
+  --state-waiting: #69ce68;
+  --state-blocked: #eb534f;
+  --state-ended: #8e8e93;
   --hairline: rgba(233, 241, 255, 0.10);
   --hairline-bright: rgba(233, 241, 255, 0.22);
   --glass: rgba(147, 168, 224, 0.06);
@@ -58,6 +68,12 @@
      the network. */
   --sans: ui-sans-serif, -apple-system, "SF Pro Display", "SF Pro Text", "Segoe UI Variable", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", monospace;
+  color-scheme: dark;
+}
+/* macOS Increase Contrast reaches the page as `prefers-contrast: more`, and this
+   page is read almost entirely on Macs. */
+@media (prefers-contrast: more) {
+  :root { --ink-dim: #b4c0de; --ink-faint: #96a6cd; }
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -89,6 +105,36 @@ body::after {
 ::selection { background: rgba(125, 109, 255, 0.35); color: #fff; }
 
 a { color: inherit; text-decoration: none; }
+
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+
+/* One ring for every focusable thing, in the page's frost rather than the
+   engine's blue, which Safari draws at barely 3:1 against this night. */
+:focus-visible { outline: 2px solid var(--frost); outline-offset: 3px; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+.skip {
+  position: fixed; z-index: 30;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  left: max(12px, env(safe-area-inset-left, 0px));
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: var(--frost); color: var(--night-deep);
+  font-size: 13px; font-weight: 560;
+  transform: translateY(calc(-100% - 24px));
+}
+.skip:focus-visible { transform: none; }
+/* The commands scroll inside boxes that clip — a mask on the hero one, the
+   snippet's own `overflow: hidden` on the others — and a clipped box clips the
+   ring drawn around its scroller. So the ring moves out to the box. */
+.command code:focus-visible, .path-core pre:focus-visible { outline: none; }
+.command:has(> code:focus-visible), .snippet:has(> pre:focus-visible) {
+  outline: 2px solid var(--frost); outline-offset: 3px;
+}
 
 /* Safari paints a grey rectangle over anything tappable the instant a finger
    lands on it. The command answers a tap with its own ripple and the buttons
@@ -221,7 +267,7 @@ a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
 /* --- Hero ---------------------------------------------------------------- */
 .hero {
   position: relative;
-  min-height: 100dvh;
+  min-height: 100svh;
   display: flex; flex-direction: column; justify-content: center;
   /* The panel now starts at the screen edge instead of floating 24px below it,
      so the copy climbs the same distance to keep the gap under it unchanged.
@@ -280,20 +326,7 @@ a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
 }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
-.eyebrow {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--hairline);
-  background: var(--glass);
-  font-size: 10px; font-weight: 560;
-  text-transform: uppercase; letter-spacing: 0.2em;
-  color: var(--ink-dim);
-}
-.eyebrow b { color: var(--violet); font-weight: 560; }
-
 h1 {
-  margin-top: clamp(20px, 3vw, 26px);
   /* The floor is set by the longer of the two lines: "Know when your agents" is
      21 characters, and 33px is the largest size at which it still clears the
      gutters of a 390pt phone on one line. A larger floor does not read as
@@ -303,6 +336,9 @@ h1 {
   letter-spacing: -0.045em;
   font-weight: 580;
 }
+/* Below 390 the floor above no longer fits, and a headline that breaks onto a
+   third line reads as a mistake rather than a size. */
+@media (max-width: 389px) { h1 { font-size: 8.5vw; } }
 h1 em {
   font-style: normal;
   background: linear-gradient(180deg, var(--frost) 0%, rgba(125, 109, 255, 0.85) 130%);
@@ -323,8 +359,8 @@ h1 em {
 
 /* The same brand marks the app draws beside a live session, at the size they
    are meant to be read rather than the 16px of a menu row. No enclosure around
-   them: the eyebrow above is already a pill, and five more would turn the top
-   of the hero into a run of outlines. They sit slightly back at rest so they
+   them: the command below is already a pill, and five more would turn the hero
+   into a run of outlines. They sit slightly back at rest so they
    support the headline instead of competing with it. */
 .agents {
   margin-top: clamp(22px, 3vw, 26px);
@@ -382,6 +418,12 @@ h1 em {
   /* And a horizontal fling that reaches the end of the command should stop
      there rather than turn into the browser's back gesture. */
   overscroll-behavior-x: contain;
+  /* The fade is the only hint a phone gets that the line goes on past
+     "josemi.me", and it covers padding alone, so the last character clears it
+     once the command is scrolled to its end. */
+  padding-right: 24px;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+          mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
 }
 .command code::-webkit-scrollbar { display: none; }
 .command code b { color: var(--violet); font-weight: 400; }
@@ -404,12 +446,18 @@ h1 em {
   .copy:hover { background: rgba(233, 241, 255, 0.11); }
 }
 .copy:active { transform: scale(0.96); }
-.copy i {
-  font-style: normal; font-size: 19px; line-height: 1;
-  transition: transform 500ms var(--spring);
+.copy svg {
+  grid-area: 1 / 1;
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+  transition: transform 500ms var(--spring), opacity 300ms var(--spring);
 }
+.copy .done-mark { opacity: 0; transform: scale(0.6); }
+.copy.done .copy-mark { opacity: 0; transform: scale(0.6); }
+.copy.done .done-mark { opacity: 1; transform: none; }
 @media (hover: hover) {
-  .copy:hover i { transform: translate(1px, -1px) scale(1.08); }
+  .copy:hover .copy-mark { transform: translate(1px, -1px) scale(1.08); }
 }
 .copy.done {
   background: rgba(125, 109, 255, 0.20);
@@ -424,8 +472,11 @@ h1 em {
   pointer-events: none;
 }
 @keyframes ink { to { transform: translate(-50%, -50%) scale(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ripple-ink { display: none; } }
 
-.hero-note { margin-top: 18px; font-size: 12.5px; color: var(--ink-faint); }
+/* Dim ink rather than faint: the note sits on the glade, the brightest water in
+   the scene, where the faint ink falls to 2.4:1. */
+.hero-note { margin-top: 18px; font-size: 12.5px; color: var(--ink-dim); }
 /* A link sitting inside a running sentence needs an affordance the standalone
    links in the nav and the footer row do not: on its own it would be invisible,
    because every link on this page inherits its colour. */
@@ -436,17 +487,17 @@ h1 em {
 
 /* A phone held in landscape is the one viewport where width lies about how much
    room there is. Every size in the hero is keyed to `vw`, and 852 of them make
-   a 65px headline inside a window 393px tall — so the eyebrow and the headline
+   a 65px headline inside a window 393px tall — so the headline and the lede
    fill the screen and the install command, the one thing the hero exists to
    hand over, sits below the fold. Height is the binding constraint here, so in
    this one band the type and the clearance answer to it instead.
 
-   The floor at 100dvh goes with it: a hero that insists on a full screen it
+   The floor at 100svh goes with it: a hero that insists on a full screen it
    cannot fill is just more of the scrolling this is trying to avoid. Bounded by
    `max-height` and not by orientation alone, so an iPad in landscape — 834px of
    height — keeps the full-size hero. */
 @media (max-height: 500px) and (orientation: landscape) {
-  .hero { min-height: 0; padding: 92px 0 56px; }
+  .hero { min-height: 0; padding: 80px 0 32px; }
   h1 { font-size: clamp(30px, 5.2vh, 46px); }
   .lede { font-size: 15px; }
   .agents { margin-top: 18px; gap: 20px; }
@@ -455,9 +506,15 @@ h1 em {
 }
 
 /* --- Reveal choreography ------------------------------------------------- */
-.reveal { opacity: 0; transform: translateY(48px); filter: blur(10px); transition: opacity 900ms var(--spring), transform 900ms var(--spring), filter 900ms var(--spring); }
-.reveal.in { opacity: 1; transform: none; filter: none; }
-@media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; filter: none; } }
+/* Hidden only once the script that reveals it is known to run: the class is set
+   by the first line of script in <head>, so a page read without JavaScript, in
+   reader mode or by a crawler shows everything at once instead of nothing.
+   Opacity and travel only. A blur on the lid and the tiles re-rasterized layers
+   a thousand pixels wide on every frame of the entrance. */
+@media (prefers-reduced-motion: no-preference) {
+  .js .reveal { opacity: 0; transform: translateY(40px); transition: opacity 900ms var(--spring), transform 900ms var(--spring); }
+  .js .reveal.in { opacity: 1; transform: none; }
+}
 
 /* --- Sections ------------------------------------------------------------ */
 section { position: relative; padding: var(--section) 0; }
@@ -467,6 +524,7 @@ h2 {
   line-height: 1.06; letter-spacing: -0.035em; font-weight: 570;
 }
 .section-head p { margin-top: 18px; color: var(--ink-dim); font-size: clamp(14.5px, 1.6vw, 17px); }
+.section-head code { font-family: var(--mono); font-size: 0.92em; }
 
 /* Asymmetrical bento */
 /* `minmax(0, 1fr)` rather than `1fr`, here and on every track below. A grid
@@ -493,12 +551,11 @@ h2 {
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
 }
 .tile h3 { font-size: 17px; font-weight: 560; letter-spacing: -0.02em; }
-.tile p { margin-top: 10px; color: var(--ink-dim); font-size: 14px; }
+.tile p { margin-top: 10px; max-width: 60ch; color: var(--ink-dim); font-size: 14px; }
 .span-7 { grid-column: span 7; }
 .span-5 { grid-column: span 5; }
 .span-4 { grid-column: span 4; }
 .span-8 { grid-column: span 8; }
-.span-12 { grid-column: span 12; }
 /* Three steps down, not one. The twelve tracks stay put at every width and only
    the spans move, so there is one grid to reason about rather than three.
 
@@ -515,7 +572,6 @@ h2 {
    being wide enough for the sentence under the figure. */
 @media (max-width: 1000px) {
   .bento > [class*="span-"] { grid-column: span 6; }
-  .bento > .span-12 { grid-column: span 12; }
   .measures > .span-4 { grid-column: span 4; }
 }
 @media (max-width: 700px) {
@@ -532,13 +588,15 @@ h2 {
 }
 
 /* The three states, rendered as themselves */
-.states { display: flex; flex-direction: column; gap: 16px; margin-top: 22px; }
+.states { display: flex; flex-direction: column; gap: 16px; margin-top: 22px; list-style: none; }
 .state { display: flex; align-items: center; gap: 14px; font-size: 14px; }
 .state span:last-child { color: var(--ink-dim); }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.dot.green { background: #4ade80; box-shadow: 0 0 12px rgba(74, 222, 128, 0.6); }
-.dot.red { background: #ff5d5d; box-shadow: 0 0 12px rgba(255, 93, 93, 0.6); }
-.dot.grey { background: var(--ink-faint); }
+/* Flat, as the app draws them: a light that glows on the page and not in the
+   bar above it is a light that means something different. */
+.dot.green { background: var(--state-waiting); }
+.dot.red { background: var(--state-blocked); }
+.dot.grey { background: var(--state-ended); }
 .spin { font-family: var(--mono); color: var(--frost); font-size: 13px; width: 9px; }
 
 /* --- The machine, and the two shapes that hang from it -------------------- */
@@ -626,7 +684,8 @@ h2 {
    negative top margin welds the panel to the screen edge: the app draws over
    the menu bar strip, it does not sit under it. Where the lid is narrower
    than the panel both scale down with it rather than reflow, because a
-   screenshot that reflowed would no longer be one. */
+   screenshot that reflowed would no longer be one — down to a phone, where
+   see the note at the 700px step. */
 .panel-shot {
   position: relative;
   display: block;
@@ -656,9 +715,29 @@ h2 {
   }
   .screen { border-radius: 10px 10px 0 0; padding-bottom: clamp(84px, 13vw, 150px); }
 }
+/* Scaled to fit a phone the panel lands at four tenths of its size and its
+   titles at five pixels: a screenshot nobody can read. So below 700 it stops
+   shrinking at three quarters and the screen crops it instead, anchored to its
+   leading edge, where every column that tells one session from another sits —
+   mark, light, title, project and branch. What the crop takes is the elapsed
+   time and the chevron, which the old drawn panel already dropped at this
+   width, and the edge fades rather than cuts so it reads as more panel, not a
+   broken one. The bar keeps the same three quarters, so the two still share a
+   scale. */
 @media (max-width: 700px) {
   .menubar { padding: 0 12px; }
   .menubar .apps span, .menubar svg { display: none; }
+  /* The panel now covers the strip from edge to edge, so the menu bar keeps its
+     band and gives up its words rather than showing through the fade. */
+  .menubar > div { visibility: hidden; }
+  .screen { container-type: inline-size; }
+  .panel-shot {
+    width: 600px; max-width: none;
+    margin: -36px 0 0 max(0px, (100% - 600px) / 2);
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100cqw - 56px), transparent 100cqw);
+            mask-image: linear-gradient(90deg, #000 calc(100cqw - 56px), transparent 100cqw);
+  }
+  .bar-shot { width: min(277px, 100%); }
 }
 
 /* Install section */
@@ -706,7 +785,7 @@ h2 {
   pointer-events: none;
 }
 .snippet .copy { position: absolute; top: 9px; right: 9px; z-index: 1; width: 34px; height: 34px; }
-.snippet .copy i { font-size: 15px; }
+.snippet .copy svg { width: 16px; height: 16px; }
 
 footer {
   padding-top: clamp(44px, 6vw, 70px);
@@ -721,13 +800,17 @@ footer {
    one they stack in reading order with the same gap between them. */
 .foot-row { display: flex; justify-content: space-between; align-items: center; gap: 20px 24px; flex-wrap: wrap; }
 .foot-links { display: flex; flex-wrap: wrap; gap: 22px; }
-.foot-links a { transition: color 420ms var(--spring); }
+/* Padded out to a 44px target and pulled back by the same amount, so a thumb
+   gets the room and the row keeps its line height. */
+.foot-links a { padding: 12px 0; margin: -12px 0; transition: color 420ms var(--spring); }
 @media (hover: hover) {
   .foot-links a:hover { color: var(--ink); }
 }
 </style>
 </head>
 <body>
+
+<a class="skip" href="#main">Skip to content</a>
 
 <nav class="nav">
   <!-- Traversed clockwise from the top-left: the top edge runs the full outer
@@ -764,16 +847,16 @@ footer {
     <a href="#privacy">Privacy</a>
     <a href="#install">Install</a>
   </div>
-  <a class="nav-cta" href="https://github.com/ixjosemi/Moonglade">GitHub <i>↗</i></a>
+  <a class="nav-cta" href="https://github.com/ixjosemi/Moonglade">GitHub <i aria-hidden="true"><svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 1.5h5.5V7M8.5 1.5 1.5 8.5"/></svg></i></a>
 </nav>
 
+<main id="main">
 <header class="hero" id="top">
   <img class="sky" src="hero-moonglade.webp" alt="" width="1506" height="1024"
        fetchpriority="high" decoding="async">
 
   <div class="wrap">
     <div class="reveal">
-      <span class="eyebrow"><b>●</b> v0.2.2</span>
       <h1>Know when your agents<br><em>need you.</em></h1>
       <p class="lede">
         A quiet indicator for your coding agents.
@@ -782,7 +865,7 @@ footer {
            row and a live session row can never show a different Claude. The
            name is carried by alt text: it is what a screen reader announces and
            what appears if a file ever fails to load. -->
-      <ul class="agents" aria-label="Works with">
+      <ul class="agents" role="list" aria-label="Works with">
         <li><img src="icons/claude.svg" alt="Claude Code" title="Claude Code" width="26" height="26" decoding="async"></li>
         <li><img src="icons/opencode.svg" alt="OpenCode" title="OpenCode" width="26" height="26" decoding="async"></li>
         <li><img src="icons/codex.svg" alt="Codex" title="Codex" width="26" height="26" decoding="async"></li>
@@ -794,14 +877,14 @@ footer {
     <div class="reveal" style="transition-delay: 120ms">
       <div class="command-shell">
         <div class="command" data-copy>
-          <code>curl -fsSL <b>https://moonglade.josemi.me/install</b> | sh</code>
+          <code tabindex="0">curl -fsSL <b>https://moonglade.josemi.me/install</b> | sh</code>
           <!-- Icon only. The glyph carries the meaning, and the label the button
                no longer prints is the one screen readers announce. -->
-          <button class="copy" type="button" aria-label="Copy the install command"><i>⧉</i></button>
+          <button class="copy" type="button" aria-label="Copy the install command"><svg class="copy-mark" viewBox="0 0 18 18" aria-hidden="true"><rect x="6" y="6" width="9" height="9" rx="2.2"/><path d="M12 6V4.8A1.8 1.8 0 0 0 10.2 3H4.8A1.8 1.8 0 0 0 3 4.8v5.4A1.8 1.8 0 0 0 4.8 12H6"/></svg><svg class="done-mark" viewBox="0 0 18 18" aria-hidden="true"><path d="m4 9.4 3.2 3.1L14 5.6"/></svg></button>
         </div>
       </div>
       <p class="hero-note">
-        Apple Silicon · macOS 14+ ·
+        <a href="https://github.com/ixjosemi/Moonglade/releases/latest">v__VERSION__</a> · Apple Silicon · macOS 14+ ·
         <a href="https://github.com/ixjosemi/Moonglade/blob/main/scripts/install-remote.sh">read it first</a> ·
         <a href="#install">build from source</a>
       </p>
@@ -845,12 +928,12 @@ footer {
       <div class="tile span-5 reveal">
         <div class="tile-core">
           <h3>What the lights mean</h3>
-          <div class="states">
-            <div class="state"><span class="spin">⠋</span><span>The agent is processing.</span></div>
-            <div class="state"><span class="dot green"></span><span>Waiting at the prompt for you.</span></div>
-            <div class="state"><span class="dot red"></span><span>A question or permission needs you.</span></div>
-            <div class="state"><span class="dot grey"></span><span>Process exited, about to be reaped.</span></div>
-          </div>
+          <ul class="states" role="list">
+            <li class="state"><span class="spin" aria-hidden="true">⠋</span><span>The agent is processing.</span></li>
+            <li class="state"><span class="dot green"></span><span>Waiting at the prompt for you.</span></li>
+            <li class="state"><span class="dot red"></span><span>A question, permission ask, or failed pipeline step needs you.</span></li>
+            <li class="state"><span class="dot grey"></span><span>Process exited, about to be reaped. Shown in the menu only.</span></li>
+          </ul>
         </div>
       </div>
       <div class="tile span-7 reveal" style="transition-delay: 90ms">
@@ -866,9 +949,10 @@ footer {
         <div class="tile-core">
           <h3>One click lands on the exact pane</h3>
           <p>
-            Ghostty, cmux, iTerm2, Terminal, tmux — Moonglade focuses the surface a
-            session lives in, not merely the app. Panes are told apart by the name
-            the agent reports, so several agents in one directory never trade places.
+            Ghostty, cmux, iTerm2, Terminal, Orca, Herdr, tmux — Moonglade focuses the
+            surface a session lives in, not merely the app. Panes are told apart by
+            process, TTY and the name the agent gives its session, so agents sharing
+            a directory keep to their own pane.
           </p>
         </div>
       </div>
@@ -891,7 +975,7 @@ footer {
       <h2>No network. No telemetry. No accounts.</h2>
       <p>
         It never opens a socket. Session metadata stays in
-        <code style="font-family:var(--mono);font-size:0.92em">~/.moonglade/state</code>
+        <code>~/.moonglade/state</code>
         with user-only permissions, and your prompts and model responses are never
         stored — not locally, not anywhere.
       </p>
@@ -921,8 +1005,8 @@ footer {
     <div class="section-head reveal">
       <h2>Two paths, one result.</h2>
       <p>
-        Either way you end with the app in <code style="font-family:var(--mono);font-size:0.92em">/Applications</code>,
-        your agent hooks wired, and <code style="font-family:var(--mono);font-size:0.92em">moonglade doctor</code>
+        Either way you end with the app in <code>/Applications</code>,
+        your agent hooks wired, and <code>moonglade doctor</code>
         reporting a clean install.
       </p>
     </div>
@@ -932,24 +1016,27 @@ footer {
         <h3>Published build</h3>
         <p>Downloads the latest release, checks it against the published checksums, installs it. No Xcode needed.</p>
         <div class="snippet" data-copy>
-          <pre>curl -fsSL https://moonglade.josemi.me/install | sh</pre>
-          <button class="copy" type="button" aria-label="Copy the install command"><i>⧉</i></button>
+          <pre tabindex="0">curl -fsSL https://moonglade.josemi.me/install | sh</pre>
+          <button class="copy" type="button" aria-label="Copy the install command"><svg class="copy-mark" viewBox="0 0 18 18" aria-hidden="true"><rect x="6" y="6" width="9" height="9" rx="2.2"/><path d="M12 6V4.8A1.8 1.8 0 0 0 10.2 3H4.8A1.8 1.8 0 0 0 3 4.8v5.4A1.8 1.8 0 0 0 4.8 12H6"/></svg><svg class="done-mark" viewBox="0 0 18 18" aria-hidden="true"><path d="m4 9.4 3.2 3.1L14 5.6"/></svg></button>
         </div>
       </div></div>
       <div class="tile reveal" style="transition-delay: 90ms"><div class="tile-core path-core">
         <h3>From source</h3>
         <p>Compiles it on your machine. Needs Swift 6.0+. Also the path for Intel Macs, which the published build does not cover.</p>
         <div class="snippet" data-copy>
-          <pre>git clone https://github.com/ixjosemi/Moonglade.git
+          <pre tabindex="0">git clone https://github.com/ixjosemi/Moonglade.git
 cd Moonglade
 ./scripts/install.sh</pre>
-          <button class="copy" type="button" aria-label="Copy the build commands"><i>⧉</i></button>
+          <button class="copy" type="button" aria-label="Copy the build commands"><svg class="copy-mark" viewBox="0 0 18 18" aria-hidden="true"><rect x="6" y="6" width="9" height="9" rx="2.2"/><path d="M12 6V4.8A1.8 1.8 0 0 0 10.2 3H4.8A1.8 1.8 0 0 0 3 4.8v5.4A1.8 1.8 0 0 0 4.8 12H6"/></svg><svg class="done-mark" viewBox="0 0 18 18" aria-hidden="true"><path d="m4 9.4 3.2 3.1L14 5.6"/></svg></button>
         </div>
       </div></div>
     </div>
 
   </div>
 </section>
+</main>
+
+<p class="sr-only" role="status" aria-live="polite" id="copy-status"></p>
 
 <footer>
   <div class="wrap foot-row">
@@ -957,27 +1044,30 @@ cd Moonglade
       <a class="byline" href="https://josemi.me" rel="me">Josemi Hernandez</a>.</span>
     <div class="foot-links">
       <a href="https://github.com/ixjosemi/Moonglade">Source</a>
-      <a href="https://github.com/ixjosemi/Moonglade/blob/main/PRIVACY.md">Privacy</a>
+      <a href="https://github.com/ixjosemi/Moonglade/blob/main/PRIVACY.md">Privacy policy</a>
       <a href="https://github.com/ixjosemi/Moonglade/releases">Releases</a>
     </div>
   </div>
 </footer>
 
 <script>
-// The braille dot-matrix spinner the bar actually uses. Every one on the page
-// turns, and each keeps the phase its glyph was authored at: four independent
-// processes do not step together, and a row that did would read as decoration.
+// The braille dot-matrix spinner the bar actually uses. It turns only while it
+// is on screen, and not at all under Reduce Motion — where the app itself holds
+// its spinner still on the authored frame.
 (function spin() {
+  const node = document.querySelector('.spin');
+  if (!node || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const frames = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
-  const targets = [...document.querySelectorAll('.spin')];
-  const phase = targets.map((node) => Math.max(0, frames.indexOf(node.textContent.trim())));
-  let tick = 0;
-  setInterval(() => {
-    tick += 1;
-    targets.forEach((node, index) => {
-      node.textContent = frames[(phase[index] + tick) % frames.length];
-    });
-  }, 90);
+  let tick = Math.max(0, frames.indexOf(node.textContent.trim()));
+  let timer = 0;
+  new IntersectionObserver(([entry]) => {
+    clearInterval(timer);
+    if (!entry.isIntersecting) return;
+    timer = setInterval(() => {
+      tick = (tick + 1) % frames.length;
+      node.textContent = frames[tick];
+    }, 90);
+  }).observe(node);
 })();
 
 // Entry choreography. IntersectionObserver, never a scroll listener.
@@ -1001,14 +1091,20 @@ cd Moonglade
   document.querySelectorAll('[data-copy]').forEach((surface) => {
     const source = surface.querySelector('code, pre');
     const button = surface.querySelector('.copy');
-    // The button prints no words, so the state it reports lives in the glyph
-    // and in the label a screen reader reads out. Both move together.
-    const glyph = button.querySelector('i');
-    const idleLabel = button.getAttribute('aria-label');
+    // The button prints no words. Sighted, the state is the mark it swaps to;
+    // read aloud, it is the one status line the page keeps, because a label
+    // changed on a focused button is something VoiceOver may never announce.
+    const status = document.getElementById('copy-status');
+    let reset = 0;
 
-    function say(mark, label) {
-      glyph.textContent = mark;
-      button.setAttribute('aria-label', label);
+    function say(copied, message) {
+      clearTimeout(reset);
+      button.classList.toggle('done', copied);
+      status.textContent = message;
+      reset = setTimeout(() => {
+        button.classList.remove('done');
+        status.textContent = '';
+      }, 1800);
     }
 
     function ink(event) {
@@ -1026,27 +1122,26 @@ cd Moonglade
     surface.addEventListener('click', async (event) => {
       // Someone who has just dragged across part of the command wants that
       // part, not the whole thing. Leave their selection and their clipboard
-      // alone.
-      if (!window.getSelection().isCollapsed) return;
+      // alone — but only a selection inside this command, and never when the
+      // button itself was pressed: a sentence selected elsewhere on the page,
+      // or the command this very handler selected last time, must not swallow
+      // a deliberate press.
+      const selection = window.getSelection();
+      const pressed = event.target.closest('.copy');
+      if (!pressed && !selection.isCollapsed && surface.contains(selection.anchorNode)) return;
       ink(event);
       try {
         await navigator.clipboard.writeText(source.textContent);
-        button.classList.add('done');
-        say('✓', 'Copied');
-        setTimeout(() => {
-          button.classList.remove('done');
-          say('⧉', idleLabel);
-        }, 1800);
+        say(true, 'Copied to the clipboard.');
       } catch (error) {
         // Clipboard permission denied or an insecure context. Select the
         // command rather than pretending the copy happened: it is then one
         // keystroke away.
         const range = document.createRange();
         range.selectNodeContents(source);
-        const selection = window.getSelection();
         selection.removeAllRanges();
         selection.addRange(range);
-        say('⧉', 'Clipboard blocked — the command is selected, press Cmd-C');
+        say(false, 'Clipboard unavailable. The command is selected: press Command-C.');
       }
     });
   });
