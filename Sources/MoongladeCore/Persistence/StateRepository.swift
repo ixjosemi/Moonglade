@@ -151,40 +151,53 @@ public struct StateRepository: Sendable {
     package var didReadDocumentForTesting: (@Sendable () -> Void)?
 
     public init(directoryURL: URL) {
-        self.directoryURL = directoryURL
-        stateChangeNotifier = .standard
-        materializationObserver = nil
-        reloadObserver = nil
-        didReadDocumentForTesting = nil
+        self.init(directoryURL: directoryURL, stateChangeNotifier: .standard)
     }
 
     package init(directoryURL: URL, stateChangeNotifier: StateChangeNotifier) {
-        self.directoryURL = directoryURL
-        self.stateChangeNotifier = stateChangeNotifier
-        materializationObserver = nil
-        reloadObserver = nil
-        didReadDocumentForTesting = nil
+        self.init(
+            directoryURL: directoryURL,
+            stateChangeNotifier: stateChangeNotifier,
+            materializationObserver: nil,
+            reloadObserver: nil
+        )
     }
 
     package init(
         directoryURL: URL,
-        stateChangeNotifier: StateChangeNotifier = .standard,
+        stateChangeNotifier: StateChangeNotifier,
         materializationObserver: @escaping @Sendable () -> Void
+    ) {
+        self.init(
+            directoryURL: directoryURL,
+            stateChangeNotifier: stateChangeNotifier,
+            materializationObserver: materializationObserver,
+            reloadObserver: nil
+        )
+    }
+
+    package init(
+        directoryURL: URL,
+        stateChangeNotifier: StateChangeNotifier,
+        reloadObserver: @escaping @Sendable () throws -> Void
+    ) {
+        self.init(
+            directoryURL: directoryURL,
+            stateChangeNotifier: stateChangeNotifier,
+            materializationObserver: nil,
+            reloadObserver: reloadObserver
+        )
+    }
+
+    private init(
+        directoryURL: URL,
+        stateChangeNotifier: StateChangeNotifier,
+        materializationObserver: (@Sendable () -> Void)?,
+        reloadObserver: (@Sendable () throws -> Void)?
     ) {
         self.directoryURL = directoryURL
         self.stateChangeNotifier = stateChangeNotifier
         self.materializationObserver = materializationObserver
-        reloadObserver = nil
-        didReadDocumentForTesting = nil
-    }
-
-    package init(
-        directoryURL: URL,
-        reloadObserver: @escaping @Sendable () throws -> Void
-    ) {
-        self.directoryURL = directoryURL
-        stateChangeNotifier = .standard
-        materializationObserver = nil
         self.reloadObserver = reloadObserver
         didReadDocumentForTesting = nil
     }

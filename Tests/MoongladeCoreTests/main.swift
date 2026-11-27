@@ -2368,6 +2368,7 @@ func testTerminalEnrichmentDoesNotReplaceLifecycleWriteAfterReload() throws {
     )
     let enrichmentRepository = StateRepository(
         directoryURL: directory,
+        stateChangeNotifier: .standard,
         reloadObserver: {
             try lifecycleRepository.save(lifecycleUpdate)
         }
@@ -2926,6 +2927,7 @@ func testObservationSchedulerMaterializesStateOncePerTick() throws {
     let scheduler = ObservationScheduler(
         repository: StateRepository(
             directoryURL: stateDirectoryURL,
+            stateChangeNotifier: .standard,
             materializationObserver: { counter.increment() }
         ),
         processScanner: TestProcessScanner([detectedConvoyProcess(), embeddedServer]),
@@ -3266,6 +3268,7 @@ func testConvoyMetadataTickReusesLastVerifiedProcessScan() throws {
     let scheduler = ObservationScheduler(
         repository: StateRepository(
             directoryURL: stateDirectoryURL,
+            stateChangeNotifier: .standard,
             materializationObserver: { materializationCounter.increment() }
         ),
         processScanner: scanner,
@@ -3897,6 +3900,32 @@ func isolatedStateChangeNotifier() -> StateChangeNotifier {
     StateChangeNotifier(notificationName: "com.moonglade.stateChanged.test.\(UUID().uuidString)")
 }
 
+/// The app observes, and the CLI and the bundled plugins post, one channel
+/// by name. Nothing links the Swift constant to the plugins' literal, so this
+/// pins all three to the same string.
+func testStateChangeChannelIsSharedByAppCLIAndPlugins() throws {
+    let productionName = "com.moonglade.stateChanged"
+    try expect(
+        StateChangeNotifier.standard.notificationName,
+        equals: productionName,
+        "production state-change channel"
+    )
+    try expect(
+        StateRepository(directoryURL: FileManager.default.temporaryDirectory)
+            .stateChangeNotifier.notificationName,
+        equals: productionName,
+        "public repository initializer posts on the production channel"
+    )
+    for pluginURL in [try BundledResources.opencodePluginURL, try BundledResources.piExtensionURL] {
+        let source = try String(contentsOf: pluginURL, encoding: .utf8)
+        try expect(
+            source.contains(#"spawn("/usr/bin/notifyutil", ["-p", "\#(productionName)"]"#),
+            equals: true,
+            "\(pluginURL.lastPathComponent) posts on the production channel"
+        )
+    }
+}
+
 func testStateStoreDarwinNotificationIgnoresOtherChannels() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -3911,7 +3940,7 @@ func testStateStoreDarwinNotificationIgnoresOtherChannels() throws {
     try validStateJSON(sessionID: "scoped", status: "working", pid: Int32(getpid()))
         .writeAtomically(to: directory.appendingPathComponent("claude-scoped.json"))
 
-    StateChangeNotifier.standard.post()
+    isolatedStateChangeNotifier().post()
     RunLoop.current.run(until: Date().addingTimeInterval(0.3))
     try expect(store.sessions.isEmpty, equals: true, "notification on another channel ignored")
 
@@ -10438,7 +10467,10 @@ func testConcurrentStateWritersDoNotInterleave() throws {
     let inFlight = TestCounter()
     // A save materialises its snapshot while holding the lock, so overlapping
     // observer calls are overlapping critical sections.
-    let repository = StateRepository(directoryURL: directory) {
+    let repository = StateRepository(
+        directoryURL: directory,
+        stateChangeNotifier: .standard
+    ) {
         if inFlight.read() != 0 { overlap.increment() }
         inFlight.increment()
         usleep(2_000)
@@ -11086,6 +11118,7 @@ let tests: [(String, () throws -> Void)] = [
     ("state store Darwin notification observes new state files", testStateStoreDarwinNotificationObservesNewStateFiles),
     ("state store Darwin notification observes removed state files", testStateStoreDarwinNotificationObservesRemovedStateFiles),
     ("state store Darwin notification ignores other channels", testStateStoreDarwinNotificationIgnoresOtherChannels),
+    ("state change channel is shared by app, CLI and plugins", testStateChangeChannelIsSharedByAppCLIAndPlugins),
     ("session status summary counts global running waiting and blocked sessions", testSessionStatusSummaryCountsGlobalRunningWaitingAndBlockedSessions),
     ("session status summary visible entries omit zero counts", testSessionStatusSummaryVisibleEntriesOmitsZeroCounts),
     ("a blocked session keeps the bar red until its status changes", testABlockedSessionKeepsTheBarRedUntilItsStatusChanges),
