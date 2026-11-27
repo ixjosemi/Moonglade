@@ -10020,12 +10020,25 @@ func testTerminationServiceKillsPolitelyAndEscalatesToSigkill() throws {
     try expect(polite.terminationReason, equals: .uncaughtSignal, "polite process killed by signal")
 
     // A process ignoring SIGTERM is escalated to SIGKILL after the grace.
-    let stubborn = try spawn(["/bin/sh", "-c", "trap '' TERM; sleep 60"])
-    // Give the shell a beat to install its trap before signaling.
-    usleep(200_000)
+    // The ignored disposition survives `exec`, so the one process signalled
+    // is the one ignoring SIGTERM: a forked `sleep` would outlive its shell
+    // and hold the runner's stdout open for a minute. It reports over its own
+    // pipe once the trap is installed, so no signal can beat the trap.
+    let stubborn = Process()
+    stubborn.executableURL = URL(fileURLWithPath: "/bin/sh")
+    stubborn.arguments = ["-c", "trap '' TERM; echo ready; exec /bin/sleep 60"]
+    let readiness = Pipe()
+    stubborn.standardOutput = readiness
+    try stubborn.run()
+    try expect(
+        readiness.fileHandleForReading.readData(ofLength: 6),
+        equals: Data("ready\n".utf8),
+        "stubborn process installed its trap"
+    )
     try TerminationService.terminate(try sessionForProcessID(stubborn.processIdentifier), gracePeriod: 0.3)
     stubborn.waitUntilExit()
     try expect(stubborn.terminationReason, equals: .uncaughtSignal, "stubborn process killed by signal")
+    try expect(stubborn.terminationStatus, equals: SIGKILL, "stubborn process outlived SIGTERM")
 
     // A pid that is already gone is not an error: the goal state holds.
     try TerminationService.terminate(politeSession, gracePeriod: 0.3)
