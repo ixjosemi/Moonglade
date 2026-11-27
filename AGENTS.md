@@ -55,7 +55,7 @@ The release job fails when they are absent rather than falling back to an ad-hoc
 
 The page's palette is taken from `assets/icon.svg` — the same night gradient, violet and blue blooms, and frost. `assets/header.svg`, the README banner, is built from the same sources: the hero photograph itself as its wallpaper, the icon's moon, the page's palette and type, and the app itself, whose open panel is a screenshot rather than a drawing, with the brand marks copied out of `Sources/MoongladeCore/Resources/icons`. Three surfaces have to agree, so none of them invents a colour, a silhouette, or a mark of its own.
 
-The page shows the app twice — the open panel inside a MacBook lid under `#how`, and the collapsed bar beneath it — and both wear the same geometry the banner does: `HangingNotchMetrics`' 14pt concave shoulders and 20pt lower corners, `NotchLayout.expandedPanelWidth`'s 800, a 36pt band across the camera. Each silhouette is one SVG path used twice, as the clip that cuts the glass and as the stroke that rims it, exactly as `.nav` is built; the note above `.nav` covers why they carry a fixed size, and below 1000px both fall back to the presentation the app itself uses on a display with no camera housing. The lid keeps a 14-inch MacBook Pro's two visible ratios and nothing else, and the interface inside it stays at the app's own scale rather than the display's — scaled honestly to 1512pt the row titles would land at 10px.
+The page shows the app twice — the open panel inside a MacBook lid under `#how`, and the collapsed bar beneath it — and neither is drawn: both are the captures in `assets/captures/`, the same bytes the banner embeds, written by `scripts/make-banner-captures.sh` and published by `build-site.sh`. They sit at the app's own scale, 800×270pt of panel and 369×38pt of bar, the panel welded over the lid's menu bar strip the way the app draws over it. Where the lid is narrower than the panel both shrink together rather than reflow, because a screenshot that reflowed would no longer be one. The lid keeps a 14-inch MacBook Pro's two visible ratios and nothing else, and the interface inside it stays at the app's own scale rather than the display's — scaled honestly to 1512pt the row titles would land at 10px.
 
 The banner is rendered by GitHub in a browser but is worth checking through a second rasterizer before committing, because the failures are silent ones — a dropped `feGaussianBlur` flattens every glow, and AppKit resolves a `<use>` of a path but not a `<use>` of a group that itself contains one, which quietly costs the Codex mark five of its six blades:
 
@@ -103,7 +103,7 @@ Then base64 it into the `href` of `#mg-wall` and run `./scripts/make-og.sh`. The
 
 ### The banner's captures
 
-The banner draws neither the open panel nor the collapsed bar. Both are screenshots of the running app, cut along their own silhouette and embedded at 2x as `#mg-panelShot` and `#mg-barShot`, so every row, tile, glyph and the glass itself are what the app renders. Retake them whenever either changes:
+The banner draws neither the open panel nor the collapsed bar. Both are screenshots of the running app, cut along their own silhouette, saved to `assets/captures/` for the landing page and embedded at 2x as `#mg-panelShot` and `#mg-barShot`, so every row, tile, glyph and the glass itself are what the app renders. Retake them whenever either changes:
 
 ```bash
 ./scripts/build-app.sh

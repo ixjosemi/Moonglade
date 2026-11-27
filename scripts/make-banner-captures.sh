@@ -8,11 +8,13 @@
 #   # bar: with the panel closed, capture the notch with Cmd-Shift-3 or Cmd-Shift-4
 #   ./scripts/make-banner-captures.sh bar ~/Desktop/Screenshot.png
 #
-# The banner draws neither the open panel nor the collapsed bar: it shows
-# what the app renders. Both are cut along their own silhouette so none of
-# the wallpaper they were taken over comes along, embedded at 2x as WebP (q92
-# keeps the text crisp at a fifth of the lossless size; alpha stays lossless),
-# and og.jpg is regenerated after.
+# Neither the banner nor the landing page draws the open panel or the
+# collapsed bar: both show what the app renders. Each capture is cut along its
+# own silhouette so none of the wallpaper it was taken over comes along, saved
+# at 2x as WebP to assets/captures/ (q92 keeps the text crisp at a fifth of the
+# lossless size; alpha stays lossless), where build-site.sh publishes it for
+# the page, embedded in assets/header.svg from the same bytes, and og.jpg is
+# regenerated after.
 #
 # The open panel is 800x270pt with its shoulders, centred on the display and
 # hanging from its top edge, so it is the 1600x540 pixels centred along the
@@ -109,8 +111,10 @@ fi
 magick "$work/rgb.png" "$work/edge.png" -alpha off -compose copy_opacity -composite "$work/cut.png"
 cwebp -quiet -m 6 -q 92 -alpha_q 100 "$work/cut.png" -o "$work/cut.webp"
 pixels=$(magick identify -format '%w %h' "$work/cut.png")
+/bin/mkdir -p assets/captures
+/bin/cp "$work/cut.webp" "assets/captures/$kind.webp"
 
-python3 -I - "$kind" "$work/cut.webp" $pixels assets/header.svg <<'PY'
+python3 -I - "$kind" "assets/captures/$kind.webp" $pixels assets/header.svg <<'PY'
 import base64, re, sys
 kind, image, width, height, path = sys.argv[1:6]
 data = base64.b64encode(open(image, "rb").read()).decode()
@@ -131,5 +135,5 @@ with open(path, "w") as handle:
     handle.write(svg)
 PY
 
-printf 'Embedded the %s from %s in assets/header.svg\n' "$kind" "$shot"
+printf 'Saved assets/captures/%s.webp and embedded it in assets/header.svg\n' "$kind"
 ./scripts/make-og.sh
