@@ -112,7 +112,8 @@ jobs:
           test -x .build/Moonglade.app/Contents/MacOS/Moonglade
           test -x .build/Moonglade.app/Contents/Resources/bin/moonglade
           test -x .build/Moonglade.app/Contents/Resources/install-app.sh
-          test -f .build/Moonglade.app/Contents/Resources/Moonglade_MoongladeApp.bundle/default.metallib
+          ./scripts/verify-bundle-resource.sh \
+            .build/Moonglade.app/Contents/Resources/Moonglade_MoongladeApp.bundle default metallib
           plist=.build/Moonglade.app/Contents/Info.plist
           bundled="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
           if [ "v$bundled" != "$TAG" ]; then
