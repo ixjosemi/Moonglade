@@ -35,13 +35,25 @@
    so everything under the hero is built to stay out of its way.
 --------------------------------------------------------------------------- */
 :root {
-  --night-top: #1d2a5e;
-  --night-mid: #0f1533;
-  --night-deep: #04060d;
-  --violet: #7d6dff;
-  --blue: #3fa4ff;
+  /* Channels first, so a colour used at several strengths is written once and
+     every translucent use of it reads as that colour rather than as a number
+     that happens to match. */
+  --night-rgb: 4 6 13;
+  --ink-rgb: 238 244 255;
+  --violet-rgb: 125 109 255;
+  /* The cool near-white every hairline, well and ripple is cut from: the
+     frost, a shade lighter, so light on glass never reads as plain white. */
+  --rim-rgb: 233 241 255;
+  --glass-rgb: 147 168 224;
+  /* The tint under the nav's frost and the menu bar's. */
+  --shade-rgb: 9 13 30;
+  /* The plate a command or a tile's copy sits on, lit at its top edge. */
+  --plate-rgb: 6 9 22;
+  --plate-lit-rgb: 14 19 42;
+  --night-deep: rgb(var(--night-rgb));
+  --violet: rgb(var(--violet-rgb));
   --frost: #dde8ff;
-  --ink: #eef4ff;
+  --ink: rgb(var(--ink-rgb));
   --ink-dim: #96a6cd;
   /* The faintest ink still clears 4.5:1 on the tiles as well as on the night,
      because it sets body text: the footer, the line above the bar at rest. */
@@ -51,9 +63,9 @@
   --state-waiting: #69ce68;
   --state-blocked: #eb534f;
   --state-ended: #8e8e93;
-  --hairline: rgba(233, 241, 255, 0.10);
-  --hairline-bright: rgba(233, 241, 255, 0.22);
-  --glass: rgba(147, 168, 224, 0.06);
+  --hairline: rgb(var(--rim-rgb) / 0.10);
+  --hairline-bright: rgb(var(--rim-rgb) / 0.22);
+  --glass: rgb(var(--glass-rgb) / 0.06);
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --shell: 2rem;
   /* Two fluid rhythms, declared once and read everywhere below, so a narrow
@@ -102,7 +114,7 @@ body::after {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-::selection { background: rgba(125, 109, 255, 0.35); color: #fff; }
+::selection { background: rgb(var(--violet-rgb) / 0.35); color: #fff; }
 
 a { color: inherit; text-decoration: none; }
 
@@ -181,7 +193,7 @@ a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
      button an equal 14px of air inside the real edge. Anything under 14 falls
      outside the silhouette entirely and the clip cuts it off. */
   padding: 0 28px;
-  background: rgba(9, 13, 30, 0.55);
+  background: rgb(var(--shade-rgb) / 0.55);
   backdrop-filter: blur(28px) saturate(160%);
   -webkit-backdrop-filter: blur(28px) saturate(160%);
   clip-path: url(#notch-silhouette-clip);
@@ -190,7 +202,7 @@ a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
 /* Stroked at double width and left for the nav's own clip to halve: what
    survives is a crisp inner rim that follows every arc, including the concave
    ones a border or an inset shadow would cut straight across. */
-.nav-rim { fill: none; stroke: rgba(233, 241, 255, 0.16); stroke-width: 2; }
+.nav-rim { fill: none; stroke: rgb(var(--rim-rgb) / 0.16); stroke-width: 2; }
 .nav-mark { display: flex; align-items: center; gap: 9px; font-weight: 560; font-size: 14px; }
 .nav-mark svg { width: 17px; height: 17px; }
 .nav-links { display: flex; gap: 24px; font-size: 13px; color: var(--ink-dim); }
@@ -210,11 +222,11 @@ a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
   font-size: 13px; font-weight: 520;
   border-radius: 999px;
   border: 1px solid var(--hairline-bright);
-  background: rgba(233, 241, 255, 0.06);
+  background: rgb(var(--rim-rgb) / 0.06);
   transition: transform 500ms var(--spring), background 500ms var(--spring);
 }
 @media (hover: hover) {
-  .nav-cta:hover { background: rgba(233, 241, 255, 0.12); }
+  .nav-cta:hover { background: rgb(var(--rim-rgb) / 0.12); }
 }
 .nav-cta:active { transform: scale(0.97); }
 /* Button-in-button: the arrow lives in its own well, flush with the pill. */
@@ -222,7 +234,7 @@ a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
   display: grid; place-items: center;
   width: 24px; height: 24px;
   border-radius: 999px;
-  background: rgba(233, 241, 255, 0.10);
+  background: rgb(var(--rim-rgb) / 0.10);
   font-style: normal; font-size: 11px;
   transition: transform 500ms var(--spring);
 }
@@ -314,13 +326,13 @@ a, button, [data-copy] { -webkit-tap-highlight-color: transparent; }
   position: absolute; z-index: -1; inset: 0;
   background:
     radial-gradient(74% 54% at 50% 50%,
-        rgba(4, 6, 13, 0.74) 0%,
-        rgba(4, 6, 13, 0.46) 58%,
-        rgba(4, 6, 13, 0) 100%),
+        rgb(var(--night-rgb) / 0.74) 0%,
+        rgb(var(--night-rgb) / 0.46) 58%,
+        rgb(var(--night-rgb) / 0) 100%),
     linear-gradient(180deg,
-        rgba(4, 6, 13, 0.66) 0%,
-        rgba(4, 6, 13, 0.10) 22%,
-        rgba(4, 6, 13, 0.16) 52%,
+        rgb(var(--night-rgb) / 0.66) 0%,
+        rgb(var(--night-rgb) / 0.10) 22%,
+        rgb(var(--night-rgb) / 0.16) 52%,
         var(--night-deep) 100%);
   pointer-events: none;
 }
@@ -341,7 +353,7 @@ h1 {
 @media (max-width: 389px) { h1 { font-size: 8.5vw; } }
 h1 em {
   font-style: normal;
-  background: linear-gradient(180deg, var(--frost) 0%, rgba(125, 109, 255, 0.85) 130%);
+  background: linear-gradient(180deg, var(--frost) 0%, rgb(var(--violet-rgb) / 0.85) 130%);
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -389,7 +401,7 @@ h1 em {
   padding: 6px;
   border-radius: var(--shell);
   border: 1px solid var(--hairline);
-  background: rgba(147, 168, 224, 0.05);
+  background: rgb(var(--glass-rgb) / 0.05);
   box-shadow: 0 40px 90px -50px rgba(0, 0, 0, 0.95);
 }
 .command {
@@ -397,7 +409,7 @@ h1 em {
   display: flex; align-items: center; gap: clamp(10px, 2.4vw, 20px);
   padding: 17px 10px 17px clamp(16px, 3vw, 22px);
   border-radius: calc(var(--shell) - 6px);
-  background: linear-gradient(180deg, rgba(12, 17, 38, 0.92), rgba(6, 9, 22, 0.92));
+  background: linear-gradient(180deg, rgb(var(--plate-lit-rgb) / 0.92), rgb(var(--plate-rgb) / 0.92));
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.11);
   cursor: pointer;
 }
@@ -436,14 +448,14 @@ h1 em {
   width: 44px; height: 44px;
   border-radius: 999px;
   border: 1px solid var(--hairline-bright);
-  background: rgba(233, 241, 255, 0.05);
+  background: rgb(var(--rim-rgb) / 0.05);
   color: var(--ink);
   cursor: pointer;
   transition: transform 500ms var(--spring), background 500ms var(--spring),
               border-color 500ms var(--spring);
 }
 @media (hover: hover) {
-  .copy:hover { background: rgba(233, 241, 255, 0.11); }
+  .copy:hover { background: rgb(var(--rim-rgb) / 0.11); }
 }
 .copy:active { transform: scale(0.96); }
 .copy svg {
@@ -460,14 +472,14 @@ h1 em {
   .copy:hover .copy-mark { transform: translate(1px, -1px) scale(1.08); }
 }
 .copy.done {
-  background: rgba(125, 109, 255, 0.20);
-  border-color: rgba(125, 109, 255, 0.45);
+  background: rgb(var(--violet-rgb) / 0.20);
+  border-color: rgb(var(--violet-rgb) / 0.45);
 }
 /* The app answers a click with a Metal ripple; so does the command. */
 .ripple-ink {
   position: absolute; border-radius: 50%;
   transform: translate(-50%, -50%) scale(0);
-  background: radial-gradient(circle, rgba(233,241,255,0.22) 0%, rgba(233,241,255,0) 70%);
+  background: radial-gradient(circle, rgb(var(--rim-rgb) / 0.22) 0%, rgb(var(--rim-rgb) / 0) 70%);
   animation: ink 900ms var(--spring) forwards;
   pointer-events: none;
 }
@@ -541,13 +553,13 @@ h2 {
   padding: 5px;
   border-radius: var(--shell);
   border: 1px solid var(--hairline);
-  background: rgba(147, 168, 224, 0.05);
+  background: rgb(var(--glass-rgb) / 0.05);
 }
 .tile-core {
   height: 100%;
   padding: clamp(20px, 3.4vw, 30px);
   border-radius: calc(var(--shell) - 5px);
-  background: linear-gradient(180deg, rgba(14, 19, 42, 0.86), rgba(6, 9, 22, 0.86));
+  background: linear-gradient(180deg, rgb(var(--plate-lit-rgb) / 0.86), rgb(var(--plate-rgb) / 0.86));
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
 }
 .tile h3 { font-size: 17px; font-weight: 560; letter-spacing: -0.02em; }
@@ -626,8 +638,8 @@ h2 {
   padding: 20px 20px 0;
   border-radius: 28px 28px 0 0;
   background: linear-gradient(180deg, #1c212c, #0b0e15);
-  box-shadow: inset 0 1px 0 rgba(233, 241, 255, 0.20),
-              inset 0 0 0 1px rgba(233, 241, 255, 0.07);
+  box-shadow: inset 0 1px 0 rgb(var(--rim-rgb) / 0.20),
+              inset 0 0 0 1px rgb(var(--rim-rgb) / 0.07);
   /* Cropped, and faded rather than cut, so the eye finishes the machine
      instead of finding it truncated. A mask and not a filter: a filter here
      would reset the backdrop root and leave the panel's frost blurring
@@ -668,14 +680,14 @@ h2 {
   display: flex; align-items: center; justify-content: space-between; gap: 20px;
   height: 36px; padding: 0 16px;
   font-size: 12.5px;
-  color: rgba(238, 244, 255, 0.9);
-  background: rgba(9, 13, 30, 0.4);
+  color: rgb(var(--ink-rgb) / 0.9);
+  background: rgb(var(--shade-rgb) / 0.4);
   backdrop-filter: blur(20px) saturate(150%);
   -webkit-backdrop-filter: blur(20px) saturate(150%);
 }
 .menubar > div { display: flex; align-items: center; gap: 15px; white-space: nowrap; }
 .menubar b { font-weight: 620; }
-.menubar svg { display: block; color: rgba(238, 244, 255, 0.76); }
+.menubar svg { display: block; color: rgb(var(--ink-rgb) / 0.76); }
 
 /* The panel and the bar are not drawn here. Both are screenshots of the app in
    demo mode, cut along their own silhouettes by scripts/make-banner-captures.sh
@@ -753,7 +765,7 @@ h2 {
   /* The right inset clears the gutter below, so the last character of a command
      scrolled to its end stops before the fade rather than inside it. */
   padding: 16px 84px 16px 16px;
-  background: rgba(3, 5, 14, 0.75);
+  background: rgb(var(--night-rgb) / 0.75);
   border: 1px solid var(--hairline);
   border-radius: 14px;
   font-family: var(--mono); font-size: 12px; color: var(--frost);
@@ -1096,6 +1108,9 @@ cd Moonglade
     // changed on a focused button is something VoiceOver may never announce.
     const status = document.getElementById('copy-status');
     let reset = 0;
+    // The text this handler itself selected when the clipboard refused, so a
+    // press that follows is read as a press and not as someone's selection.
+    let offered = '';
 
     function say(copied, message) {
       clearTimeout(reset);
@@ -1128,7 +1143,9 @@ cd Moonglade
       // a deliberate press.
       const selection = window.getSelection();
       const pressed = event.target.closest('.copy');
-      if (!pressed && !selection.isCollapsed && surface.contains(selection.anchorNode)) return;
+      const ours = offered !== '' && selection.toString() === offered;
+      offered = '';
+      if (!pressed && !ours && !selection.isCollapsed && surface.contains(selection.anchorNode)) return;
       ink(event);
       try {
         await navigator.clipboard.writeText(source.textContent);
@@ -1141,6 +1158,7 @@ cd Moonglade
         range.selectNodeContents(source);
         selection.removeAllRanges();
         selection.addRange(range);
+        offered = selection.toString();
         say(false, 'Clipboard unavailable. The command is selected: press Command-C.');
       }
     });
