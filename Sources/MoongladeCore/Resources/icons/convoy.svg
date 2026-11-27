@@ -1,9 +1,22 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect x="4" y="4" width="8" height="8" rx="2" fill="#79ACEF"/>
-  <rect x="13" y="4" width="8" height="8" rx="2" fill="#77B8E5"/>
-  <rect x="22" y="4" width="8" height="8" rx="2" fill="#76C3DC"/>
-  <rect x="4" y="13" width="8" height="8" rx="2" fill="#77B8E5"/>
-  <rect x="4" y="22" width="8" height="8" rx="2" fill="#76C3DC"/>
-  <rect x="13" y="22" width="8" height="8" rx="2" fill="#74CFD3"/>
-  <rect x="22" y="22" width="8" height="8" rx="2" fill="#73DACA"/>
+<svg role="img" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><title>Convoy</title>
+  <!-- App-tile treatment shared with Goatty: the brand mark in a pale tint on a
+       squircle of the brand colour, lit from above. No filter primitives, so
+       AppKit, librsvg and browsers draw it identically. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2B8FA8"/>
+      <stop offset="1" stop-color="#1C6683"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".32"/>
+      <stop offset=".35" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7.2" fill="url(#tile)"/>
+  <rect x="1.4" y="1.4" width="29.2" height="29.2" rx="6.8" fill="none" stroke="url(#rim)" stroke-width=".8"/>
+  <g transform="translate(16 16) scale(.68) translate(-17 -17)" fill="#EAF8FB">
+    <rect x="4" y="4" width="8" height="8" rx="2"/><rect x="13" y="4" width="8" height="8" rx="2"/><rect x="22" y="4" width="8" height="8" rx="2"/>
+    <rect x="4" y="13" width="8" height="8" rx="2"/>
+    <rect x="4" y="22" width="8" height="8" rx="2"/><rect x="13" y="22" width="8" height="8" rx="2"/><rect x="22" y="22" width="8" height="8" rx="2"/>
+  </g>
 </svg>

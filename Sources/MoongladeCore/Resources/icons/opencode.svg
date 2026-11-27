@@ -1,7 +1,21 @@
-<svg width="300" height="300" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
-  <!-- Same silhouette as the official OpenCode mark, with its dark gray
-       center knocked out for the black bar. The mark is also inset from
-       the canvas edges: full-bleed with a heavy stroke, it read far bigger
-       than the other brand icons sharing the bar. -->
-  <path d="M245 30H55V270H245V30ZM99 74V226H201V74H99Z" fill="#F1ECEC" fill-rule="evenodd"/>
+<svg role="img" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><title>OpenCode</title>
+  <!-- App-tile treatment shared with Goatty: the brand mark in a pale tint on a
+       squircle of the brand colour, lit from above. No filter primitives, so
+       AppKit, librsvg and browsers draw it identically. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4C4545"/>
+      <stop offset="1" stop-color="#2F2929"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".32"/>
+      <stop offset=".35" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="7.2" fill="url(#tile)"/>
+  <rect x="1.4" y="1.4" width="29.2" height="29.2" rx="6.8" fill="none" stroke="url(#rim)" stroke-width=".8"/>
+  <g transform="translate(16 16) scale(.072) translate(-150 -150)">
+    <path d="M245 30H55V270H245V30ZM99 74V226H201V74H99Z" fill="#000" fill-opacity=".35" fill-rule="evenodd" transform="translate(0 8)"/>
+    <path d="M245 30H55V270H245V30ZM99 74V226H201V74H99Z" fill="#F1ECEC" fill-rule="evenodd"/>
+  </g>
 </svg>
