@@ -1,25 +1,7 @@
-<svg role="img" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><title>Pi</title>
-  <!-- App-tile treatment shared with Goatty: the brand mark in a pale tint on a
-       squircle of the brand colour, lit from above. No filter primitives, so
-       AppKit, librsvg and browsers draw it identically. -->
-  <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5C5C6A"/>
-      <stop offset="1" stop-color="#3A3A45"/>
-    </linearGradient>
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity=".32"/>
-      <stop offset=".35" stop-color="#fff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="1" y="1" width="30" height="30" rx="7.2" fill="url(#tile)"/>
-  <rect x="1.4" y="1.4" width="29.2" height="29.2" rx="6.8" fill="none" stroke="url(#rim)" stroke-width=".8"/>
-  <g transform="translate(16 16.4) scale(.78) translate(-12 -13)" stroke-width="2.6" stroke-linecap="round" fill="none">
-    <g stroke="#000" stroke-opacity=".3" transform="translate(0 .6)">
-      <path d="M3.8 6.2h16.4"/><path d="M8.4 6.2v13.6"/><path d="M15.6 6.2v11.2a2.4 2.4 0 0 0 4.6 1"/>
-    </g>
-    <g stroke="#EEEEF2">
-      <path d="M3.8 6.2h16.4"/><path d="M8.4 6.2v13.6"/><path d="M15.6 6.2v11.2a2.4 2.4 0 0 0 4.6 1"/>
-    </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g stroke="#E8E8EC" stroke-width="2.6" stroke-linecap="round" fill="none">
+    <path d="M3.8 6.2h16.4"/>
+    <path d="M8.4 6.2v13.6"/>
+    <path d="M15.6 6.2v11.2a2.4 2.4 0 0 0 4.6 1"/>
   </g>
 </svg>
