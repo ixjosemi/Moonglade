@@ -36,11 +36,11 @@ Use Conventional Commits, for example `fix(installer): reject symlinked config p
 
 ## Review before merge
 
-Every pull request gets an adversarial review and a score before it merges, the maintainer's own and agent-written ones included. Both are written by a reviewer who did not write the change, and both are recorded in the pull request.
+Every pull request gets an adversarial review and a score before it merges, the maintainer's own and agent-written ones included. Both are written by a reviewer who did not write the change, and both are recorded in the pull request or linked from it. A review by an AI agent working in a fresh context, with no access to the author's session, counts. If you cannot arrange one, leave the Review boxes in the pull request template unticked and the maintainer provides the review before merging.
 
-The review tries to break the change rather than read it. Run `swift build`, `swift run moonglade-tests` and `./scripts/build-app.sh` on the pull request's head; when the change adds tests, revert the change and confirm they fail; probe the edge cases the change claims to handle.
+The review tries to break the change rather than read it. Run `swift build`, `swift run moonglade-tests` and `./scripts/build-app.sh` on the pull request's head; when the change adds tests, revert the implementation, keep the new tests, and confirm they fail; probe the edge cases the change claims to handle.
 
-The score grades the change against its contract: the linked issue, or the pull request description when there is none. Each dimension is scored from 0 to 100 with the evidence behind it, where 100 means nothing a maintainer would ask to change and 90 means ready to merge as it is.
+The score grades the change against its contract: the linked issue, or the pull request description when there is none. Each dimension is scored from 0 to 100 with the evidence behind it, where 100 means nothing a maintainer would ask to change and 90 means ready to merge as it is. Report the weighted total alongside the table; it informs the decision, and the findings below gate it. When a change has no runtime behaviour to test, such as documentation, score Tests on the checks that do apply.
 
 | Dimension | Weight | Graded on |
 | --- | ---: | --- |
