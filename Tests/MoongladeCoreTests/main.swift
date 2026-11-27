@@ -9270,8 +9270,11 @@ func testInstallerShipsTheResourceBundleBesideTheInstalledBinary() throws {
     // Existing is not enough: the installed binary reads its hook scripts and
     // agent icons back out of this copy on every install and doctor run.
     try expect(
-        FileManager.default.fileExists(
-            atPath: installedBundle.appendingPathComponent("Resources/hooks/claude-hook.sh").path
+        BundledResources.containsResource(
+            named: "claude-hook",
+            withExtension: "sh",
+            subdirectory: "Resources/hooks",
+            inBundleAt: installedBundle.path
         ),
         equals: true,
         "the installed bundle carries the hook scripts"
@@ -9300,6 +9303,50 @@ func testInstallationDoctorFailsWhenTheResourceBundleIsMissing() throws {
         equals: true,
         "detail names the recovery command"
     )
+}
+
+/// SwiftPM's two build systems lay the same resource bundle out differently:
+/// the native one writes a flat directory, while Swift Build — the default
+/// from Swift 6.4 — writes a real macOS bundle with everything under
+/// Contents/Resources. The installer copies whichever one the toolchain
+/// produced, so the doctor must read the bundle the way Foundation does
+/// rather than assume one layout and report a healthy install as broken.
+func testInstallationDoctorAcceptsEitherSwiftPMBundleLayout() throws {
+    let layouts = [
+        ("native", "Resources/hooks/claude-hook.sh"),
+        ("swiftbuild", "Contents/Resources/Resources/hooks/claude-hook.sh"),
+    ]
+    for (buildSystem, hookPath) in layouts {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Installer(homeDirectoryURL: home, executableURL: Bundle.main.executableURL!).install()
+        let bundle = home.appendingPathComponent(".moonglade/bin/\(BundledResources.bundleName)")
+        try FileManager.default.removeItem(at: bundle)
+        let hook = bundle.appendingPathComponent(hookPath)
+        try FileManager.default.createDirectory(
+            at: hook.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("#!/bin/sh\n".utf8).write(to: hook)
+        if buildSystem == "swiftbuild" {
+            try PropertyListSerialization.data(
+                fromPropertyList: [
+                    "CFBundleIdentifier": "Moonglade.MoongladeCore.resources",
+                    "CFBundlePackageType": "BNDL",
+                ],
+                format: .xml,
+                options: 0
+            ).write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        }
+
+        let checks = InstallationDoctor(homeDirectoryURL: home).diagnose()
+        let resources = try checks.first { $0.title == "resource bundle" }
+            .unwrap(or: "missing resource bundle check")
+
+        try expect(resources.passed, equals: true, "\(buildSystem) bundle layout: \(resources.detail)")
+    }
 }
 
 func testCLIParsesDoctorCommand() throws {
@@ -11172,6 +11219,7 @@ let tests: [(String, () throws -> Void)] = [
     ("app resource bundle search covers the installed app layout", testAppResourceBundleSearchCoversTheInstalledAppLayout),
     ("installer ships the resource bundle beside the installed binary", testInstallerShipsTheResourceBundleBesideTheInstalledBinary),
     ("installation doctor fails when the resource bundle is missing", testInstallationDoctorFailsWhenTheResourceBundleIsMissing),
+    ("installation doctor accepts either SwiftPM bundle layout", testInstallationDoctorAcceptsEitherSwiftPMBundleLayout),
     ("CLI parses doctor command", testCLIParsesDoctorCommand),
     ("hook input rejects oversized payloads", testHookInputRejectsOversizedPayloads),
     ("Codex notify marks turn complete", testCodexNotifyMarksTurnComplete),
