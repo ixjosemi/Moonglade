@@ -20,9 +20,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var store: StateStore?
     private var observationScheduler: ObservationScheduler?
     private var instanceLock: SingleInstanceLock?
+    private var demoRootURL: URL?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if DemoWorkspace.isEnabled(in: ProcessInfo.processInfo.environment) {
+            launchDemo()
+            return
+        }
         let stateDirectory = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".moonglade/state", isDirectory: true)
         let repository = StateRepository(directoryURL: stateDirectory)
@@ -97,6 +102,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         observationScheduler?.stop()
         store?.stopObserving()
+        if let demoRootURL {
+            try? FileManager.default.removeItem(at: demoRootURL)
+        }
+    }
+
+    /// `MOONGLADE_DEMO=1`: the real panel over fixed sessions in a throwaway
+    /// root, for screenshots. No observation scheduler, so nothing reaps the
+    /// demo sessions, and no sounds; the user's own state is never opened.
+    /// Quit any running Moonglade first, or the two panels stack.
+    private func launchDemo() {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("moonglade-demo-\(UUID().uuidString)", isDirectory: true)
+        demoRootURL = root
+        let workspace = DemoWorkspace(rootURL: root)
+        do {
+            try workspace.seed(now: Date())
+            let store = StateStore(
+                repository: StateRepository(directoryURL: workspace.stateDirectoryURL),
+                nameOverridesFileURL: workspace.nameOverridesFileURL
+            )
+            try store.startObserving(pollInterval: 30)
+            self.store = store
+            panelController = NotchPanelController(store: store)
+            panelController?.show()
+        } catch {
+            NSLog("Moonglade failed to start demo mode: %@", String(describing: error))
+            NSApp.terminate(nil)
+        }
     }
 
 }
