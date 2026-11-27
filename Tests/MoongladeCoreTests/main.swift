@@ -2992,6 +2992,9 @@ func testObservationSchedulerMaterializesStateOncePerTick() throws {
 }
 
 final class CountingProcessScanner: ProcessScanning, @unchecked Sendable {
+    /// Signalled once per scan, so a test can await the scan itself rather
+    /// than guess how long a starved utility-QoS queue takes to deliver it.
+    let scanned = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private let detected: [DetectedAgentProcess]
     private var count = 0
@@ -3002,7 +3005,10 @@ final class CountingProcessScanner: ProcessScanning, @unchecked Sendable {
 
     func activeProcesses() throws -> [DetectedAgentProcess] {
         lock.lock()
-        defer { lock.unlock() }
+        defer {
+            lock.unlock()
+            scanned.signal()
+        }
         count += 1
         return detected
     }
@@ -3264,7 +3270,12 @@ func testObservationSchedulerCoalescesTickBursts() throws {
     for _ in 0..<5 {
         scheduler.requestTick()
     }
-    usleep(400_000)
+    guard scanner.scanned.wait(timeout: .now() + 10) == .success else {
+        throw TestFailure.expectation("the coalesced tick never scanned")
+    }
+    // Uncoalesced requests would each have queued a tick due within the same
+    // debounce window, ahead of this idle probe on the serial queue.
+    scheduler.waitUntilIdle()
 
     try expect(
         scanner.scanCount,
