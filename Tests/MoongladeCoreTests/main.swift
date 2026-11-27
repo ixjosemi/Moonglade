@@ -415,6 +415,32 @@ func testStateReadToleratesAConcurrentAtomicReplacement() throws {
     try expect(sessions.map(\.sessionID), equals: ["replaced"], "concurrent replacement keeps session")
 }
 
+func testOwnershipIndexReadToleratesAConcurrentAtomicReplacement() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let writer = StateRepository(directoryURL: directory)
+    try writer.mergeConvoyOwnedOpenCodeSessionIDs(["owned"])
+    try writer.save(AgentSession.decode(from: validStateJSON(
+        sessionID: "native",
+        status: "working"
+    )))
+    // The index is the first document a snapshot reads, so the gate fires
+    // while it is open: the scheduler's queue merging new phase IDs in the
+    // middle of an app reload, as it does whenever Convoy starts a phase.
+    let replacementGate = TestOnceGate()
+    var reader = StateRepository(directoryURL: directory)
+    reader.didReadDocumentForTesting = {
+        guard replacementGate.consume() else { return }
+        _ = try? writer.mergeConvoyOwnedOpenCodeSessionIDs(["owned", "owned-later"])
+    }
+
+    let sessions = try reader.loadSessions()
+
+    try expect(sessions.map(\.sessionID), equals: ["native"], "concurrent index replacement keeps the snapshot")
+}
+
 func testAnUnreadableDocumentDoesNotDeleteACustomSessionName() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let stateDirectory = root.appendingPathComponent("state")
@@ -2968,6 +2994,9 @@ func testObservationSchedulerMaterializesStateOncePerTick() throws {
 }
 
 final class CountingProcessScanner: ProcessScanning, @unchecked Sendable {
+    /// Signalled once per scan, so a test can await the scan itself rather
+    /// than guess how long a starved utility-QoS queue takes to deliver it.
+    let scanned = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private let detected: [DetectedAgentProcess]
     private var count = 0
@@ -2978,7 +3007,10 @@ final class CountingProcessScanner: ProcessScanning, @unchecked Sendable {
 
     func activeProcesses() throws -> [DetectedAgentProcess] {
         lock.lock()
-        defer { lock.unlock() }
+        defer {
+            lock.unlock()
+            scanned.signal()
+        }
         count += 1
         return detected
     }
@@ -3240,7 +3272,12 @@ func testObservationSchedulerCoalescesTickBursts() throws {
     for _ in 0..<5 {
         scheduler.requestTick()
     }
-    usleep(400_000)
+    guard scanner.scanned.wait(timeout: .now() + 10) == .success else {
+        throw TestFailure.expectation("the coalesced tick never scanned")
+    }
+    // Uncoalesced requests would each have queued a tick due within the same
+    // debounce window, ahead of this idle probe on the serial queue.
+    scheduler.waitUntilIdle()
 
     try expect(
         scanner.scanCount,
@@ -7326,6 +7363,83 @@ func testInitialBaselineWaitsForConcurrentConvoyMetadata() throws {
     )
 }
 
+func testInitialBaselineIndexesMetadataWhoseEventHasNotArrived() throws {
+    let (stateDirectoryURL, runsDirectoryURL) = try makeConvoyTestDirectories()
+    defer { try? FileManager.default.removeItem(at: stateDirectoryURL.deletingLastPathComponent()) }
+    let repository = StateRepository(directoryURL: stateDirectoryURL)
+    let opencodeProcessID = Int32(getppid())
+    try repository.save(AgentSession.decode(from: validStateJSON(
+        sessionID: "ses_unannounced",
+        status: "working",
+        pid: opencodeProcessID,
+        tool: "opencode",
+        cwd: "/tmp/convoy-target"
+    )))
+    let runID = "20260722-222222-unannounced"
+    let serverStartedAt = Date().addingTimeInterval(-60)
+    try writeConvoyRunFixture(
+        at: runsDirectoryURL,
+        runID: runID,
+        serverPid: Int32(getpid()),
+        serverStartedAt: serverStartedAt,
+        phases: [("first", "running", "ses_first")]
+    )
+    let scanner = StartupOrderingProcessScanner([
+        detectedConvoyProcess(),
+        DetectedAgentProcess(
+            tool: .opencode,
+            processID: opencodeProcessID,
+            cwd: "/tmp/convoy-target",
+            terminal: TerminalContext()
+        ),
+    ])
+    let scheduler = ObservationScheduler(
+        repository: repository,
+        processScanner: scanner,
+        codexSessionsDirectoryURL: stateDirectoryURL.appendingPathComponent("codex", isDirectory: true),
+        convoyRunsDirectoryURL: runsDirectoryURL,
+        heartbeatInterval: 60,
+        debounceInterval: 0.02
+    )
+    defer {
+        scanner.releaseBaseline.signal()
+        scheduler.stop()
+        scheduler.waitUntilIdle()
+    }
+    let completion = StartupCompletionProbe()
+    scheduler.startWithInitialReconciliation { completion.record() }
+    guard scanner.baselineStarted.wait(timeout: .now() + 2) == .success else {
+        throw TestFailure.expectation("startup process scan never blocked")
+    }
+    // Rewritten in place, the run directory never changes, so no vnode event
+    // is ever delivered: the most delayed event there can be. The quiet
+    // window is satisfied at once, and only what is on disk can be indexed.
+    try writeConvoyRunFixture(
+        at: runsDirectoryURL,
+        runID: runID,
+        serverPid: Int32(getpid()),
+        serverStartedAt: serverStartedAt,
+        phases: [
+            ("first", "completed", "ses_first"),
+            ("late", "running", "ses_unannounced"),
+        ]
+    )
+    scanner.releaseBaseline.signal()
+
+    let deadline = Date().addingTimeInterval(2)
+    while !completion.completionRan, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    }
+    try expect(completion.completionRan, equals: true, "startup baseline completed")
+    try expect(
+        (try repository.loadSessions()).contains(where: {
+            $0.tool == .opencode && $0.sessionID == "ses_unannounced"
+        }),
+        equals: false,
+        "metadata already on disk is indexed before baseline without waiting for its event"
+    )
+}
+
 func testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory() throws {
     // Live incident 2026-07-20: once the embedded opencode-serve child loses
     // Ghostty's last blank terminal to the convoy process itself, the reaper
@@ -9985,12 +10099,25 @@ func testTerminationServiceKillsPolitelyAndEscalatesToSigkill() throws {
     try expect(polite.terminationReason, equals: .uncaughtSignal, "polite process killed by signal")
 
     // A process ignoring SIGTERM is escalated to SIGKILL after the grace.
-    let stubborn = try spawn(["/bin/sh", "-c", "trap '' TERM; sleep 60"])
-    // Give the shell a beat to install its trap before signaling.
-    usleep(200_000)
+    // The ignored disposition survives `exec`, so the one process signalled
+    // is the one ignoring SIGTERM: a forked `sleep` would outlive its shell
+    // and hold the runner's stdout open for a minute. It reports over its own
+    // pipe once the trap is installed, so no signal can beat the trap.
+    let stubborn = Process()
+    stubborn.executableURL = URL(fileURLWithPath: "/bin/sh")
+    stubborn.arguments = ["-c", "trap '' TERM; echo ready; exec /bin/sleep 60"]
+    let readiness = Pipe()
+    stubborn.standardOutput = readiness
+    try stubborn.run()
+    try expect(
+        readiness.fileHandleForReading.readData(ofLength: 6),
+        equals: Data("ready\n".utf8),
+        "stubborn process installed its trap"
+    )
     try TerminationService.terminate(try sessionForProcessID(stubborn.processIdentifier), gracePeriod: 0.3)
     stubborn.waitUntilExit()
     try expect(stubborn.terminationReason, equals: .uncaughtSignal, "stubborn process killed by signal")
+    try expect(stubborn.terminationStatus, equals: SIGKILL, "stubborn process outlived SIGTERM")
 
     // A pid that is already gone is not an error: the goal state holds.
     try TerminationService.terminate(politeSession, gracePeriod: 0.3)
@@ -11097,6 +11224,7 @@ let tests: [(String, () throws -> Void)] = [
     ("state repository rejects FIFO without blocking", testStateRepositoryRejectsFIFOWithoutBlocking),
     ("state repository rejects oversized identity document", testStateRepositoryDoesNotPreserveIdentityFromOversizedDocument),
     ("state read tolerates a concurrent atomic replacement", testStateReadToleratesAConcurrentAtomicReplacement),
+    ("ownership index read tolerates a concurrent atomic replacement", testOwnershipIndexReadToleratesAConcurrentAtomicReplacement),
     ("an unreadable document does not delete a custom session name", testAnUnreadableDocumentDoesNotDeleteACustomSessionName),
     ("an unreadable document does not rearm attention", testAnUnreadableDocumentDoesNotRearmAttention),
     ("two documents naming the same session produce one row", testTwoDocumentsNamingTheSameSessionProduceOneRow),
@@ -11287,6 +11415,7 @@ let tests: [(String, () throws -> Void)] = [
     ("initial reconciliation indexes serverless Convoy ownership", testInitialReconciliationIndexesServerlessConvoyOwnership),
     ("initial reconciliation watches live Convoy ownership before baseline", testInitialReconciliationWatchesLiveConvoyOwnershipBeforeBaseline),
     ("initial baseline waits for concurrent Convoy metadata", testInitialBaselineWaitsForConcurrentConvoyMetadata),
+    ("initial baseline indexes metadata whose event has not arrived", testInitialBaselineIndexesMetadataWhoseEventHasNotArrived),
     ("convoy watcher suppresses embedded server reaper fallback by directory", testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory),
     ("focus planner prioritizes tmux then terminal", testFocusPlannerPrioritizesTmuxThenTerminal),
     ("focus planner targets Orca before tmux", testFocusPlannerTargetsOrcaBeforeTmux),
