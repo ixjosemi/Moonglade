@@ -68,8 +68,11 @@ public struct InstallationDoctor {
     /// doctor run dies before printing anything.
     private func resourceBundleCheck() -> DoctorCheck {
         let bundleURL = binDirectory.appendingPathComponent(BundledResources.bundleName)
-        let usable = FileManager.default.fileExists(
-            atPath: bundleURL.appendingPathComponent("Resources/hooks/claude-hook.sh").path
+        let usable = BundledResources.containsResource(
+            named: "claude-hook",
+            withExtension: "sh",
+            subdirectory: "Resources/hooks",
+            inBundleAt: bundleURL.path
         )
         return DoctorCheck(
             title: "resource bundle",
