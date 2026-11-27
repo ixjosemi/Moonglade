@@ -157,6 +157,11 @@ public final class ObservationScheduler {
                 )
                 return
             }
+            // A quiet window proves only that no event arrived, not that none
+            // is owed: delivery lags the write, so metadata already on disk
+            // can still be missing from the cached inventory. Re-read it.
+            self.convoyWatcher?.invalidateOwnershipInventory()
+            self.refreshConvoyOwnershipIndex()
             if let completion {
                 DispatchQueue.main.async { [weak self] in
                     guard let self,

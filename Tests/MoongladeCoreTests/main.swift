@@ -7273,6 +7273,83 @@ func testInitialBaselineWaitsForConcurrentConvoyMetadata() throws {
     )
 }
 
+func testInitialBaselineIndexesMetadataWhoseEventHasNotArrived() throws {
+    let (stateDirectoryURL, runsDirectoryURL) = try makeConvoyTestDirectories()
+    defer { try? FileManager.default.removeItem(at: stateDirectoryURL.deletingLastPathComponent()) }
+    let repository = StateRepository(directoryURL: stateDirectoryURL)
+    let opencodeProcessID = Int32(getppid())
+    try repository.save(AgentSession.decode(from: validStateJSON(
+        sessionID: "ses_unannounced",
+        status: "working",
+        pid: opencodeProcessID,
+        tool: "opencode",
+        cwd: "/tmp/convoy-target"
+    )))
+    let runID = "20260722-222222-unannounced"
+    let serverStartedAt = Date().addingTimeInterval(-60)
+    try writeConvoyRunFixture(
+        at: runsDirectoryURL,
+        runID: runID,
+        serverPid: Int32(getpid()),
+        serverStartedAt: serverStartedAt,
+        phases: [("first", "running", "ses_first")]
+    )
+    let scanner = StartupOrderingProcessScanner([
+        detectedConvoyProcess(),
+        DetectedAgentProcess(
+            tool: .opencode,
+            processID: opencodeProcessID,
+            cwd: "/tmp/convoy-target",
+            terminal: TerminalContext()
+        ),
+    ])
+    let scheduler = ObservationScheduler(
+        repository: repository,
+        processScanner: scanner,
+        codexSessionsDirectoryURL: stateDirectoryURL.appendingPathComponent("codex", isDirectory: true),
+        convoyRunsDirectoryURL: runsDirectoryURL,
+        heartbeatInterval: 60,
+        debounceInterval: 0.02
+    )
+    defer {
+        scanner.releaseBaseline.signal()
+        scheduler.stop()
+        scheduler.waitUntilIdle()
+    }
+    let completion = StartupCompletionProbe()
+    scheduler.startWithInitialReconciliation { completion.record() }
+    guard scanner.baselineStarted.wait(timeout: .now() + 2) == .success else {
+        throw TestFailure.expectation("startup process scan never blocked")
+    }
+    // Rewritten in place, the run directory never changes, so no vnode event
+    // is ever delivered: the most delayed event there can be. The quiet
+    // window is satisfied at once, and only what is on disk can be indexed.
+    try writeConvoyRunFixture(
+        at: runsDirectoryURL,
+        runID: runID,
+        serverPid: Int32(getpid()),
+        serverStartedAt: serverStartedAt,
+        phases: [
+            ("first", "completed", "ses_first"),
+            ("late", "running", "ses_unannounced"),
+        ]
+    )
+    scanner.releaseBaseline.signal()
+
+    let deadline = Date().addingTimeInterval(2)
+    while !completion.completionRan, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+    }
+    try expect(completion.completionRan, equals: true, "startup baseline completed")
+    try expect(
+        (try repository.loadSessions()).contains(where: {
+            $0.tool == .opencode && $0.sessionID == "ses_unannounced"
+        }),
+        equals: false,
+        "metadata already on disk is indexed before baseline without waiting for its event"
+    )
+}
+
 func testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory() throws {
     // Live incident 2026-07-20: once the embedded opencode-serve child loses
     // Ghostty's last blank terminal to the convoy process itself, the reaper
@@ -11230,6 +11307,7 @@ let tests: [(String, () throws -> Void)] = [
     ("initial reconciliation indexes serverless Convoy ownership", testInitialReconciliationIndexesServerlessConvoyOwnership),
     ("initial reconciliation watches live Convoy ownership before baseline", testInitialReconciliationWatchesLiveConvoyOwnershipBeforeBaseline),
     ("initial baseline waits for concurrent Convoy metadata", testInitialBaselineWaitsForConcurrentConvoyMetadata),
+    ("initial baseline indexes metadata whose event has not arrived", testInitialBaselineIndexesMetadataWhoseEventHasNotArrived),
     ("convoy watcher suppresses embedded server reaper fallback by directory", testConvoyWatcherSuppressesEmbeddedServerReaperFallbackByDirectory),
     ("focus planner prioritizes tmux then terminal", testFocusPlannerPrioritizesTmuxThenTerminal),
     ("focus planner targets Orca before tmux", testFocusPlannerTargetsOrcaBeforeTmux),
