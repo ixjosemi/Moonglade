@@ -10908,8 +10908,50 @@ func testInlineActionsClickGateClaimsRightAndControlClicks() throws {
     )
 }
 
+func testDemoWorkspaceSeedsOneSessionPerVisibleStateInsideItsOwnRoot() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let workspace = DemoWorkspace(rootURL: root)
+
+    let seeded = try workspace.seed(now: now)
+    let loaded = try StateRepository(directoryURL: workspace.stateDirectoryURL).loadSessions()
+
+    try expect(Set(loaded.map { $0.id }), equals: Set(seeded.map { $0.id }), "seeded sessions reload from the demo state directory")
+    try expect(loaded.filter { $0.status == .working }.count, equals: 2, "two running sessions")
+    try expect(loaded.filter { $0.status == .idle }.count, equals: 1, "one session waiting at the prompt")
+    try expect(
+        loaded.filter { $0.status == .needsAttention && $0.attentionReason == .permission }.count,
+        equals: 1,
+        "one session blocked on a permission ask"
+    )
+    try expect(loaded.allSatisfy { $0.sessionTitle != nil }, equals: true, "every demo session is named")
+    try expect(
+        loaded.allSatisfy { $0.cwd.hasPrefix(root.path + "/") },
+        equals: true,
+        "demo projects live inside the demo root, never in the user's home"
+    )
+    try expect(loaded.allSatisfy { $0.startedAt <= now }, equals: true, "elapsed times are measured back from now")
+    let claude = try loaded.first { $0.tool == .claude && $0.status == .working }
+        ?? { throw TestFailure.expectation("a running Claude session") }()
+    try expect(
+        GitWorkspaceInspector.branchName(forWorkingDirectory: claude.cwd),
+        equals: "feat/ghostty-identity",
+        "demo projects carry a real branch for the row to resolve"
+    )
+}
+
+func testDemoWorkspaceIsEnabledOnlyByExplicitFlag() throws {
+    try expect(DemoWorkspace.isEnabled(in: ["MOONGLADE_DEMO": "1"]), equals: true, "flag set")
+    try expect(DemoWorkspace.isEnabled(in: [:]), equals: false, "flag absent")
+    try expect(DemoWorkspace.isEnabled(in: ["MOONGLADE_DEMO": "0"]), equals: false, "flag off")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("notch glass scrim keeps collapsed bar solid and fades expanded", testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded),
+    ("demo workspace seeds one session per visible state inside its own root", testDemoWorkspaceSeedsOneSessionPerVisibleStateInsideItsOwnRoot),
+    ("demo workspace is enabled only by explicit flag", testDemoWorkspaceIsEnabledOnlyByExplicitFlag),
     ("compact status dot rides each wing's outer screen edge", testCompactStatusDotRidesEachWingsOuterScreenEdge),
     ("version 1 state document reconstructs session", testVersionOneStateDocumentReconstructsSession),
     ("terminal context round trips Herdr identity without changing schema version", testTerminalContextRoundTripsHerdrIdentityWithoutChangingSchemaVersion),
