@@ -508,7 +508,7 @@ public struct StateRepository: Sendable {
         let fileURL = directoryURL.appendingPathComponent(Self.convoyOwnershipFileName)
         let data: Data
         do {
-            data = try secureData(
+            data = try secureDataWithRetry(
                 at: fileURL,
                 maximumSize: Self.maximumOwnershipIndexFileSize,
                 requiredPermissions: 0o600

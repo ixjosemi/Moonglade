@@ -415,6 +415,32 @@ func testStateReadToleratesAConcurrentAtomicReplacement() throws {
     try expect(sessions.map(\.sessionID), equals: ["replaced"], "concurrent replacement keeps session")
 }
 
+func testOwnershipIndexReadToleratesAConcurrentAtomicReplacement() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let writer = StateRepository(directoryURL: directory)
+    try writer.mergeConvoyOwnedOpenCodeSessionIDs(["owned"])
+    try writer.save(AgentSession.decode(from: validStateJSON(
+        sessionID: "native",
+        status: "working"
+    )))
+    // The index is the first document a snapshot reads, so the gate fires
+    // while it is open: the scheduler's queue merging new phase IDs in the
+    // middle of an app reload, as it does whenever Convoy starts a phase.
+    let replacementGate = TestOnceGate()
+    var reader = StateRepository(directoryURL: directory)
+    reader.didReadDocumentForTesting = {
+        guard replacementGate.consume() else { return }
+        _ = try? writer.mergeConvoyOwnedOpenCodeSessionIDs(["owned", "owned-later"])
+    }
+
+    let sessions = try reader.loadSessions()
+
+    try expect(sessions.map(\.sessionID), equals: ["native"], "concurrent index replacement keeps the snapshot")
+}
+
 func testAnUnreadableDocumentDoesNotDeleteACustomSessionName() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let stateDirectory = root.appendingPathComponent("state")
@@ -11015,6 +11041,7 @@ let tests: [(String, () throws -> Void)] = [
     ("state repository rejects FIFO without blocking", testStateRepositoryRejectsFIFOWithoutBlocking),
     ("state repository rejects oversized identity document", testStateRepositoryDoesNotPreserveIdentityFromOversizedDocument),
     ("state read tolerates a concurrent atomic replacement", testStateReadToleratesAConcurrentAtomicReplacement),
+    ("ownership index read tolerates a concurrent atomic replacement", testOwnershipIndexReadToleratesAConcurrentAtomicReplacement),
     ("an unreadable document does not delete a custom session name", testAnUnreadableDocumentDoesNotDeleteACustomSessionName),
     ("an unreadable document does not rearm attention", testAnUnreadableDocumentDoesNotRearmAttention),
     ("two documents naming the same session produce one row", testTwoDocumentsNamingTheSameSessionProduceOneRow),
