@@ -14,10 +14,6 @@ swift run moonglade-tests
 
 Run all three before proposing a pull request. The app bundle is written to `.build/Moonglade.app` and must never be committed.
 
-### Review before merge
-
-Every pull request gets an adversarial review and a self-score before it merges, the maintainer's and agent-written ones included. The review runs in a fresh context, independent of whoever wrote the change, and tries to break it: revert the fix and confirm the new test fails, probe the edge cases the change claims to handle, and run the three commands above on the pull request's head. The self-score grades the change against its contract (the linked issue, or the pull request description when there is none) on acceptance, tests, security, maintainability, operations and scope, with evidence behind every number. In Claude Code, `/review-pipeline <pr> --score` does both. Every important finding is fixed, or answered in the pull request with a reason, before merging.
-
 SwiftPM cannot compile Metal sources, so `Sources/MoongladeApp/Ripple.metal` is excluded from the target and its shaders ship as a prebuilt `Sources/MoongladeApp/Resources/default.metallib`. `swift build` will not tell you the shader is stale — after editing the `.metal` source, regenerate and commit the library:
 
 ```bash
@@ -25,6 +21,10 @@ SwiftPM cannot compile Metal sources, so `Sources/MoongladeApp/Ripple.metal` is 
 ```
 
 It needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). The script also rewrites `Resources/default.metallib.source-sha256`, which records the source the committed library was built from; commit it alongside the library. CI compares that hash against `Ripple.metal` and fails when they disagree, so an edited shader with a stale library is caught instead of shipping silently.
+
+## Review before merge
+
+Every pull request, agent-written ones included, passes the review and score described in [CONTRIBUTING.md](CONTRIBUTING.md#review-before-merge) before it merges; that section holds the rubric and the severities. An agent that wrote a change does not review it in the same context: the review runs in a fresh one. The maintainer runs both with a personal `/review-pipeline <pr> --score` command; it is not part of this repository, and nothing here depends on it.
 
 ## Distribution
 

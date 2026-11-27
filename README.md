@@ -167,6 +167,8 @@ swift run moonglade-tests
 ./scripts/build-app.sh
 ```
 
+Every pull request is then reviewed and scored before it merges, as [CONTRIBUTING.md](CONTRIBUTING.md#review-before-merge) describes.
+
 ## Trademark notice
 
 Moonglade is independent and is not affiliated with Anthropic, OpenAI, SST, Ghostty, Apple, or tmux. Product names and marks identify compatible tools only. See [NOTICE](NOTICE).
