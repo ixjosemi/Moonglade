@@ -53,7 +53,7 @@ The release job fails when they are absent rather than falling back to an ad-hoc
 ./scripts/build-site.sh && python3 -m http.server -d _site 8000
 ```
 
-The page's palette is taken from `assets/icon.svg` — the same night gradient, violet and blue blooms, and frost. `assets/header.svg`, the README banner, is built from the same three: the icon's moon and its glade, the page's palette and type, and the app's own notch geometry, with the brand marks copied out of `Sources/MoongladeCore/Resources/icons`. Three surfaces have to agree, so none of them invents a colour, a silhouette, or a mark of its own.
+The page's palette is taken from `assets/icon.svg` — the same night gradient, violet and blue blooms, and frost. `assets/header.svg`, the README banner, is built from the same sources: the hero photograph itself as its wallpaper, the icon's moon, the page's palette and type, and the app itself, whose open panel is a screenshot rather than a drawing, with the brand marks copied out of `Sources/MoongladeCore/Resources/icons`. Three surfaces have to agree, so none of them invents a colour, a silhouette, or a mark of its own.
 
 The page shows the app twice — the open panel inside a MacBook lid under `#how`, and the collapsed bar beneath it — and both wear the same geometry the banner does: `HangingNotchMetrics`' 14pt concave shoulders and 20pt lower corners, `NotchLayout.expandedPanelWidth`'s 800, a 36pt band across the camera. Each silhouette is one SVG path used twice, as the clip that cuts the glass and as the stroke that rims it, exactly as `.nav` is built; the note above `.nav` covers why they carry a fixed size, and below 1000px both fall back to the presentation the app itself uses on a display with no camera housing. The lid keeps a 14-inch MacBook Pro's two visible ratios and nothing else, and the interface inside it stays at the app's own scale rather than the display's — scaled honestly to 1512pt the row titles would land at 10px.
 
@@ -88,55 +88,33 @@ Then base64 it into the `href` of the `<image>` in both files, and run `./script
 
 The crop holds the moon at (240, 213) with a radius of 118. The banner wants it at (520, 310) with a radius of 58 and the tile at (512, 344) with a radius of 106, which is where each `<image>`'s `x`, `y`, `width` and `height` come from; move the moon and all four change with it. Two values are worth re-checking by eye rather than trusting: the `-level` on the luminance, because too high leaves the disc translucent and greying against the sky behind it while too low brings the photograph's clouds along, and the `-modulate` saturation, because the moon is violet and a boost that reads as rich at 512pt reads as pink at the 16pt the icon is also drawn at.
 
-The drawn halo behind each stays drawn. The cut-out fades to nothing well inside the photograph's own glow, and without that halo the moon lands on the sky rather than lighting the water under it.
+The drawn halo behind each stays drawn. The cut-out fades to nothing well inside the photograph's own glow, and without that halo the moon lands on the sky rather than lighting the water under it. The banner also masks the cut-out with a soft circle: the crop's lower edge carries a band of the hero's horizon glow, which vanishes into the icon's drawn sky but shows as a lighter box over a photographed one.
 
-`assets/hero-moonglade.webp` is the hero scene, and it is deliberately diffused rather than photographic: a heavily blurred copy screened back over the original for bloom, then a light blur blended in for softness. The haze is baked into the asset because a full-bleed `filter: blur()` repaints on every scroll. The closing `-level` is not optional: the screen pass lifts the black point, and without pulling it back the night sky separates visibly from the page background it fades into. Regenerate it from a source image with:
+### The banner's sea
 
-```bash
-magick source.png -blur 0x28 glow.png
-magick source.png glow.png -compose screen -composite bloomed.png
-magick source.png bloomed.png -compose blend -define compose:args=72 -composite step.png
-magick step.png \( +clone -blur 0x15 \) -compose blend -define compose:args=80 -composite \
-    -level 4%,100% centred.png
-```
-
-Then crop so the moon lands on the horizontal centre of the file. The nav wears the notch silhouette and is centred on the viewport, and the two have to line up; a viewport wider than the image is scaled to the width and leaves no horizontal slack, so `object-position` cannot correct this and the file is the only place it can be fixed.
-
-Find the moon by its **axis of symmetry**, not by thresholding. Its halo is brighter on one side and its surface markings break the disc into several blobs, so every brightness-based measure — bounding box, centroid, steepest rim — lands somewhere different, and they disagreed by 20px here. The disc is radially symmetric about its own centre, so the column that best mirrors onto itself is the answer:
+The banner's wallpaper is `assets/hero-moonglade.webp` itself — its clouds, horizon and glittering glade — embedded once as `#mg-wall` and used twice, as the desktop and, frosted, as what the panel's glass shows. It is the photograph's top 869 rows scaled to the banner's 1040 width, which lands its horizon (row 589) on the banner's y=407. That leaves the photograph's own moon behind the panel, where the frost turns it into the light the glass is lit by, and the cut-out moon below as the only one in open sky. Regenerate it after any change to the hero, re-measuring the horizon row if the hero's framing moved:
 
 ```bash
-magick centred.png -crop 400x300+540+50 +repage -colorspace gray -depth 8 txt:- | python3 -c "
-import sys, re
-px = {}
-for line in sys.stdin:
-    m = re.match(r'(\d+),(\d+): \((\d+)', line)
-    if m: px[(int(m.group(1)), int(m.group(2)))] = int(m.group(3))
-W, H, X0 = 400, 300, 540
-print(min(((c + X0, sum(abs(px[(c - d, y)] - px[(c + d, y)])
-                        for d in range(1, min(c, W - 1 - c, 150)) for y in range(0, H, 3))
-                    / min(c, W - 1 - c, 150)) for c in range(120, 280)), key=lambda p: p[1]))"
+magick assets/hero-moonglade.webp -crop 1506x869+0+0 +repage -strip -quality 78 \
+    -define webp:method=6 sea.webp
 ```
 
-Crop symmetrically about that column — `2 × min(axis, width − axis)` wide — and re-run the measurement on the result to confirm it lands on the centre line. `docs/index.html` carries the resulting dimensions in the `<img>` tag and they must be updated with it, or the browser reserves a box of the wrong shape and the hero jumps as the image loads:
+Then base64 it into the `href` of `#mg-wall` and run `./scripts/make-og.sh`. The edges of the banner fall to night under `#mg-vignette`; keep them there, because `make-og.sh` stretches the outermost pixel column and a textured one would streak.
+
+### The banner's captures
+
+The banner draws neither the open panel nor the collapsed bar. Both are screenshots of the running app, cut along their own silhouette and embedded at 2x as `#mg-panelShot` and `#mg-barShot`, so every row, tile, glyph and the glass itself are what the app renders. Retake them whenever either changes:
 
 ```bash
-magick centred.png -crop 1506x1024+30+0 +repage -strip -quality 90 assets/hero-moonglade.webp
+./scripts/build-app.sh
+MOONGLADE_DEMO=1 open -n .build/Moonglade.app
+# click the notch, then Cmd-Shift-3 without moving the pointer
+./scripts/make-banner-captures.sh panel ~/Desktop/Screenshot.png
+# close the panel, then capture the notch again
+./scripts/make-banner-captures.sh bar ~/Desktop/Screenshot.png
 ```
 
-## Engineering rules
-
-- Add a failing behavioral test before changing runtime behavior.
-- Keep integrations local-only; do not add telemetry or network access without explicit product approval and privacy documentation.
-- Treat process metadata, hook payloads, rollout files, state files, filesystem paths, and terminal identifiers as untrusted input.
-- Use absolute executable paths or a fixed allowlist. Never execute strings through a shell.
-- Preserve user-owned configuration. Installation must fail rather than overwrite an unknown integration file.
-- State belongs in `~/.moonglade/state`, with directory mode `0700` and file mode `0600`.
-- Never commit credentials, signing certificates, provisioning profiles, notarization passwords, `.env` files, generated apps, or local session data.
-- Keep source under `Sources/` and behavioral tests under `Tests/MoongladeCoreTests/`.
-
-## Public interfaces
-
-`MoongladeCore` is an internal module shared by the app and CLI, not a supported library product. Changes to the state schema or installed integration format require explicit documentation and tests.
+`MOONGLADE_DEMO=1` runs the app against a throwaway directory seeded by `DemoWorkspace` — two running sessions, one waiting, one blocked, each with a named project and branch — and skips process observation, so nothing reaps them. It never opens `~/.moonglade`; quit any running Moonglade first, or the two panels stack. The panel is cut along `HangingNotchGeometry`'s outline; the bar, being pure black, along the outline read off the capture itself. The glass shows whatever wallpaper is behind it, so the panel carries the wallpaper of the Mac it was taken on. The script refuses a capture that is not at 2x or has no open panel, re-embeds it, and regenerates `og.jpg`.
 
 ### `session_title`
 
