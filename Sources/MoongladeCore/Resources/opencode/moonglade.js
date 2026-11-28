@@ -79,9 +79,21 @@ function sessionDirectory(location, subpath) {
   return typeof subpath === "string" && subpath !== "" ? join(directory, subpath) : directory;
 }
 
+// Goatty draws its panes with Ghostty's engine, so they inherit
+// TERM_PROGRAM=ghostty; the bundle id macOS exports to the app's children is
+// what tells the two apart. The bundle id is inherited too — a tmux server
+// started in Goatty hands it to clients attached from other terminals — so it
+// names Goatty only beside Ghostty's TERM_PROGRAM or none.
+function hostTermProgram() {
+  const termProgram = process.env.TERM_PROGRAM || null;
+  const ghosttyEngine = termProgram === null || termProgram.toLowerCase() === "ghostty";
+  if (process.env.__CFBundleIdentifier === "xyz.goatty.mac" && ghosttyEngine) return "Goatty";
+  return termProgram;
+}
+
 function createState({ id, title, cwd }) {
   const now = timestamp();
-  const termProgram = process.env.TERM_PROGRAM || null;
+  const termProgram = hostTermProgram();
   return {
     schema_version: 1,
     tool: "opencode",
@@ -101,6 +113,8 @@ function createState({ id, title, cwd }) {
       cmux_surface_id: process.env.CMUX_SURFACE_ID || null,
       herdr_pane_id: process.env.HERDR_PANE_ID || null,
       herdr_socket_path: process.env.HERDR_SOCKET_PATH || null,
+      herdr_core_terminal_id: process.env.HC_TERMINAL_ID || null,
+      herdr_core_socket_path: process.env.HC_TERMINAL_SOCKET || null,
       iterm_session_id: process.env.ITERM_SESSION_ID || null,
       tmux_pane: process.env.TMUX_PANE || null,
       tty: null,

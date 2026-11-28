@@ -83,7 +83,7 @@ public enum FocusPlanner {
             && value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
     }
 
-    private static func validHerdrSocketPath(_ value: String) -> Bool {
+    package static func validHerdrSocketPath(_ value: String) -> Bool {
         guard !value.isEmpty,
               value.utf8.count <= 4_096,
               value.hasPrefix("/"),
@@ -136,6 +136,8 @@ public enum FocusPlanner {
             return .appleScript(applicationActivationScript("cmux"))
         }
         switch session.terminal.termProgram?.lowercased() {
+        case "goatty":
+            return .appleScript(bundleActivationScript(TerminalContext.goattyBundleIdentifier))
         case "ghostty":
             return .appleScript(applicationActivationScript("Ghostty"))
         case "iterm.app":
@@ -143,7 +145,7 @@ public enum FocusPlanner {
         case "apple_terminal":
             return .appleScript(applicationActivationScript("Terminal"))
         case "claude_desktop":
-            return .appleScript(claudeDesktopActivateScript())
+            return .appleScript(bundleActivationScript(claudeDesktopBundleIdentifier))
         default:
             return nil
         }
@@ -164,6 +166,15 @@ public enum FocusPlanner {
         // address an application that need not be installed at all.
         if let surfaceID = session.terminal.cmuxSurfaceID, !surfaceID.isEmpty {
             return .appleScript(cmuxScript(surfaceID: surfaceID))
+        }
+        // Goatty draws its panes with Ghostty's engine and its children
+        // inherit TERM_PROGRAM=ghostty, but it is another app, and its panes
+        // live in herdr-core rather than in it. It has no scripting dictionary
+        // or URL scheme and herdr-core has no focus command, so raising the
+        // app is the most it can do; the Ghostty script would raise or launch
+        // Ghostty and never find the pane.
+        if session.terminal.termProgram == TerminalContext.goattyTermProgram {
+            return .appleScript(bundleActivationScript(TerminalContext.goattyBundleIdentifier))
         }
         if session.terminal.termProgram?.lowercased() == "ghostty" {
             return .appleScript(ghosttyScript(for: session))
@@ -195,7 +206,7 @@ public enum FocusPlanner {
         // never off "missing terminal identity" alone — that would also match
         // stale Ghostty hooks and daemon-hosted tools (#15).
         if isClaudeDesktopHosted(session) {
-            return .appleScript(claudeDesktopActivateScript())
+            return .appleScript(bundleActivationScript(claudeDesktopBundleIdentifier))
         }
         throw FocusError.missingTerminalTarget
     }
@@ -208,11 +219,14 @@ public enum FocusPlanner {
             == SystemProcessScanner.claudeDesktopTermProgram
     }
 
-    /// Bundle-id activation: Claude for Desktop has no scripting dictionary,
-    /// so a specific session cannot be selected — only the app can be raised.
-    private static func claudeDesktopActivateScript() -> String {
+    private static let claudeDesktopBundleIdentifier = "com.anthropic.claudefordesktop"
+
+    /// Bundle-id activation for hosts with no scripting dictionary — Claude
+    /// for Desktop and Goatty: a specific session cannot be selected, only
+    /// the app can be raised.
+    private static func bundleActivationScript(_ bundleIdentifier: String) -> String {
         """
-        tell application id "com.anthropic.claudefordesktop"
+        tell application id "\(appleScriptString(bundleIdentifier))"
           activate
         end tell
         """
@@ -397,7 +411,7 @@ package enum FocusActionRunner {
         if let firstError { throw firstError }
     }
 
-    private static func executableURL(named executable: String) throws -> URL {
+    package static func executableURL(named executable: String) throws -> URL {
         if executable.hasPrefix("/") {
             return URL(fileURLWithPath: executable)
         }
@@ -418,17 +432,18 @@ package enum FocusActionRunner {
         throw CocoaError(.fileNoSuchFile)
     }
 
-    /// Herdr and Orca document an `~/.local/bin` fallback. Keep user-writable
-    /// lookup scoped to those integrations so it cannot silently broaden
-    /// established command execution. Herdr also supports its documented mise
-    /// and Nix shim locations.
+    /// Herdr, Orca and herdr-core document an `~/.local/bin` fallback. Keep
+    /// user-writable lookup scoped to those integrations so it cannot silently
+    /// broaden established command execution. Herdr also supports its
+    /// documented mise and Nix shim locations. The home directory is the
+    /// account's own, never `$HOME`, and `PATH` is never consulted.
     package static func trustedDirectories(for executable: String) -> [String] {
         let systemDirectories = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
             "/usr/bin",
         ]
-        guard executable == "herdr" || executable == "orca" else { return systemDirectories }
+        guard ["herdr", "orca", "herdr-core"].contains(executable) else { return systemDirectories }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let userLocalDirectory = "\(home)/.local/bin"
         guard executable == "herdr" else {

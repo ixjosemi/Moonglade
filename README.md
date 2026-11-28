@@ -10,7 +10,7 @@ Moonglade is a quiet, native macOS indicator for Claude Code, OpenCode, Codex CL
 
 - See global counts for running, waiting, and blocked sessions without having to infer them from provider icons.
 - Click the status summary and its wide session menu grows out of the notch itself: provider, status light, session title taken from the live terminal tab, project directory, git branch (worktrees included) or Convoy pipeline step, and elapsed time.
-- Focus the recorded Ghostty, iTerm2, Terminal, or tmux session with one click.
+- Focus the recorded Ghostty, iTerm2, Terminal, or tmux session with one click, or raise Goatty, which offers no way to select one of its panes.
 - Focus the exact Orca terminal through its stable handle. Register the Orca CLI in **Orca → Settings → General → Orca CLI** first.
 - Focus the exact Herdr pane through Herdr's public CLI, then raise its outer
   terminal application when available; Claude Code, OpenCode, Codex, and Pi
@@ -42,7 +42,7 @@ The menu always shows the real status and provider per session, using the same t
 - Swift 6.0 or newer to build from source;
 - Node.js 20+ to run the OpenCode and Pi behavioral tests;
 - OpenCode 2 for the OpenCode integration — its plugin uses the V2 plugin API, which OpenCode 1 cannot load;
-- Ghostty 1.3+ with AppleScript enabled, cmux with AppleScript enabled, iTerm2, or Terminal.
+- Ghostty 1.3+ with AppleScript enabled, cmux with AppleScript enabled, Goatty, iTerm2, or Terminal.
 - Orca Terminal with its CLI registered in **Orca → Settings → General → Orca CLI** for exact Orca focus.
 
 Apple Silicon is the tested development platform. Intel builds have not yet been validated.
@@ -125,6 +125,7 @@ Then quit Moonglade and delete the app bundle. Review your Claude or Codex confi
 | Herdr | exact pane ID through `herdr agent focus`, then outer-app activation | Requires the captured pane ID and socket path; incomplete or stale bindings fail closed. OpenCode 2 sessions run in its shared background service and inherit the pane identity the service was started from, not the client's |
 | Ghostty | exact surface ID, foreground PID, or TTY; unique project/title fallback | Requires Ghostty 1.3+ |
 | cmux | exact surface ID, no fallback | Resolved before Ghostty: cmux ships Ghostty's engine and reports the same `TERM_PROGRAM`. Requires AppleScript enabled — cmux reports an empty `id` when it is off |
+| Goatty | app-level activation by bundle id (`xyz.goatty.mac`) | Resolved before Ghostty: Goatty draws with Ghostty's engine and its panes report the same `TERM_PROGRAM`, so its bundle id is what identifies it — only beside `TERM_PROGRAM=ghostty` or none, because tmux carries the inherited id to clients attached from other terminals. Its panes live in herdr-core, not in the app; Goatty has no scripting dictionary or URL scheme and herdr-core has no focus command, so Moonglade raises Goatty rather than the exact pane. Rows are titled with herdr-core's title for the pane |
 | iTerm2 | exact normalized session ID, then TTY | Selects the split, tab, and window |
 | Terminal | exact TTY | Selects the tab and raises its containing window |
 | Claude for Desktop | app-level activation by bundle id | Detected via process ancestry (`/Claude.app/Contents/MacOS/…`). Desktop has no scripting dictionary, so Moonglade raises the app rather than a specific session |
@@ -134,9 +135,9 @@ macOS asks for Automation access the first time Moonglade controls a terminal. I
 
 ## How it works
 
-Claude hooks, an OpenCode plugin, a Pi extension, the Codex rollout watcher, the Convoy runs watcher, and a process fallback produce versioned session documents under `~/.moonglade/state`. The integrations preserve optional Orca terminal handles and Herdr pane/socket identity when those hosts provide them; the Orca handle is validated before it can drive focus. The app observes that directory and renders active sessions. State is written atomically with user-only permissions. Convoy needs no hook at all: its run metadata under `~/.convoy/runs` is read directly, and a run is only shown while its recorded server process is verifiably alive. OpenCode phase IDs named by Convoy are retained in a private ownership index and filtered at repository load time, so internal phases stay hidden even after a plugin rewrite or app restart.
+Claude hooks, an OpenCode plugin, a Pi extension, the Codex rollout watcher, the Convoy runs watcher, and a process fallback produce versioned session documents under `~/.moonglade/state`. The integrations preserve optional Orca terminal handles, Herdr pane/socket identity, and herdr-core terminal/socket identity when those hosts provide them; the Orca handle is validated before it can drive focus. The app observes that directory and renders active sessions. State is written atomically with user-only permissions. Convoy needs no hook at all: its run metadata under `~/.convoy/runs` is read directly, and a run is only shown while its recorded server process is verifiably alive. OpenCode phase IDs named by Convoy are retained in a private ownership index and filtered at repository load time, so internal phases stay hidden even after a plugin rewrite or app restart.
 
-Everything is event-driven and off the main thread: a libproc-based scanner (no subprocesses, ~2 ms per full sweep) runs on a 5-second heartbeat, kernel `EVFILT_PROC` exit watchers reap closed sessions instantly, and directory observation with debounce delivers state changes to the UI. A native session that has been quiet for a full scan interval is also checked against the detected agent set; removal requires two consecutive misses, so one transient metadata-read failure cannot hide a live session. Terminal identity disambiguates agents sharing a project directory. Claude and OpenCode status changes land in well under a second; Codex and Convoy ride the heartbeat. Session titles follow the live Ghostty tab title — cleaned of status decorations, then truncated by the row's width rather than a fixed character count — and a manual rename (persisted in `~/.moonglade/session-names.json`) always wins. Agent matching accepts either the kernel-resolved executable path or `argv[0]`, so versioned symlink installs like `~/.local/bin/claude → …/versions/x.y.z` are detected correctly.
+Everything is event-driven and off the main thread: a libproc-based scanner (no subprocesses, ~2 ms per full sweep) runs on a 5-second heartbeat, kernel `EVFILT_PROC` exit watchers reap closed sessions instantly, and directory observation with debounce delivers state changes to the UI. A native session that has been quiet for a full scan interval is also checked against the detected agent set; removal requires two consecutive misses, so one transient metadata-read failure cannot hide a live session. Terminal identity disambiguates agents sharing a project directory. Claude and OpenCode status changes land in well under a second; Codex and Convoy ride the heartbeat. Session titles follow the live Ghostty tab title, or for a Goatty pane the title herdr-core reports for it — cleaned of status decorations, then truncated by the row's width rather than a fixed character count — and a manual rename (persisted in `~/.moonglade/session-names.json`) always wins. Agent matching accepts either the kernel-resolved executable path or `argv[0]`, so versioned symlink installs like `~/.local/bin/claude → …/versions/x.y.z` are detected correctly.
 
 See [Architecture](docs/ARCHITECTURE.md) for the full data flow and trust boundaries.
 

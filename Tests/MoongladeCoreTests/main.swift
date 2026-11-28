@@ -11204,7 +11204,1266 @@ func testDemoWorkspaceIsEnabledOnlyByExplicitFlag() throws {
     try expect(DemoWorkspace.isEnabled(in: ["MOONGLADE_DEMO": "0"]), equals: false, "flag off")
 }
 
+// MARK: - Goatty, hosted by herdr-core (#28)
+
+/// What a process inside a Goatty pane inherits, as observed with Goatty
+/// 0.1.50: Ghostty's engine sets TERM_PROGRAM, the app sets its bundle id,
+/// and herdr-core, which owns the pane, sets its terminal address and socket.
+func goattyPaneEnvironment() -> [String: String] {
+    [
+        "TERM_PROGRAM": "ghostty",
+        "__CFBundleIdentifier": "xyz.goatty.mac",
+        "HC_TERMINAL_ID": "t2t",
+        "HC_TERMINAL_SOCKET": "/Users/tester/.local/state/herdr-core/default/default.sock",
+        "HC_SCOPE": "57049008350323-8fe82058d4b6fcd07373829987c2e6f3",
+    ]
+}
+
+let goattyTestSocketPath = "/Users/tester/.local/state/herdr-core/default/default.sock"
+
+/// A tmux server started inside Goatty keeps Goatty's environment, so a pane
+/// of a client attached from another terminal still carries
+/// `__CFBundleIdentifier=xyz.goatty.mac`, beside that pane's own TERM_PROGRAM.
+func inheritedGoattyEnvironment(termProgram: String?) -> [String: String] {
+    var environment = goattyPaneEnvironment()
+    environment["TERM_PROGRAM"] = termProgram
+    return environment
+}
+
+func testTerminalContextTrustsGoattysBundleIdentifierOnlyBesideGhosttysTermProgram() throws {
+    func termProgram(_ value: String?) -> String? {
+        TerminalContext().mergingEnvironment(inheritedGoattyEnvironment(termProgram: value)).termProgram
+    }
+    try expect(termProgram("tmux"), equals: "tmux", "tmux attached from another terminal is not Goatty")
+    try expect(termProgram("iTerm.app"), equals: "iTerm.app", "another terminal's own TERM_PROGRAM wins")
+    try expect(termProgram("Apple_Terminal"), equals: "Apple_Terminal", "Terminal is not Goatty")
+    try expect(termProgram("ghostty"), equals: TerminalContext.goattyTermProgram, "Goatty's own panes")
+    try expect(termProgram("Ghostty"), equals: TerminalContext.goattyTermProgram, "Ghostty's engine in any case")
+    try expect(termProgram(nil), equals: TerminalContext.goattyTermProgram, "Goatty with no TERM_PROGRAM")
+    try expect(termProgram(""), equals: TerminalContext.goattyTermProgram, "Goatty with an empty TERM_PROGRAM")
+}
+
+func testTerminalContextClassifiesGoattyByBundleIdentifierAndCapturesHerdrCoreBinding() throws {
+    let terminal = TerminalContext().mergingEnvironment(goattyPaneEnvironment())
+    try expect(
+        terminal.termProgram,
+        equals: TerminalContext.goattyTermProgram,
+        "Goatty's bundle id outranks the TERM_PROGRAM=ghostty its panes inherit"
+    )
+    try expect(terminal.herdrCoreTerminalID, equals: "t2t", "herdr-core terminal address")
+    try expect(terminal.herdrCoreSocketPath, equals: goattyTestSocketPath, "herdr-core socket")
+
+    let ghostty = TerminalContext().mergingEnvironment([
+        "TERM_PROGRAM": "ghostty",
+        "__CFBundleIdentifier": "com.mitchellh.ghostty",
+    ])
+    try expect(ghostty.termProgram, equals: "ghostty", "real Ghostty keeps its term program")
+    try expect(ghostty.herdrCoreTerminalID, equals: nil, "real Ghostty has no herdr-core address")
+
+    let data = try JSONEncoder().encode(terminal)
+    let document = String(decoding: data, as: UTF8.self)
+    try expect(
+        document.contains(#""herdr_core_terminal_id":"t2t""#),
+        equals: true,
+        "the address persists under its schema key"
+    )
+    try expect(
+        document.contains(#""herdr_core_socket_path""#),
+        equals: true,
+        "the socket persists under its schema key"
+    )
+    try expect(
+        try JSONDecoder().decode(TerminalContext.self, from: data),
+        equals: terminal,
+        "the binding round-trips"
+    )
+    let legacy = try JSONDecoder().decode(
+        TerminalContext.self,
+        from: Data(#"{"term_program":"ghostty","tty":"/dev/ttys001"}"#.utf8)
+    )
+    try expect(legacy.herdrCoreTerminalID, equals: nil, "older documents decode without an address")
+    try expect(legacy.herdrCoreSocketPath, equals: nil, "older documents decode without a socket")
+}
+
+func testClaudeHookRecordsGoattyHostAndHerdrCoreBinding() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let processor = ClaudeHookProcessor(repository: StateRepository(directoryURL: directory))
+
+    try processor.process(
+        event: "SessionStart",
+        payload: Data(#"{"session_id":"goatty-hook","cwd":"/tmp/goatty-project"}"#.utf8),
+        environment: goattyPaneEnvironment(),
+        processID: Int32(getpid()),
+        now: Date(timeIntervalSince1970: 1_000)
+    )
+
+    let session = try StateRepository(directoryURL: directory).loadSessions().first
+        .unwrap(or: "Goatty Claude session was not saved")
+    try expect(session.terminal.termProgram, equals: TerminalContext.goattyTermProgram, "Goatty host")
+    try expect(session.terminal.herdrCoreTerminalID, equals: "t2t", "herdr-core address")
+    try expect(session.terminal.herdrCoreSocketPath, equals: goattyTestSocketPath, "herdr-core socket")
+}
+
+func testFocusPlannerRaisesGoattyByBundleIdentifierNeverGhostty() throws {
+    func session(_ terminal: TerminalContext) -> AgentSession {
+        AgentSession(
+            tool: .claude,
+            sessionID: "goatty-focus",
+            pid: 42,
+            status: .working,
+            cwd: "/tmp/goatty-project",
+            startedAt: Date(),
+            updatedAt: Date(),
+            terminal: terminal
+        )
+    }
+    func goattyActivation(_ action: FocusAction?, _ label: String) throws {
+        guard case let .appleScript(script)? = action else {
+            throw TestFailure.expectation("\(label): Goatty focus did not produce AppleScript")
+        }
+        try expect(
+            script.contains(#"tell application id "xyz.goatty.mac""#),
+            equals: true,
+            "\(label): Goatty is raised by bundle id"
+        )
+        try expect(script.contains("activate"), equals: true, "\(label): Goatty is activated")
+        try expect(script.contains("Ghostty"), equals: false, "\(label): Ghostty is never addressed")
+        try expect(
+            script.contains("focus") || script.contains("select"),
+            equals: false,
+            "\(label): no pane is pretended to be selected"
+        )
+    }
+
+    var environment = goattyPaneEnvironment()
+    environment["MOONGLADE_TTY"] = "/dev/ttys004"
+    let pane = try FocusPlanner.actions(for: session(TerminalContext().mergingEnvironment(environment)))
+    try expect(pane.count, equals: 1, "a Goatty pane plans one activation")
+    try goattyActivation(pane.first, "Goatty pane")
+
+    let tmux = try FocusPlanner.actions(for: session(TerminalContext(
+        termProgram: TerminalContext.goattyTermProgram,
+        tmuxPane: "%3"
+    )))
+    try expect(
+        Array(tmux.dropLast()),
+        equals: [
+            .run(executable: "tmux", arguments: ["select-window", "-t", "%3"]),
+            .run(executable: "tmux", arguments: ["select-pane", "-t", "%3"]),
+        ],
+        "tmux inside Goatty still selects its pane first"
+    )
+    try goattyActivation(tmux.last, "tmux in Goatty")
+
+    let herdr = try FocusPlanner.actions(for: session(TerminalContext(
+        termProgram: TerminalContext.goattyTermProgram,
+        herdrPaneID: "pane-17",
+        herdrSocketPath: "/tmp/herdr.sock"
+    )))
+    try expect(herdr.count, equals: 2, "Herdr inside Goatty focuses its pane, then raises Goatty")
+    try goattyActivation(herdr.last, "Herdr in Goatty")
+}
+
+func testFocusPlannerKeepsGhosttyFocusOutsideGoatty() throws {
+    let terminal = TerminalContext().mergingEnvironment([
+        "TERM_PROGRAM": "ghostty",
+        "__CFBundleIdentifier": "com.mitchellh.ghostty",
+    ])
+    let session = AgentSession(
+        tool: .claude,
+        sessionID: "ghostty-regression",
+        pid: 42,
+        status: .working,
+        cwd: "/tmp/ghostty-project",
+        startedAt: Date(),
+        updatedAt: Date(),
+        terminal: terminal
+    )
+    guard case let .appleScript(script)? = try FocusPlanner.actions(for: session).last else {
+        throw TestFailure.expectation("Ghostty focus did not produce AppleScript")
+    }
+    try expect(script.contains(#"tell application "Ghostty""#), equals: true, "Ghostty keeps its focus script")
+    try expect(script.contains("xyz.goatty.mac"), equals: false, "Ghostty is never mistaken for Goatty")
+}
+
+func testHerdrCoreBindingRejectsMalformedIdentity() throws {
+    for localAddress in ["t2t", "t7", String(repeating: "a", count: 32)] {
+        try expect(
+            HerdrCoreTerminalBinding(terminalID: localAddress, socketPath: goattyTestSocketPath) != nil,
+            equals: true,
+            "a local address \(localAddress) is accepted"
+        )
+    }
+    let invalidBindings: [(id: String?, socket: String?, label: String)] = [
+        (nil, goattyTestSocketPath, "missing address"),
+        ("t2t", nil, "missing socket"),
+        ("", goattyTestSocketPath, "empty address"),
+        ("t2t", "", "empty socket"),
+        ("-t2t", goattyTestSocketPath, "option-like address"),
+        ("t2 t", goattyTestSocketPath, "whitespace in address"),
+        (" t2t", goattyTestSocketPath, "leading whitespace in address"),
+        ("t2t\n", goattyTestSocketPath, "newline in address"),
+        ("t2\u{1b}t", goattyTestSocketPath, "control character in address"),
+        (String(repeating: "t", count: 33), goattyTestSocketPath, "oversized address"),
+        ("machine/t7", goattyTestSocketPath, "a remote address herdr-core resolves over ssh"),
+        ("user@machine:t7", goattyTestSocketPath, "an ssh-style remote address"),
+        ("machine:t7", goattyTestSocketPath, "a host-qualified address"),
+        ("../t7", goattyTestSocketPath, "a path-like address"),
+        ("t2t.local", goattyTestSocketPath, "a dotted address"),
+        ("T2T", goattyTestSocketPath, "an uppercase address"),
+        ("t2_t", goattyTestSocketPath, "punctuation in address"),
+        ("t2t\u{301}", goattyTestSocketPath, "a combining mark in address"),
+        ("t2t", "relative/default.sock", "relative socket"),
+        ("t2t", " /tmp/default.sock", "leading whitespace in socket"),
+        ("t2t", "/tmp/default\u{07}.sock", "control character in socket"),
+        ("t2t", "/" + String(repeating: "a", count: 4_096), "oversized socket"),
+    ]
+    for binding in invalidBindings {
+        try expect(
+            HerdrCoreTerminalBinding(terminalID: binding.id, socketPath: binding.socket) == nil,
+            equals: true,
+            "rejects \(binding.label)"
+        )
+        try expect(
+            HerdrCoreTerminalBinding(TerminalContext(
+                herdrCoreTerminalID: binding.id,
+                herdrCoreSocketPath: binding.socket
+            )) == nil,
+            equals: true,
+            "a stored \(binding.label) is never queried"
+        )
+    }
+}
+
+/// Binds a Unix-domain stream socket at `path` and returns its descriptor;
+/// a socket that is not `listening` is what a dead core leaves behind.
+func unixSocket(at path: String, listening: Bool) throws -> Int32 {
+    let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { throw TestFailure.expectation("socket() failed") }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let pathBytes = Array(path.utf8)
+    guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+        Darwin.close(descriptor)
+        throw TestFailure.expectation("temporary socket path is too long")
+    }
+    withUnsafeMutableBytes(of: &address.sun_path) { raw in
+        raw.copyBytes(from: pathBytes)
+    }
+    let bound = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        }
+    }
+    guard bound == 0, !listening || Darwin.listen(descriptor, SOMAXCONN) == 0 else {
+        Darwin.close(descriptor)
+        throw TestFailure.expectation("bind() or listen() failed")
+    }
+    return descriptor
+}
+
+/// The socket files a herdr-core binding can point at: a live core's, one a
+/// core left behind when it exited, one bound but never listened on, a
+/// regular file, a symlink to the live socket, and a missing path.
+struct HerdrCoreSocketFixture {
+    let directory: URL
+    let live: String
+    let leftBehind: String
+    let neverListened: String
+    let regular: String
+    let link: String
+    let missing: String
+    private let liveListener: Int32
+    private let descriptors: [Int32]
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        live = directory.appendingPathComponent("live.sock").path
+        leftBehind = directory.appendingPathComponent("dead.sock").path
+        neverListened = directory.appendingPathComponent("bound.sock").path
+        regular = directory.appendingPathComponent("regular.sock").path
+        link = directory.appendingPathComponent("link.sock").path
+        missing = directory.appendingPathComponent("missing.sock").path
+        let liveDescriptor = try unixSocket(at: live, listening: true)
+        // Non-blocking, so pending probes can be drained without waiting.
+        guard Darwin.fcntl(liveDescriptor, F_SETFL, O_NONBLOCK) == 0 else {
+            Darwin.close(liveDescriptor)
+            throw TestFailure.expectation("fcntl(O_NONBLOCK) failed")
+        }
+        liveListener = liveDescriptor
+        let boundDescriptor = try unixSocket(at: neverListened, listening: false)
+        Darwin.close(try unixSocket(at: leftBehind, listening: true))
+        descriptors = [liveDescriptor, boundDescriptor]
+        try Data().write(to: URL(fileURLWithPath: regular))
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: live)
+    }
+
+    var unusable: [(path: String, label: String)] {
+        [
+            (leftBehind, "a socket left behind by a core that exited"),
+            (neverListened, "a socket nobody listens on"),
+            (regular, "a regular file"),
+            (link, "a symlink to a live socket"),
+            (missing, "a missing socket"),
+        ]
+    }
+
+    func binding(_ path: String) throws -> HerdrCoreTerminalBinding {
+        try HerdrCoreTerminalBinding(terminalID: "t2t", socketPath: path)
+            .unwrap(or: "well-formed binding was rejected")
+    }
+
+    /// Accepts and closes every connection the liveness probe left queued
+    /// on the live socket, the way a core would, so its backlog never fills
+    /// and turns a live socket into a refused one.
+    func acceptPendingConnections() {
+        while true {
+            let connection = Darwin.accept(liveListener, nil, nil)
+            guard connection >= 0 else { return }
+            Darwin.close(connection)
+        }
+    }
+
+    func remove() {
+        descriptors.forEach { Darwin.close($0) }
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+func testHerdrCoreQueryRequiresALiveUserOwnedSocket() throws {
+    let sockets = try HerdrCoreSocketFixture()
+    defer { sockets.remove() }
+    try expect(
+        try sockets.binding(sockets.live).socketIsLiveForCurrentUser(),
+        equals: true,
+        "a user-owned socket a core listens on"
+    )
+    for socket in sockets.unusable {
+        try expect(
+            try sockets.binding(socket.path).socketIsLiveForCurrentUser(),
+            equals: false,
+            "refuses \(socket.label)"
+        )
+    }
+    try expect(
+        try sockets.binding(sockets.live).socketIsLiveForCurrentUser(owner: getuid() &+ 1),
+        equals: false,
+        "refuses a live socket another user owns"
+    )
+}
+
+func testHerdrCoreQueryRunsOneBoundedGetAgainstALiveSocketOnly() throws {
+    struct Invocation: Equatable {
+        let executable: String
+        let arguments: [String]
+        let environment: [String: String]
+        let timeout: TimeInterval
+        let maximumOutputBytes: Int
+    }
+    let sockets = try HerdrCoreSocketFixture()
+    defer { sockets.remove() }
+    var invocations: [Invocation] = []
+    let answer = Data(#"{"address":"t2t","title":"pane","foreground":{"pid":42}}"#.utf8)
+    func query(
+        _ binding: HerdrCoreTerminalBinding,
+        status: Int32 = 0,
+        output: Data? = nil,
+        failure: Error? = nil
+    ) throws(HerdrCoreQueryError) -> HerdrCoreTerminal {
+        try SystemProcessScanner.queryHerdrCoreTerminal(binding) {
+            executable, arguments, environment, timeout, maximumOutputBytes in
+            invocations.append(Invocation(
+                executable: executable,
+                arguments: arguments,
+                environment: environment,
+                timeout: timeout,
+                maximumOutputBytes: maximumOutputBytes
+            ))
+            if let failure { throw failure }
+            return BoundedProcessResult(status: status, output: output ?? answer)
+        }
+    }
+    /// One query: how it failed, if it did, and how many times it launched
+    /// herdr-core.
+    func attempt(
+        _ binding: HerdrCoreTerminalBinding,
+        status: Int32 = 0,
+        output: Data? = nil,
+        failure: Error? = nil
+    ) -> (error: HerdrCoreQueryError?, launches: Int) {
+        let before = invocations.count
+        defer { sockets.acceptPendingConnections() }
+        do throws(HerdrCoreQueryError) {
+            _ = try query(binding, status: status, output: output, failure: failure)
+            return (nil, invocations.count - before)
+        } catch {
+            return (error, invocations.count - before)
+        }
+    }
+
+    let live = try sockets.binding(sockets.live)
+    let terminal = try query(live)
+    sockets.acceptPendingConnections()
+    try expect(
+        invocations,
+        equals: [Invocation(
+            executable: "herdr-core",
+            arguments: ["get", "--json", "--", "t2t"],
+            environment: ["HC_SOCKET": sockets.live],
+            timeout: 2,
+            maximumOutputBytes: 256 * 1_024
+        )],
+        "one get, the address after --, the socket only as HC_SOCKET, bounded in time and size"
+    )
+    try expect(terminal.title, equals: "pane", "the answer is parsed")
+    try expect(terminal.foregroundProcessID, equals: 42, "the foreground process is parsed")
+
+    // The core answered, but not for this terminal: only that id backs off.
+    let terminalFailures: [((error: HerdrCoreQueryError?, launches: Int), String)] = [
+        (attempt(live, status: 1), "a failed exit"),
+        (attempt(live, output: Data("not json".utf8)), "an unparseable answer"),
+        (attempt(live, output: Data(#"{"address":"t2w","title":"other"}"#.utf8)), "an answer about another terminal"),
+    ]
+    for (outcome, label) in terminalFailures {
+        try expect(outcome.launches, equals: 1, "\(label) comes from herdr-core")
+        try expect(outcome.error, equals: .terminalUnavailable, "\(label) fails only that terminal")
+    }
+    // The core could not be reached or overran its bounds: the whole socket backs off.
+    let transportFailures: [((error: HerdrCoreQueryError?, launches: Int), String)] = [
+        (attempt(live, failure: POSIXError(.ETIMEDOUT)), "a timeout"),
+        (attempt(live, failure: POSIXError(.EFBIG)), "output over the cap"),
+        (attempt(live, failure: CocoaError(.fileNoSuchFile)), "a launch error"),
+    ]
+    for (outcome, label) in transportFailures {
+        try expect(outcome.launches, equals: 1, "\(label) comes from running herdr-core")
+        try expect(outcome.error, equals: .socketUnavailable, "\(label) fails the socket")
+    }
+
+    for socket in sockets.unusable {
+        let outcome = attempt(try sockets.binding(socket.path))
+        try expect(outcome.launches, equals: 0, "no herdr-core process is launched for \(socket.label)")
+        try expect(outcome.error, equals: .socketUnavailable, "\(socket.label) fails the socket")
+    }
+}
+
+func testHerdrCoreTerminalParsingTreatsOutputAsUntrusted() throws {
+    let binding = try HerdrCoreTerminalBinding(terminalID: "t2t", socketPath: goattyTestSocketPath)
+        .unwrap(or: "well-formed binding was rejected")
+    func output(
+        title: String = #""Panel de estado de agentes""#,
+        address: String = "t2t",
+        foreground: String = #"{"argv":["claude"],"cwd":"/tmp/goatty-project","name":"2.1.332","pid":96229}"#
+    ) -> Data {
+        Data(#"{"address":"\#(address)","argv":["sh","-c","exec zsh -l"],"foreground":\#(foreground),"labels":{"goatty":"pane"},"records":{"a1":{"app":"claude-code","state":"working","title":"Implement Goatty support #28"}},"state":"live","status":{"app":"claude-code","state":"working"},"title":\#(title)}"#.utf8)
+    }
+
+    let terminal = try HerdrCoreTerminal.parse(output(), for: binding)
+    try expect(terminal.address, equals: "t2t", "address")
+    try expect(terminal.title, equals: "Panel de estado de agentes", "the pane's session name")
+    try expect(terminal.foregroundProcessID, equals: 96229, "foreground process")
+
+    try expect(
+        try HerdrCoreTerminal.parse(output(foreground: "null"), for: binding).foregroundProcessID,
+        equals: nil,
+        "a finished terminal has no foreground process"
+    )
+    try expect(
+        try HerdrCoreTerminal.parse(output(title: "null"), for: binding).title,
+        equals: nil,
+        "an untitled terminal has no title"
+    )
+    try expect(
+        try HerdrCoreTerminal.parse(output(title: #""evil\u001b]0;title""#), for: binding).title,
+        equals: nil,
+        "a title carrying control characters is dropped"
+    )
+    try expect(
+        try HerdrCoreTerminal.parse(
+            output(title: "\"" + String(repeating: "a", count: 1_025) + "\""),
+            for: binding
+        ).title,
+        equals: nil,
+        "an oversized title is dropped"
+    )
+    let rejected: [(Data, String)] = [
+        (output(address: "t2w"), "an answer about another terminal"),
+        (Data(#"{"error":{"kind":"unavailable","message":"cannot start core"}}"#.utf8), "an error answer, which herdr-core exits 0 for"),
+        (Data("not json".utf8), "malformed output"),
+        (output(foreground: #"{"pid":-1}"#), "a non-positive foreground PID"),
+    ]
+    for (data, label) in rejected {
+        var accepted = true
+        do {
+            _ = try HerdrCoreTerminal.parse(data, for: binding)
+        } catch {
+            accepted = false
+        }
+        try expect(accepted, equals: false, "rejects \(label)")
+    }
+}
+
+func testHerdrCoreTerminalQueryCacheAvoidsRedundantQueries() throws {
+    final class QueryLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var queried: [String] = []
+        let failing: Set<String>
+
+        init(failing: Set<String>) {
+            self.failing = failing
+        }
+
+        func record(_ id: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            queried.append(id)
+            return !failing.contains(id)
+        }
+
+        var queries: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return queried
+        }
+    }
+    let log = QueryLog(failing: ["t9"])
+    let cache = HerdrCoreTerminalQueryCache(timeToLive: 30, failureTimeToLive: 10) { binding in
+        log.record(binding.terminalID)
+            ? .success(HerdrCoreTerminal(
+                address: binding.terminalID,
+                title: "pane \(binding.terminalID)",
+                foregroundProcessID: 1
+            ))
+            : .failure(.terminalUnavailable)
+    }
+    func binding(_ id: String) throws -> HerdrCoreTerminalBinding {
+        try HerdrCoreTerminalBinding(terminalID: id, socketPath: goattyTestSocketPath)
+            .unwrap(or: "well-formed binding was rejected")
+    }
+    let first = try binding("t2t")
+    let second = try binding("t2w")
+    let failing = try binding("t9")
+    let start = Date(timeIntervalSince1970: 1_000_000)
+
+    try expect(
+        cache.terminals(for: [first], now: start)[first]?.title,
+        equals: "pane t2t",
+        "first query returns the terminal"
+    )
+    _ = cache.terminals(for: [first], now: start.addingTimeInterval(5))
+    try expect(log.queries, equals: ["t2t"], "a fresh entry is served from cache")
+    _ = cache.terminals(for: [first, second], now: start.addingTimeInterval(6))
+    try expect(log.queries, equals: ["t2t", "t2w"], "only the new terminal is queried at once")
+    _ = cache.terminals(for: [first, second], now: start.addingTimeInterval(40))
+    try expect(log.queries.count, equals: 4, "expired entries refresh")
+
+    _ = cache.terminals(for: [second], now: start.addingTimeInterval(41))
+    _ = cache.terminals(for: [first, second], now: start.addingTimeInterval(42))
+    try expect(log.queries.count, equals: 5, "a terminal no longer asked for is forgotten")
+
+    try expect(
+        cache.terminals(for: [failing], now: start)[failing] == nil,
+        equals: true,
+        "a failed query yields no terminal"
+    )
+    _ = cache.terminals(for: [failing], now: start.addingTimeInterval(9))
+    try expect(log.queries.filter { $0 == "t9" }.count, equals: 1, "a failure is negatively cached")
+    _ = cache.terminals(for: [failing], now: start.addingTimeInterval(11))
+    try expect(log.queries.filter { $0 == "t9" }.count, equals: 2, "a failure is retried after its cooldown")
+
+    // A closed pane a state document still references fails alone: the core
+    // answered, so its sibling on the same socket keeps its title.
+    let sibling = try binding("t3")
+    let withDeadSibling = cache.terminals(for: [failing, sibling], now: start.addingTimeInterval(11))
+    try expect(withDeadSibling[sibling]?.title, equals: "pane t3", "a dead terminal id leaves its sibling answered")
+    try expect(log.queries.filter { $0 == "t3" }.count, equals: 1, "the sibling is queried in the same tick")
+    let newcomer = try binding("t4")
+    _ = cache.terminals(for: [failing, sibling, newcomer], now: start.addingTimeInterval(12))
+    try expect(
+        log.queries.filter { $0 == "t4" }.count,
+        equals: 1,
+        "a terminal first seen on that socket during the dead id's cooldown is still queried"
+    )
+    try expect(log.queries.filter { $0 == "t9" }.count, equals: 2, "only the dead terminal id waits out its cooldown")
+}
+
+func testHerdrCoreQueryCacheBacksOffAWholeSocketAfterATransportFailure() throws {
+    final class SocketLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var queried: [String] = []
+        private var failing: String?
+
+        init(failingSocket: String?) {
+            failing = failingSocket
+        }
+
+        var failingSocket: String? {
+            get { lock.lock(); defer { lock.unlock() }; return failing }
+            set { lock.lock(); failing = newValue; lock.unlock() }
+        }
+
+        func record(_ binding: HerdrCoreTerminalBinding) -> Result<HerdrCoreTerminal, HerdrCoreQueryError> {
+            lock.lock()
+            defer { lock.unlock() }
+            queried.append(binding.socketPath)
+            guard binding.socketPath != failing else { return .failure(.socketUnavailable) }
+            return .success(HerdrCoreTerminal(address: binding.terminalID, title: "pane", foregroundProcessID: 1))
+        }
+
+        func queries(to socket: String) -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return queried.filter { $0 == socket }.count
+        }
+    }
+    let hungSocket = goattyTestSocketPath
+    let healthySocket = "/Users/tester/.local/state/herdr-core/other/default.sock"
+    func binding(_ id: String, _ socket: String) throws -> HerdrCoreTerminalBinding {
+        try HerdrCoreTerminalBinding(terminalID: id, socketPath: socket)
+            .unwrap(or: "well-formed binding was rejected")
+    }
+    let hung: Set<HerdrCoreTerminalBinding> = [
+        try binding("t1", hungSocket), try binding("t2", hungSocket), try binding("t3", hungSocket),
+    ]
+    let healthy = try binding("t4", healthySocket)
+    let log = SocketLog(failingSocket: hungSocket)
+    let cache = HerdrCoreTerminalQueryCache(timeToLive: 30, failureTimeToLive: 10) { log.record($0) }
+    let start = Date(timeIntervalSince1970: 1_000_000)
+
+    let first = cache.terminals(for: hung.union([healthy]), now: start)
+    try expect(log.queries(to: hungSocket), equals: 1, "one hung socket skips the rest of its terminals this tick")
+    try expect(log.queries(to: healthySocket), equals: 1, "another socket is still queried")
+    try expect(first[healthy]?.title, equals: "pane", "the healthy socket's terminal is answered")
+
+    _ = cache.terminals(for: hung.union([try binding("t5", hungSocket)]), now: start.addingTimeInterval(5))
+    try expect(
+        log.queries(to: hungSocket),
+        equals: 1,
+        "the cooldown covers the whole socket, a terminal first seen on it included"
+    )
+    _ = cache.terminals(for: hung, now: start.addingTimeInterval(11))
+    try expect(log.queries(to: hungSocket), equals: 2, "the socket is retried once after its cooldown")
+    _ = cache.terminals(for: [healthy], now: start.addingTimeInterval(12))
+    _ = cache.terminals(for: hung, now: start.addingTimeInterval(13))
+    try expect(
+        log.queries(to: hungSocket),
+        equals: 3,
+        "a socket no longer asked for is forgotten, its cooldown with it"
+    )
+
+    let uncached = HerdrCoreTerminalQueryCache(timeToLive: 0, failureTimeToLive: 0) { log.record($0) }
+    _ = uncached.terminals(for: hung, now: start)
+    try expect(log.queries(to: hungSocket), equals: 4, "even uncached, a tick asks a failed socket once")
+
+    // A socket that fails after answering keeps its answers within their TTL.
+    let flaky = SocketLog(failingSocket: nil)
+    let flakyCache = HerdrCoreTerminalQueryCache(timeToLive: 30, failureTimeToLive: 10) { flaky.record($0) }
+    let answered = try binding("t6", healthySocket)
+    _ = flakyCache.terminals(for: [answered], now: start)
+    flaky.failingSocket = healthySocket
+    _ = flakyCache.terminals(for: [answered, try binding("t7", healthySocket)], now: start.addingTimeInterval(1))
+    try expect(flaky.queries(to: healthySocket), equals: 2, "the newcomer's query fails the socket")
+    try expect(
+        flakyCache.terminals(for: [answered], now: start.addingTimeInterval(2))[answered]?.title,
+        equals: "pane",
+        "a terminal answered within its TTL keeps its title while its socket cools down"
+    )
+}
+
+func testScannerTitlesHerdrCorePanesWithoutTheGhosttyMatcher() throws {
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        func increment() {
+            lock.lock()
+            value += 1
+            lock.unlock()
+        }
+
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+    let ghosttyQueries = Counter()
+    let scanner = SystemProcessScanner(
+        ghosttyTerminalSource: {
+            ghosttyQueries.increment()
+            return [
+                GhosttyTerminal(id: "G-1", name: "some ghostty tab", cwd: "/tmp/goatty-project"),
+                GhosttyTerminal(id: "G-2", name: "ghostty tab", cwd: "/tmp/ghostty-project", pid: 5151),
+            ]
+        },
+        herdrCoreTerminalSource: { binding in
+            .success(HerdrCoreTerminal(
+                address: binding.terminalID,
+                title: "Panel de estado de agentes",
+                foregroundProcessID: 4242
+            ))
+        }
+    )
+    let binding = try HerdrCoreTerminalBinding(terminalID: "t2t", socketPath: goattyTestSocketPath)
+        .unwrap(or: "well-formed binding was rejected")
+    // Worst case: a scan that believed the pane was Ghostty's.
+    let goattyProcess = DetectedAgentProcess(
+        tool: .claude,
+        processID: 4242,
+        cwd: "/tmp/goatty-project",
+        terminal: TerminalContext(termProgram: "ghostty", tty: "/dev/ttys004")
+    )
+    let ghosttyProcess = DetectedAgentProcess(
+        tool: .claude,
+        processID: 5151,
+        cwd: "/tmp/ghostty-project",
+        terminal: TerminalContext(termProgram: "ghostty", tty: "/dev/ttys005")
+    )
+
+    let onlyGoatty = scanner.enrichTerminalContexts(
+        in: [goattyProcess],
+        herdrCoreBindings: [4242: binding]
+    )
+    try expect(ghosttyQueries.count, equals: 0, "a Goatty pane never asks Ghostty for surfaces")
+    try expect(onlyGoatty.count, equals: 1, "the Goatty process is kept")
+    try expect(
+        onlyGoatty.first?.terminal.windowTitleHint,
+        equals: "Panel de estado de agentes",
+        "the row title is herdr-core's title for the pane"
+    )
+    try expect(onlyGoatty.first?.terminal.ghosttyTerminalID, equals: nil, "no Ghostty surface is claimed")
+
+    let mixed = scanner.enrichTerminalContexts(
+        in: [goattyProcess, ghosttyProcess],
+        herdrCoreBindings: [4242: binding]
+    )
+    let goatty = try mixed.first { $0.processID == 4242 }.unwrap(or: "Goatty process disappeared")
+    let ghostty = try mixed.first { $0.processID == 5151 }.unwrap(or: "Ghostty process disappeared")
+    try expect(goatty.terminal.ghosttyTerminalID, equals: nil, "the Ghostty matcher never sees the Goatty pane")
+    try expect(ghostty.terminal.ghosttyTerminalID, equals: "G-2", "real Ghostty sessions still match their surface")
+    try expect(ghostty.terminal.windowTitleHint, equals: "ghostty tab", "real Ghostty titles still come from Ghostty")
+}
+
+/// Spawns `/bin/sleep 30` as a child of this process, in this process's
+/// group or in a new group of its own. Pair with `reap`.
+func spawnSleeper(inOwnProcessGroup: Bool) throws -> pid_t {
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    if inOwnProcessGroup {
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setpgroup(&attributes, 0)
+    }
+    var child: pid_t = 0
+    var arguments: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("30"), nil]
+    defer { arguments.forEach { free($0) } }
+    let status = arguments.withUnsafeMutableBufferPointer {
+        posix_spawn(&child, "/bin/sleep", nil, &attributes, $0.baseAddress, environ)
+    }
+    guard status == 0 else { throw POSIXError(POSIXErrorCode(rawValue: status) ?? .EAGAIN) }
+    return child
+}
+
+func reap(_ child: pid_t) {
+    Darwin.kill(child, SIGKILL)
+    var status: Int32 = 0
+    waitpid(child, &status, 0)
+}
+
+func testScannerUsesHerdrCoreTitleOnlyForThePanesForegroundProcess() throws {
+    let binding = try HerdrCoreTerminalBinding(terminalID: "t2t", socketPath: goattyTestSocketPath)
+        .unwrap(or: "well-formed binding was rejected")
+    func title(foreground: Int32?, processID: Int32) -> String? {
+        let scanner = SystemProcessScanner(
+            ghosttyTerminalSource: { [] },
+            herdrCoreTerminalSource: { binding in
+                .success(HerdrCoreTerminal(
+                    address: binding.terminalID,
+                    title: "pane title",
+                    foregroundProcessID: foreground
+                ))
+            }
+        )
+        return scanner.enrichTerminalContexts(
+            in: [DetectedAgentProcess(
+                tool: .claude,
+                processID: processID,
+                cwd: "/tmp/goatty-project",
+                terminal: TerminalContext(tty: "/dev/ttys004")
+            )],
+            herdrCoreBindings: [processID: binding]
+        ).first?.terminal.windowTitleHint
+    }
+    let ownProcess = Int32(getpid())
+    try expect(title(foreground: ownProcess, processID: ownProcess), equals: "pane title", "the foreground agent")
+    // This process stands in for the pane's foreground process: a launcher
+    // such as npx, or the interactive shell. A child spawned into its process
+    // group is part of that foreground job; a child in a group of its own is
+    // what a job-control shell makes of `opencode serve &`.
+    let inForegroundJob = try spawnSleeper(inOwnProcessGroup: false)
+    defer { reap(inForegroundJob) }
+    let backgroundJob = try spawnSleeper(inOwnProcessGroup: true)
+    defer { reap(backgroundJob) }
+    try expect(
+        title(foreground: ownProcess, processID: inForegroundJob),
+        equals: "pane title",
+        "an agent a foreground launcher started"
+    )
+    try expect(
+        title(foreground: ownProcess, processID: backgroundJob),
+        equals: nil,
+        "a background job below the pane's foreground shell is not what the pane shows"
+    )
+    try expect(
+        title(foreground: inForegroundJob, processID: ownProcess),
+        equals: nil,
+        "a process in the foreground job but above the foreground process is not it"
+    )
+    try expect(
+        title(foreground: backgroundJob, processID: backgroundJob),
+        equals: "pane title",
+        "a job leader that is itself the foreground process"
+    )
+    try expect(
+        title(foreground: 999_999, processID: ownProcess),
+        equals: nil,
+        "a binding pointing at another process's pane is not evidence"
+    )
+    try expect(title(foreground: nil, processID: ownProcess), equals: nil, "a finished pane names nobody")
+}
+
+final class HerdrCoreRecordingScanner: ProcessScanning, @unchecked Sendable {
+    private let lock = NSLock()
+    private let process: DetectedAgentProcess
+    private let paneTitle: String
+    private var received: [[Int32: HerdrCoreTerminalBinding]] = []
+
+    init(process: DetectedAgentProcess, paneTitle: String) {
+        self.process = process
+        self.paneTitle = paneTitle
+    }
+
+    func activeProcesses() throws -> [DetectedAgentProcess] { [process] }
+
+    func enrichTerminalContexts(
+        in processes: [DetectedAgentProcess],
+        sessionTitles: [Int32: String],
+        herdrCoreBindings: [Int32: HerdrCoreTerminalBinding]
+    ) -> [DetectedAgentProcess] {
+        lock.lock()
+        received.append(herdrCoreBindings)
+        lock.unlock()
+        return processes.map { process in
+            guard herdrCoreBindings[process.processID] != nil else { return process }
+            return DetectedAgentProcess(
+                tool: process.tool,
+                processID: process.processID,
+                processIdentity: process.processIdentity,
+                cwd: process.cwd,
+                terminal: TerminalContext(
+                    termProgram: process.terminal.termProgram,
+                    tty: process.terminal.tty,
+                    windowTitleHint: paneTitle
+                ),
+                elapsedSeconds: process.elapsedSeconds
+            )
+        }
+    }
+
+    var receivedBindings: [[Int32: HerdrCoreTerminalBinding]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return received
+    }
+}
+
+func testGoattySessionAppearsOnceTitledByItsPaneAndRaisesGoatty() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let stateDirectory = directory.appendingPathComponent("state", isDirectory: true)
+    let repository = StateRepository(directoryURL: stateDirectory)
+    let processID = Int32(getpid())
+    try ClaudeHookProcessor(repository: repository).process(
+        event: "SessionStart",
+        payload: Data(#"{"session_id":"goatty-claude","cwd":"/tmp/goatty-project"}"#.utf8),
+        environment: goattyPaneEnvironment(),
+        processID: processID
+    )
+    let lifecycle = try repository.loadSessions().first.unwrap(or: "hook wrote no session")
+    // libproc sees a PTY owned by the herdr-core daemon and no host app.
+    let process = DetectedAgentProcess(
+        tool: .claude,
+        processID: processID,
+        processIdentity: SystemProcessScanner.processIdentity(of: processID),
+        cwd: lifecycle.cwd,
+        terminal: TerminalContext(tty: "/dev/ttys004")
+    )
+    let scanner = HerdrCoreRecordingScanner(process: process, paneTitle: "Panel de estado de agentes")
+    let scheduler = ObservationScheduler(
+        repository: repository,
+        processScanner: scanner,
+        codexSessionsDirectoryURL: directory.appendingPathComponent("codex", isDirectory: true),
+        convoyRunsDirectoryURL: directory.appendingPathComponent("convoy", isDirectory: true),
+        debounceInterval: 0.01
+    )
+
+    scheduler.requestTick()
+    let deadline = Date().addingTimeInterval(2)
+    while scanner.receivedBindings.isEmpty, Date() < deadline { usleep(1_000) }
+    scheduler.waitUntilIdle()
+
+    try expect(
+        scanner.receivedBindings.first?[processID],
+        equals: HerdrCoreTerminalBinding(terminalID: "t2t", socketPath: goattyTestSocketPath),
+        "the scheduler hands the session's herdr-core binding to enrichment"
+    )
+    let sessions = try repository.loadSessions()
+    try expect(sessions.map(\.sessionID), equals: ["goatty-claude"], "the Goatty session appears once")
+    let session = try sessions.first.unwrap(or: "Goatty session disappeared")
+    try expect(
+        StateStore(repository: repository).displayName(for: session),
+        equals: "Panel de estado de agentes",
+        "the row is titled with the pane's session name"
+    )
+    try expect(session.terminal.termProgram, equals: TerminalContext.goattyTermProgram, "enrichment keeps the Goatty host")
+    guard case let .appleScript(script)? = try FocusPlanner.actions(for: session).last else {
+        throw TestFailure.expectation("enriched Goatty session has no focus action")
+    }
+    try expect(script.contains("xyz.goatty.mac"), equals: true, "clicking the row raises Goatty")
+}
+
+func testARemoteHerdrCoreAddressNeverReachesTheQuery() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory.appendingPathComponent("state", isDirectory: true))
+    let processID = Int32(getpid())
+    var environment = goattyPaneEnvironment()
+    // A tampered document: herdr-core would resolve this address over ssh.
+    environment["HC_TERMINAL_ID"] = "machine/t7"
+    try ClaudeHookProcessor(repository: repository).process(
+        event: "SessionStart",
+        payload: Data(#"{"session_id":"goatty-remote","cwd":"/tmp/goatty-project"}"#.utf8),
+        environment: environment,
+        processID: processID
+    )
+    let lifecycle = try repository.loadSessions().first.unwrap(or: "hook wrote no session")
+    try expect(lifecycle.terminal.herdrCoreTerminalID, equals: "machine/t7", "the document carries the address")
+    let scanner = HerdrCoreRecordingScanner(
+        process: DetectedAgentProcess(
+            tool: .claude,
+            processID: processID,
+            processIdentity: SystemProcessScanner.processIdentity(of: processID),
+            cwd: lifecycle.cwd,
+            terminal: TerminalContext(tty: "/dev/ttys004")
+        ),
+        paneTitle: "remote pane"
+    )
+    let scheduler = ObservationScheduler(
+        repository: repository,
+        processScanner: scanner,
+        codexSessionsDirectoryURL: directory.appendingPathComponent("codex", isDirectory: true),
+        convoyRunsDirectoryURL: directory.appendingPathComponent("convoy", isDirectory: true),
+        debounceInterval: 0.01
+    )
+
+    scheduler.requestTick()
+    let deadline = Date().addingTimeInterval(2)
+    while scanner.receivedBindings.isEmpty, Date() < deadline { usleep(1_000) }
+    scheduler.waitUntilIdle()
+
+    try expect(scanner.receivedBindings.isEmpty, equals: false, "enrichment ran")
+    try expect(
+        scanner.receivedBindings.allSatisfy(\.isEmpty),
+        equals: true,
+        "no binding, so no herdr-core query, is made from a remote address"
+    )
+}
+
+func testTerminalEnrichmentPreservesGoattyHostAndHerdrCoreBinding() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processIdentity = ProcessIdentity(processID: 424_244, kernelStartTimeMicroseconds: 2_000)
+    let lifecycle = AgentSession(
+        tool: .claude,
+        sessionID: "goatty-enrichment",
+        pid: processIdentity.processID,
+        processIdentity: processIdentity,
+        status: .working,
+        cwd: "/tmp/goatty-enrichment",
+        startedAt: Date(timeIntervalSince1970: 1_000),
+        updatedAt: Date(timeIntervalSince1970: 1_000),
+        terminal: TerminalContext(
+            termProgram: TerminalContext.goattyTermProgram,
+            herdrCoreTerminalID: "t2t",
+            herdrCoreSocketPath: goattyTestSocketPath,
+            tty: "/dev/ttys004",
+            windowTitleHint: "goatty-enrichment — claude"
+        )
+    )
+    try repository.save(lifecycle)
+    var snapshot = try repository.loadSnapshot()
+    let enrichedProcess = DetectedAgentProcess(
+        tool: lifecycle.tool,
+        processID: lifecycle.pid,
+        processIdentity: processIdentity,
+        cwd: lifecycle.cwd,
+        terminal: TerminalContext(tty: "/dev/ttys004", windowTitleHint: "Panel de estado de agentes")
+    )
+
+    try ReaperService(repository: repository).applyTerminalEnrichment(
+        basic: [enrichedProcess],
+        enriched: [enrichedProcess],
+        snapshot: &snapshot
+    )
+
+    let merged = try repository.loadSessions().first.unwrap(or: "enriched session disappeared")
+    try expect(merged.terminal.termProgram, equals: TerminalContext.goattyTermProgram, "Goatty host survives")
+    try expect(merged.terminal.herdrCoreTerminalID, equals: "t2t", "herdr-core address survives")
+    try expect(merged.terminal.herdrCoreSocketPath, equals: goattyTestSocketPath, "herdr-core socket survives")
+    try expect(merged.terminal.windowTitleHint, equals: "Panel de estado de agentes", "pane title applies")
+}
+
+func testCodexRolloutSavePreservesNotifyCapturedGoattyHost() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let repository = StateRepository(directoryURL: directory)
+    let processID = Int32(getpid())
+    try CodexNotifyProcessor(repository: repository).process(
+        payload: Data(
+            #"{"type":"agent-turn-complete","thread-id":"codex-goatty","cwd":"/tmp/project"}"#.utf8
+        ),
+        processID: processID,
+        environment: goattyPaneEnvironment(),
+        now: Date(timeIntervalSince1970: 1_799_971_230)
+    )
+    var parser = CodexRolloutParser(processID: processID)
+    let rolloutSession = try parser.consume(
+        line: Data(
+            #"{"timestamp":"2027-01-15T00:02:00Z","type":"session_meta","payload":{"id":"codex-goatty","cwd":"/tmp/project","timestamp":"2027-01-15T00:00:00Z"}}"#.utf8
+        )
+    ).unwrap(or: "rollout session_meta was not parsed")
+
+    try repository.save(rolloutSession)
+
+    let session = try repository.loadSessions().first
+        .unwrap(or: "Codex session disappeared after the rollout save")
+    try expect(session.terminal.termProgram, equals: TerminalContext.goattyTermProgram, "Goatty host survives")
+    try expect(session.terminal.herdrCoreTerminalID, equals: "t2t", "herdr-core address survives")
+    try expect(session.terminal.herdrCoreSocketPath, equals: goattyTestSocketPath, "herdr-core socket survives")
+
+    try repository.save(rolloutSession.replacingTerminal(TerminalContext(termProgram: "ghostty")))
+    let observed = try repository.loadSessions().first.unwrap(or: "Codex session disappeared")
+    try expect(observed.terminal.termProgram, equals: "ghostty", "a host the observation names replaces Goatty")
+}
+
+/// Runs the bundled capture-context hook script in `environment` and returns
+/// the terminal context it printed.
+func captureContextJSON(environment: [String: String]) throws -> [String: Any]? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = [
+        try BundledResources.captureContextScriptURL.path,
+        "/tmp/my-project",
+        "claude",
+        "1",
+    ]
+    process.environment = environment.merging(["PATH": "/usr/bin:/bin"]) { $1 }
+    let output = Pipe()
+    process.standardOutput = output
+    try process.run()
+    process.waitUntilExit()
+    try expect(process.terminationStatus, equals: 0, "capture-context exit status")
+    return try JSONSerialization.jsonObject(
+        with: output.fileHandleForReading.readDataToEndOfFile()
+    ) as? [String: Any]
+}
+
+func testCaptureContextEmitsGoattyHostAndHerdrCoreBinding() throws {
+    let json = try captureContextJSON(environment: goattyPaneEnvironment())
+    try expect(json?["term_program"] as? String, equals: "Goatty", "Goatty host")
+    try expect(json?["herdr_core_terminal_id"] as? String, equals: "t2t", "herdr-core address")
+    try expect(json?["herdr_core_socket_path"] as? String, equals: goattyTestSocketPath, "herdr-core socket")
+}
+
+func testCaptureContextKeepsTheRealHostOfAnInheritedGoattyBundleIdentifier() throws {
+    let tmux = try captureContextJSON(environment: inheritedGoattyEnvironment(termProgram: "tmux"))
+    try expect(tmux?["term_program"] as? String, equals: "tmux", "tmux attached from another terminal")
+    let iterm = try captureContextJSON(environment: inheritedGoattyEnvironment(termProgram: "iTerm.app"))
+    try expect(iterm?["term_program"] as? String, equals: "iTerm.app", "another terminal's own TERM_PROGRAM")
+    let unset = try captureContextJSON(environment: inheritedGoattyEnvironment(termProgram: nil))
+    try expect(unset?["term_program"] as? String, equals: "Goatty", "Goatty with no TERM_PROGRAM")
+    let mixedCase = try captureContextJSON(environment: inheritedGoattyEnvironment(termProgram: "Ghostty"))
+    try expect(mixedCase?["term_program"] as? String, equals: "Goatty", "Ghostty's engine in any case")
+}
+
+/// Runs one JavaScript integration driver in a Goatty pane's environment and
+/// returns the session it wrote.
+func goattySessionWritten(
+    byDriver source: String,
+    in directory: URL,
+    environment: [String: String] = goattyPaneEnvironment()
+) throws -> AgentSession {
+    let driver = directory.appendingPathComponent("driver.mjs")
+    try Data(source.utf8).write(to: driver)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["node", driver.path]
+    process.environment = environment.merging([
+        "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin",
+        "MOONGLADE_HOME": directory.path,
+    ]) { $1 }
+    let errors = Pipe()
+    process.standardError = errors
+    try process.run()
+    process.waitUntilExit()
+    let errorOutput = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    try expect(process.terminationStatus, equals: 0, "integration process: \(errorOutput)")
+    return try StateRepository(directoryURL: directory.appendingPathComponent("state"))
+        .loadSessions().first.unwrap(or: "integration wrote no state")
+}
+
+/// The session the bundled OpenCode plugin writes for `session.created`.
+func openCodeSessionWritten(environment: [String: String]) throws -> AgentSession {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let pluginURL = directory.appendingPathComponent("moonglade.mjs")
+    try FileManager.default.copyItem(at: BundledResources.opencodePluginURL, to: pluginURL)
+    return try goattySessionWritten(byDriver: """
+        import { readdir } from "node:fs/promises";
+        import { setTimeout as delay } from "node:timers/promises";
+        import plugin from "\(pluginURL.absoluteString)";
+        let release;
+        const cleanup = await plugin.setup({
+          location: { directory: "/tmp/open-project" },
+          session: { get: async () => { throw new Error("unexpected session lookup"); } },
+          event: { subscribe: async function* () {
+            yield {
+              type: "session.created",
+              data: { sessionID: "open-1", location: { directory: "/tmp/open-project" } }
+            };
+            await new Promise((resolve) => { release = resolve; });
+          } }
+        });
+        const stateDirectory = process.env.MOONGLADE_HOME + "/state";
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const names = await readdir(stateDirectory).catch(() => []);
+          if (names.includes("opencode-b3Blbi0x.json")) break;
+          await delay(10);
+        }
+        cleanup();
+        release();
+        """, in: directory, environment: environment)
+}
+
+/// The session the bundled Pi extension writes for `session_start`.
+func piSessionWritten(environment: [String: String]) throws -> AgentSession {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let extensionURL = directory.appendingPathComponent("moonglade.mjs")
+    try FileManager.default.copyItem(at: BundledResources.piExtensionURL, to: extensionURL)
+    return try goattySessionWritten(byDriver: """
+        import moonglade from "\(extensionURL.absoluteString)";
+        const handlers = new Map();
+        moonglade({ on: (event, handler) => handlers.set(event, handler) });
+        const ctx = {
+          cwd: "/tmp/pi-project",
+          sessionManager: { getSessionId: () => "pi-1" },
+        };
+        await handlers.get("session_start")({ reason: "start" }, ctx);
+        """, in: directory, environment: environment)
+}
+
+func testOpenCodePluginRecordsGoattyHostAndHerdrCoreBinding() throws {
+    let session = try openCodeSessionWritten(environment: goattyPaneEnvironment())
+    try expect(session.terminal.termProgram, equals: TerminalContext.goattyTermProgram, "OpenCode Goatty host")
+    try expect(session.terminal.herdrCoreTerminalID, equals: "t2t", "OpenCode herdr-core address")
+    try expect(session.terminal.herdrCoreSocketPath, equals: goattyTestSocketPath, "OpenCode herdr-core socket")
+}
+
+func testPiExtensionRecordsGoattyHostAndHerdrCoreBinding() throws {
+    let session = try piSessionWritten(environment: goattyPaneEnvironment())
+    try expect(session.terminal.termProgram, equals: TerminalContext.goattyTermProgram, "Pi Goatty host")
+    try expect(session.terminal.herdrCoreTerminalID, equals: "t2t", "Pi herdr-core address")
+    try expect(session.terminal.herdrCoreSocketPath, equals: goattyTestSocketPath, "Pi herdr-core socket")
+}
+
+func testJavaScriptIntegrationsKeepTheRealHostOfAnInheritedGoattyBundleIdentifier() throws {
+    let tmux = inheritedGoattyEnvironment(termProgram: "tmux")
+    try expect(try openCodeSessionWritten(environment: tmux).terminal.termProgram, equals: "tmux", "OpenCode under tmux")
+    try expect(try piSessionWritten(environment: tmux).terminal.termProgram, equals: "tmux", "Pi under tmux")
+    let unset = inheritedGoattyEnvironment(termProgram: nil)
+    try expect(
+        try openCodeSessionWritten(environment: unset).terminal.termProgram,
+        equals: TerminalContext.goattyTermProgram,
+        "OpenCode in Goatty with no TERM_PROGRAM"
+    )
+    try expect(
+        try piSessionWritten(environment: unset).terminal.termProgram,
+        equals: TerminalContext.goattyTermProgram,
+        "Pi in Goatty with no TERM_PROGRAM"
+    )
+    let mixedCase = inheritedGoattyEnvironment(termProgram: "Ghostty")
+    try expect(
+        try openCodeSessionWritten(environment: mixedCase).terminal.termProgram,
+        equals: TerminalContext.goattyTermProgram,
+        "OpenCode with Ghostty's engine in any case"
+    )
+    try expect(
+        try piSessionWritten(environment: mixedCase).terminal.termProgram,
+        equals: TerminalContext.goattyTermProgram,
+        "Pi with Ghostty's engine in any case"
+    )
+}
+
+func testHerdrCoreResolvesOnlyFromFixedLocations() throws {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    try expect(
+        FocusActionRunner.trustedDirectories(for: "herdr-core"),
+        equals: ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "\(home)/.local/bin"],
+        "herdr-core resolves from the standard locations and its documented user-local install"
+    )
+}
+
 let tests: [(String, () throws -> Void)] = [
+    ("terminal context classifies Goatty by bundle id and captures the herdr-core binding", testTerminalContextClassifiesGoattyByBundleIdentifierAndCapturesHerdrCoreBinding),
+    ("terminal context trusts Goatty's bundle id only beside Ghostty's TERM_PROGRAM", testTerminalContextTrustsGoattysBundleIdentifierOnlyBesideGhosttysTermProgram),
+    ("Claude hook records the Goatty host and herdr-core binding", testClaudeHookRecordsGoattyHostAndHerdrCoreBinding),
+    ("focus planner raises Goatty by bundle id, never Ghostty", testFocusPlannerRaisesGoattyByBundleIdentifierNeverGhostty),
+    ("focus planner keeps Ghostty focus outside Goatty", testFocusPlannerKeepsGhosttyFocusOutsideGoatty),
+    ("herdr-core binding rejects malformed identity", testHerdrCoreBindingRejectsMalformedIdentity),
+    ("herdr-core query requires a live user-owned socket", testHerdrCoreQueryRequiresALiveUserOwnedSocket),
+    ("herdr-core query runs one bounded get against a live socket only", testHerdrCoreQueryRunsOneBoundedGetAgainstALiveSocketOnly),
+    ("herdr-core terminal parsing treats output as untrusted", testHerdrCoreTerminalParsingTreatsOutputAsUntrusted),
+    ("herdr-core terminal query cache avoids redundant queries", testHerdrCoreTerminalQueryCacheAvoidsRedundantQueries),
+    ("herdr-core query cache backs off a whole socket after a transport failure", testHerdrCoreQueryCacheBacksOffAWholeSocketAfterATransportFailure),
+    ("scanner titles herdr-core panes without the Ghostty matcher", testScannerTitlesHerdrCorePanesWithoutTheGhosttyMatcher),
+    ("scanner uses the herdr-core title only for the pane's foreground process", testScannerUsesHerdrCoreTitleOnlyForThePanesForegroundProcess),
+    ("Goatty session appears once, titled by its pane, and raises Goatty", testGoattySessionAppearsOnceTitledByItsPaneAndRaisesGoatty),
+    ("a remote herdr-core address never reaches the query", testARemoteHerdrCoreAddressNeverReachesTheQuery),
+    ("terminal enrichment preserves the Goatty host and herdr-core binding", testTerminalEnrichmentPreservesGoattyHostAndHerdrCoreBinding),
+    ("Codex rollout save preserves a notify-captured Goatty host", testCodexRolloutSavePreservesNotifyCapturedGoattyHost),
+    ("capture context emits the Goatty host and herdr-core binding", testCaptureContextEmitsGoattyHostAndHerdrCoreBinding),
+    ("capture context keeps the real host of an inherited Goatty bundle id", testCaptureContextKeepsTheRealHostOfAnInheritedGoattyBundleIdentifier),
+    ("opencode plugin records the Goatty host and herdr-core binding", testOpenCodePluginRecordsGoattyHostAndHerdrCoreBinding),
+    ("pi extension records the Goatty host and herdr-core binding", testPiExtensionRecordsGoattyHostAndHerdrCoreBinding),
+    ("javascript integrations keep the real host of an inherited Goatty bundle id", testJavaScriptIntegrationsKeepTheRealHostOfAnInheritedGoattyBundleIdentifier),
+    ("herdr-core resolves only from fixed locations", testHerdrCoreResolvesOnlyFromFixedLocations),
     ("notch glass scrim keeps collapsed bar solid and fades expanded", testNotchGlassScrimKeepsCollapsedBarSolidAndFadesExpanded),
     ("demo workspace seeds one session per visible state inside its own root", testDemoWorkspaceSeedsOneSessionPerVisibleStateInsideItsOwnRoot),
     ("demo workspace is enabled only by explicit flag", testDemoWorkspaceIsEnabledOnlyByExplicitFlag),

@@ -31,10 +31,13 @@ public protocol ProcessScanning: Sendable {
     func basicActiveProcesses() throws -> [DetectedAgentProcess]
     /// `sessionTitles` maps a process ID to the name its agent reported for
     /// the session, which is the strongest signal for telling apart several
-    /// panes sharing one directory.
+    /// panes sharing one directory. `herdrCoreBindings` maps a process ID to
+    /// the herdr-core terminal its integration reported; libproc cannot see
+    /// it, because it exists only in the agent's environment.
     func enrichTerminalContexts(
         in processes: [DetectedAgentProcess],
-        sessionTitles: [Int32: String]
+        sessionTitles: [Int32: String],
+        herdrCoreBindings: [Int32: HerdrCoreTerminalBinding]
     ) -> [DetectedAgentProcess]
 }
 
@@ -42,7 +45,8 @@ public extension ProcessScanning {
     func basicActiveProcesses() throws -> [DetectedAgentProcess] { try activeProcesses() }
     func enrichTerminalContexts(
         in processes: [DetectedAgentProcess],
-        sessionTitles: [Int32: String] = [:]
+        sessionTitles: [Int32: String] = [:],
+        herdrCoreBindings: [Int32: HerdrCoreTerminalBinding] = [:]
     ) -> [DetectedAgentProcess] { processes }
 }
 
@@ -50,33 +54,64 @@ public struct SystemProcessScanner: ProcessScanning {
     /// Returns the currently visible Ghostty terminals, or nil when Ghostty
     /// cannot be queried. Injectable so behavioral tests stay deterministic.
     public typealias GhosttyTerminalSource = @Sendable () -> [GhosttyTerminal]?
+    /// Answers for one herdr-core terminal, or says why it could not: the
+    /// core unreachable, or answering without the terminal.
+    public typealias HerdrCoreTerminalSource = HerdrCoreTerminalQueryCache.Query
 
     private let terminalQueryCache: GhosttyTerminalQueryCache
+    private let herdrCoreQueryCache: HerdrCoreTerminalQueryCache
     private let assignmentMemory = GhosttyAssignmentMemory()
     private let commandCache = ProcessCommandCache()
 
     public init() {
         // The 10 s failure cooldown skips at least one 5 s heartbeat after a
         // timeout while allowing a prompt retry; topology changes still refresh.
-        self.init(terminalQueryCache: GhosttyTerminalQueryCache(
-            timeToLive: 30,
-            failureTimeToLive: 10
-        ) {
-            try? SystemProcessScanner.queryGhosttyTerminals()
-        })
+        self.init(
+            terminalQueryCache: GhosttyTerminalQueryCache(
+                timeToLive: 30,
+                failureTimeToLive: 10
+            ) {
+                try? SystemProcessScanner.queryGhosttyTerminals()
+            },
+            herdrCoreQueryCache: HerdrCoreTerminalQueryCache(
+                timeToLive: 30,
+                failureTimeToLive: 10
+            ) {
+                binding in
+                do throws(HerdrCoreQueryError) {
+                    return .success(try SystemProcessScanner.queryHerdrCoreTerminal(binding))
+                } catch {
+                    return .failure(error)
+                }
+            }
+        )
     }
 
-    /// Zero TTLs preserve the injected source's call-per-scan semantics.
-    public init(ghosttyTerminalSource: @escaping GhosttyTerminalSource) {
-        self.init(terminalQueryCache: GhosttyTerminalQueryCache(
-            timeToLive: 0,
-            failureTimeToLive: 0,
-            query: ghosttyTerminalSource
-        ))
+    /// Zero TTLs preserve the injected sources' call-per-scan semantics.
+    public init(
+        ghosttyTerminalSource: @escaping GhosttyTerminalSource,
+        herdrCoreTerminalSource: @escaping HerdrCoreTerminalSource = { _ in .failure(.socketUnavailable) }
+    ) {
+        self.init(
+            terminalQueryCache: GhosttyTerminalQueryCache(
+                timeToLive: 0,
+                failureTimeToLive: 0,
+                query: ghosttyTerminalSource
+            ),
+            herdrCoreQueryCache: HerdrCoreTerminalQueryCache(
+                timeToLive: 0,
+                failureTimeToLive: 0,
+                query: herdrCoreTerminalSource
+            )
+        )
     }
 
-    private init(terminalQueryCache: GhosttyTerminalQueryCache) {
+    private init(
+        terminalQueryCache: GhosttyTerminalQueryCache,
+        herdrCoreQueryCache: HerdrCoreTerminalQueryCache
+    ) {
         self.terminalQueryCache = terminalQueryCache
+        self.herdrCoreQueryCache = herdrCoreQueryCache
     }
 
     public func activeProcesses() throws -> [DetectedAgentProcess] {
@@ -106,8 +141,86 @@ public struct SystemProcessScanner: ProcessScanning {
     }
 
     public func enrichTerminalContexts(
+        in processes: [DetectedAgentProcess],
+        sessionTitles: [Int32: String] = [:],
+        herdrCoreBindings: [Int32: HerdrCoreTerminalBinding] = [:]
+    ) -> [DetectedAgentProcess] {
+        // A pane herdr-core keeps — every Goatty pane — is not a Ghostty
+        // surface, whatever TERM_PROGRAM it inherited, so it never enters the
+        // Ghostty matcher, where it could only claim someone else's tab.
+        let herdrCoreHosted = processes.filter { herdrCoreBindings[$0.processID] != nil }
+        let detected = processes.filter { herdrCoreBindings[$0.processID] == nil }
+        return titledByHerdrCore(herdrCoreHosted, bindings: herdrCoreBindings)
+            + enrichGhosttyContexts(in: detected, sessionTitles: sessionTitles)
+    }
+
+    /// herdr-core's `title` is the name the agent gave its pane. It names
+    /// the row only when this process runs in the pane's foreground job: a
+    /// binding inherited from another pane (a daemon started elsewhere) is not
+    /// evidence about this one.
+    private func titledByHerdrCore(
+        _ processes: [DetectedAgentProcess],
+        bindings: [Int32: HerdrCoreTerminalBinding]
+    ) -> [DetectedAgentProcess] {
+        guard !processes.isEmpty else { return [] }
+        let terminals = herdrCoreQueryCache.terminals(
+            for: Set(processes.compactMap { bindings[$0.processID] })
+        )
+        return processes.map { process in
+            guard let binding = bindings[process.processID],
+                  let terminal = terminals[binding],
+                  let title = terminal.title,
+                  let foreground = terminal.foregroundProcessID,
+                  Self.runsInForegroundJob(process.processID, foreground: foreground) else {
+                return process
+            }
+            return DetectedAgentProcess(
+                tool: process.tool,
+                processID: process.processID,
+                processIdentity: process.processIdentity,
+                cwd: process.cwd,
+                terminal: TerminalContext(
+                    termProgram: process.terminal.termProgram,
+                    tty: process.terminal.tty,
+                    windowTitleHint: title
+                ),
+                elapsedSeconds: process.elapsedSeconds
+            )
+        }
+    }
+
+    /// herdr-core reports the pane's foreground process. The agent is what
+    /// the pane shows when it is that process, or descends from it inside the
+    /// same process group — an agent a foreground launcher such as npx
+    /// started. Descent alone is not enough: the foreground process is often
+    /// the pane's interactive shell, and a job-control shell gives every job
+    /// it starts its own process group, so `opencode serve &` is its
+    /// descendant but no part of what the pane shows.
+    private static func runsInForegroundJob(_ processID: pid_t, foreground: pid_t) -> Bool {
+        guard processID != foreground else { return true }
+        guard processLineage(of: processID).contains(foreground),
+              let group = bsdInfo(processID: processID)?.pbi_pgid,
+              let foregroundGroup = bsdInfo(processID: foreground)?.pbi_pgid else {
+            return false
+        }
+        return group == foregroundGroup
+    }
+
+    /// A process and its ancestors up to launchd, bounded like the host walk.
+    private static func processLineage(of processID: pid_t) -> [pid_t] {
+        var lineage = [processID]
+        var ancestorProcessID = parentProcessID(of: processID)
+        for _ in 0..<8 {
+            guard let current = ancestorProcessID, current > 1 else { break }
+            lineage.append(current)
+            ancestorProcessID = parentProcessID(of: current)
+        }
+        return lineage
+    }
+
+    private func enrichGhosttyContexts(
         in detected: [DetectedAgentProcess],
-        sessionTitles: [Int32: String] = [:]
+        sessionTitles: [Int32: String]
     ) -> [DetectedAgentProcess] {
         let ghosttyProcesses = detected.filter { $0.terminal.termProgram == "ghostty" }
         guard !ghosttyProcesses.isEmpty,
@@ -521,6 +634,66 @@ public struct SystemProcessScanner: ProcessScanning {
         )
         guard result.status == 0 else { throw POSIXError(.EIO) }
         return try JSONDecoder().decode([GhosttyTerminal].self, from: Data(result.output.utf8))
+    }
+
+    /// Runs one command by name, with environment overrides, a deadline and
+    /// an output bound. Injectable so the herdr-core query's exact invocation
+    /// is testable without a core.
+    package typealias CommandRunner = (
+        _ executable: String,
+        _ arguments: [String],
+        _ environment: [String: String],
+        _ timeout: TimeInterval,
+        _ maximumOutputBytes: Int
+    ) throws -> BoundedProcessResult
+
+    /// Reads one terminal from herdr-core: `herdr-core get --json -- <id>`
+    /// against the recorded core socket, from a fixed executable location,
+    /// with a deadline and a bounded answer. The address is validated and
+    /// separated from options; the socket travels as `HC_SOCKET`, herdr-core's
+    /// own client override, never inside an argument. Nothing is launched
+    /// unless a core is already listening on that socket. Failing to reach the
+    /// core is told apart from the core answering without the terminal, so
+    /// the cache backs off only what failed.
+    package static func queryHerdrCoreTerminal(
+        _ binding: HerdrCoreTerminalBinding,
+        run: CommandRunner = runTrustedExecutable
+    ) throws(HerdrCoreQueryError) -> HerdrCoreTerminal {
+        guard binding.socketIsLiveForCurrentUser() else { throw .socketUnavailable }
+        let result: BoundedProcessResult
+        do {
+            result = try run(
+                "herdr-core",
+                ["get", "--json", "--", binding.terminalID],
+                ["HC_SOCKET": binding.socketPath],
+                2,
+                256 * 1_024
+            )
+        } catch {
+            throw .socketUnavailable
+        }
+        guard result.status == 0 else { throw .terminalUnavailable }
+        do {
+            return try HerdrCoreTerminal.parse(result.output, for: binding)
+        } catch {
+            throw .terminalUnavailable
+        }
+    }
+
+    package static func runTrustedExecutable(
+        _ executable: String,
+        arguments: [String],
+        environment: [String: String],
+        timeout: TimeInterval,
+        maximumOutputBytes: Int
+    ) throws -> BoundedProcessResult {
+        try BoundedProcessRunner.run(
+            executableURL: try FocusActionRunner.executableURL(named: executable),
+            arguments: arguments,
+            environment: environment,
+            timeout: timeout,
+            maximumOutputBytes: maximumOutputBytes
+        )
     }
 
     private static func run(

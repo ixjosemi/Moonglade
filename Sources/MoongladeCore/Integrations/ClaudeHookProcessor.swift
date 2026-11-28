@@ -115,6 +115,8 @@ private extension TerminalContext {
             cmuxSurfaceID: cmuxSurfaceID,
             herdrPaneID: herdrPaneID,
             herdrSocketPath: herdrSocketPath,
+            herdrCoreTerminalID: herdrCoreTerminalID,
+            herdrCoreSocketPath: herdrCoreSocketPath,
             itermSessionID: itermSessionID,
             tmuxPane: tmuxPane,
             tty: tty,
