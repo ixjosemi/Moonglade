@@ -5,8 +5,13 @@ tool=${2:-agent}
 process_id=${3:-"$PPID"}
 term_program=${TERM_PROGRAM:-}
 # Goatty reports TERM_PROGRAM=ghostty too; its bundle id is what tells them apart.
+# The bundle id is inherited, though — a tmux server started in Goatty hands it
+# to clients attached from other terminals — so it names Goatty only beside
+# Ghostty's TERM_PROGRAM or none.
 if [ "${__CFBundleIdentifier:-}" = "xyz.goatty.mac" ]; then
-    term_program=Goatty
+    case "$term_program" in
+        ""|[Gg][Hh][Oo][Ss][Tt][Tt][Yy]) term_program=Goatty ;;
+    esac
 fi
 orca_terminal_handle=${ORCA_TERMINAL_HANDLE:-}
 case "$term_program" in

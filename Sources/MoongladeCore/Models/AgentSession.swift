@@ -123,6 +123,15 @@ public struct TerminalContext: Codable, Equatable, Sendable {
     /// to the app's children is the only signal that tells the two apart.
     public static let goattyBundleIdentifier = "xyz.goatty.mac"
 
+    /// The bundle identifier is inherited as far as the environment goes: a
+    /// tmux server started in Goatty hands it to every pane, including those
+    /// of a client attached from another terminal. It names Goatty only beside
+    /// the `TERM_PROGRAM` Goatty's own panes carry — Ghostty's, or none.
+    static func isGoattyHost(bundleIdentifier: String?, termProgram: String?) -> Bool {
+        guard bundleIdentifier == goattyBundleIdentifier else { return false }
+        return termProgram == nil || termProgram?.lowercased() == "ghostty"
+    }
+
     /// Applies identifiers exported by the current integration. Host-owned
     /// Orca, Herdr and herdr-core identity is intentionally not carried
     /// forward here: the repository preserves a known target only when the
@@ -133,9 +142,11 @@ public struct TerminalContext: Codable, Equatable, Sendable {
             return candidate
         }
 
-        let capturedTermProgram = value("__CFBundleIdentifier") == Self.goattyBundleIdentifier
-            ? Self.goattyTermProgram
-            : value("TERM_PROGRAM") ?? termProgram
+        let inheritedTermProgram = value("TERM_PROGRAM")
+        let capturedTermProgram = Self.isGoattyHost(
+            bundleIdentifier: value("__CFBundleIdentifier"),
+            termProgram: inheritedTermProgram
+        ) ? Self.goattyTermProgram : inheritedTermProgram ?? termProgram
         return TerminalContext(
             termProgram: capturedTermProgram,
             orcaTerminalHandle: capturedTermProgram?.lowercased() == "orca"

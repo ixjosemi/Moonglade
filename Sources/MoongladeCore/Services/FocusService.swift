@@ -72,7 +72,7 @@ public enum FocusPlanner {
         )
     }
 
-    package static func validHerdrPaneID(_ value: String) -> Bool {
+    private static func validHerdrPaneID(_ value: String) -> Bool {
         guard !value.isEmpty,
               value.utf8.count <= 256,
               !value.hasPrefix("-"),

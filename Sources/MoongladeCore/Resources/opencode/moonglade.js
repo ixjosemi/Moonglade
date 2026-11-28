@@ -81,10 +81,14 @@ function sessionDirectory(location, subpath) {
 
 // Goatty draws its panes with Ghostty's engine, so they inherit
 // TERM_PROGRAM=ghostty; the bundle id macOS exports to the app's children is
-// what tells the two apart.
+// what tells the two apart. The bundle id is inherited too — a tmux server
+// started in Goatty hands it to clients attached from other terminals — so it
+// names Goatty only beside Ghostty's TERM_PROGRAM or none.
 function hostTermProgram() {
-  if (process.env.__CFBundleIdentifier === "xyz.goatty.mac") return "Goatty";
-  return process.env.TERM_PROGRAM || null;
+  const termProgram = process.env.TERM_PROGRAM || null;
+  const ghosttyEngine = termProgram === null || termProgram.toLowerCase() === "ghostty";
+  if (process.env.__CFBundleIdentifier === "xyz.goatty.mac" && ghosttyEngine) return "Goatty";
+  return termProgram;
 }
 
 function createState({ id, title, cwd }) {

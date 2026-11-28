@@ -4,16 +4,20 @@ import Foundation
 /// The pane a herdr-core (`hc`) terminal keeps for its host: its address
 /// and the socket of the core that owns it, read from `HC_TERMINAL_ID` and
 /// `HC_TERMINAL_SOCKET`. Both come from a state document, so the pair is
-/// validated exactly like a Herdr pane binding before it can drive a query:
-/// the address is passed as one argument and must not read as an option, and
-/// the socket is an absolute path passed only as an environment override.
+/// validated before it can drive a query. The address must be a local one —
+/// herdr-core resolves `machine/t7` over ssh, and Moonglade never reaches
+/// another host — so only lowercase letters and digits pass, which also keeps
+/// it from reading as an option. The socket is validated like Herdr's: an
+/// absolute path passed only as an environment override.
 public struct HerdrCoreTerminalBinding: Hashable, Sendable {
+    static let maximumTerminalIDLength = 32
+
     public let terminalID: String
     public let socketPath: String
 
     public init?(terminalID: String?, socketPath: String?) {
         guard let terminalID, let socketPath,
-              FocusPlanner.validHerdrPaneID(terminalID),
+              Self.isLocalTerminalID(terminalID),
               FocusPlanner.validHerdrSocketPath(socketPath) else {
             return nil
         }
@@ -28,15 +32,48 @@ public struct HerdrCoreTerminalBinding: Hashable, Sendable {
         )
     }
 
+    /// A local herdr-core address, such as `t2t`: never a host-qualified
+    /// one, whatever separator it would use.
+    static func isLocalTerminalID(_ value: String) -> Bool {
+        (1...maximumTerminalIDLength).contains(value.utf8.count)
+            && value.utf8.allSatisfy { (0x61...0x7A).contains($0) || (0x30...0x39).contains($0) }
+    }
+
     /// `herdr-core get` starts a core when none answers on its socket, so a
-    /// query is only ever pointed at a socket that already exists, is not a
-    /// link, and belongs to this user — a stale or planted path must not
-    /// spawn a daemon.
-    package func socketBelongsToCurrentUser() -> Bool {
+    /// query is only ever pointed at a socket that is not a link, belongs to
+    /// this user, and has a core listening on it. A socket file outlives the
+    /// core that bound it, so existing is not enough: a stale or planted path
+    /// must not spawn a daemon.
+    /// `owner` is the current user outside tests.
+    package func socketIsLiveForCurrentUser(owner: uid_t = getuid()) -> Bool {
         var metadata = stat()
-        return Darwin.lstat(socketPath, &metadata) == 0
-            && metadata.st_mode & S_IFMT == S_IFSOCK
-            && metadata.st_uid == getuid()
+        guard Darwin.lstat(socketPath, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFSOCK,
+              metadata.st_uid == owner else {
+            return false
+        }
+        // A core can still exit between this probe and the query, and herdr-core
+        // has no option to fail instead of starting one; that window remains.
+        return Self.acceptsConnections(at: socketPath)
+    }
+
+    /// One non-blocking connect, closed at once: a Unix-domain connect either
+    /// completes against a listener or is refused, and never waits.
+    private static func acceptsConnections(at path: String) -> Bool {
+        var address = sockaddr_un()
+        let pathBytes = Array(path.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return false }
+        address.sun_family = sa_family_t(AF_UNIX)
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+        let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fcntl(descriptor, F_SETFL, O_NONBLOCK) == 0 else { return false }
+        return withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        } == 0
     }
 }
 
@@ -97,30 +134,50 @@ public struct HerdrCoreTerminal: Equatable, Sendable {
     }
 }
 
+/// Why a herdr-core query failed, which decides what it backs off.
+public enum HerdrCoreQueryError: Error, Equatable, Sendable {
+    /// The core could not be reached or overran its bounds — no live socket,
+    /// a launch error, a timeout, output over the cap. Every terminal of the
+    /// socket would fail the same way, so the whole socket backs off.
+    case socketUnavailable
+    /// The core answered, but not with this terminal — a non-zero exit, or an
+    /// answer that does not parse or names another address, as for a closed
+    /// pane a state document still references. Only that terminal backs off.
+    case terminalUnavailable
+}
+
 /// Caches herdr-core's answer per terminal, the way
 /// `GhosttyTerminalQueryCache` caches Ghostty's: each answer costs a
 /// `herdr-core` subprocess, so the heartbeat must not pay for it on every
-/// tick. A terminal seen for the first time is queried at once, a known one
-/// refreshes on a TTL that keeps titles reasonably fresh, and a failed query
-/// waits out a shorter cooldown so a stalled core cannot consume the
-/// observation queue. Terminals no longer asked for are forgotten, which
+/// tick. A terminal seen for the first time is queried at once and a known
+/// one refreshes on a TTL that keeps titles reasonably fresh. A failure waits
+/// out a shorter cooldown, scoped by its cause: a terminal the core answered
+/// for without it backs off alone, so its siblings keep their titles, while a
+/// core that cannot be reached backs off its whole socket — a hung core would
+/// otherwise cost its full deadline once per pane, every tick, on the
+/// observation queue — and no other terminal of that socket is queried in the
+/// same tick. Terminals and sockets no longer asked for are forgotten, which
 /// bounds the cache by the live sessions.
 public final class HerdrCoreTerminalQueryCache: @unchecked Sendable {
-    private enum Entry {
-        case answered(HerdrCoreTerminal, at: Date)
-        case failed(at: Date)
+    public typealias Query = @Sendable (HerdrCoreTerminalBinding) -> Result<HerdrCoreTerminal, HerdrCoreQueryError>
+
+    private struct Answer {
+        let terminal: HerdrCoreTerminal
+        let at: Date
     }
 
     private let timeToLive: TimeInterval
     private let failureTimeToLive: TimeInterval
-    private let query: @Sendable (HerdrCoreTerminalBinding) -> HerdrCoreTerminal?
+    private let query: Query
     private let lock = NSLock()
-    private var entries: [HerdrCoreTerminalBinding: Entry] = [:]
+    private var answers: [HerdrCoreTerminalBinding: Answer] = [:]
+    private var terminalFailures: [HerdrCoreTerminalBinding: Date] = [:]
+    private var socketFailures: [String: Date] = [:]
 
     public init(
         timeToLive: TimeInterval,
         failureTimeToLive: TimeInterval,
-        query: @escaping @Sendable (HerdrCoreTerminalBinding) -> HerdrCoreTerminal?
+        query: @escaping Query
     ) {
         self.timeToLive = timeToLive
         self.failureTimeToLive = failureTimeToLive
@@ -131,30 +188,43 @@ public final class HerdrCoreTerminalQueryCache: @unchecked Sendable {
         for bindings: Set<HerdrCoreTerminalBinding>,
         now: Date = Date()
     ) -> [HerdrCoreTerminalBinding: HerdrCoreTerminal] {
+        let sockets = Set(bindings.map(\.socketPath))
+        func coolingDown(_ failedAt: Date) -> Bool { now.timeIntervalSince(failedAt) < failureTimeToLive }
         lock.lock()
-        entries = entries.filter { bindings.contains($0.key) }
-        let cached = entries
+        answers = answers.filter { bindings.contains($0.key) }
+        terminalFailures = terminalFailures.filter { bindings.contains($0.key) }
+        socketFailures = socketFailures.filter { sockets.contains($0.key) }
+        let cachedAnswers = answers
+        let failedTerminals = Set(terminalFailures.filter { coolingDown($0.value) }.keys)
+        var failedSockets = Set(socketFailures.filter { coolingDown($0.value) }.keys)
         lock.unlock()
 
         var terminals: [HerdrCoreTerminalBinding: HerdrCoreTerminal] = [:]
-        var refreshed: [HerdrCoreTerminalBinding: Entry] = [:]
+        var refreshed: [HerdrCoreTerminalBinding: Answer] = [:]
+        var newTerminalFailures: [HerdrCoreTerminalBinding: Date] = [:]
+        var newSocketFailures: [String: Date] = [:]
         for binding in bindings {
-            switch cached[binding] {
-            case let .answered(terminal, at) where now.timeIntervalSince(at) < timeToLive:
-                terminals[binding] = terminal
-            case let .failed(at) where now.timeIntervalSince(at) < failureTimeToLive:
+            if let answer = cachedAnswers[binding], now.timeIntervalSince(answer.at) < timeToLive {
+                terminals[binding] = answer.terminal
                 continue
-            default:
-                if let terminal = query(binding) {
-                    terminals[binding] = terminal
-                    refreshed[binding] = .answered(terminal, at: now)
-                } else {
-                    refreshed[binding] = .failed(at: now)
-                }
+            }
+            guard !failedSockets.contains(binding.socketPath),
+                  !failedTerminals.contains(binding) else { continue }
+            switch query(binding) {
+            case let .success(terminal):
+                terminals[binding] = terminal
+                refreshed[binding] = Answer(terminal: terminal, at: now)
+            case .failure(.terminalUnavailable):
+                newTerminalFailures[binding] = now
+            case .failure(.socketUnavailable):
+                failedSockets.insert(binding.socketPath)
+                newSocketFailures[binding.socketPath] = now
             }
         }
         lock.lock()
-        entries.merge(refreshed) { _, latest in latest }
+        answers.merge(refreshed) { _, latest in latest }
+        terminalFailures.merge(newTerminalFailures) { _, latest in latest }
+        socketFailures.merge(newSocketFailures) { _, latest in latest }
         lock.unlock()
         return terminals
     }
